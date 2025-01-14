@@ -18,3 +18,14 @@ fingerprint=24:13:1a:df:44:7a:db:e6:5e:d9:82:56:00:e7:34:d4
 tenancy=ocid1.tenancy.oc1..aaaaaaaazwnzfsshem5h3phaphasftvjdtnqwwly6nd2jwekakr4vdp7s34q
 region=us-ashburn-1
 key_file=~/.oci/keys/oci_api_key.pem
+
+# pg
+CREATE DATABASE news_aggregator;
+CREATE USER news_admin WITH PASSWORD 'fasldkflk423mkj4k24jk242';
+sudo -u postgres psql
+\c news_aggregator
+PGPASSWORD='fasldkflk423mkj4k24jk242' psql -U news_admin -d news_aggregator -h localhost
+
+\dn - list schemas
+
+
