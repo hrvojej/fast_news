@@ -1,5 +1,5 @@
 # venv and sys
-source /home/opc/venv/bin/activate
+conda activate pytorch_env
 Public IPv4 address:  
 129.213.125.118
 Private IPv4 address: 
@@ -27,5 +27,34 @@ sudo -u postgres psql
 PGPASSWORD='fasldkflk423mkj4k24jk242' psql -U news_admin -d news_aggregator -h localhost
 
 \dn - list schemas
+
+
+# Image details
+Image details
+Operating system:
+ 
+Oracle Linux
+Version:
+ 
+8
+Image:
+ 
+Oracle-Linux-8.10-aarch64-2024.10.31-0
+Shape configuration
+Shape:
+ 
+VM.Standard.A2.Flex
+OCPU count:
+ 
+2
+Network bandwidth (Gbps):
+ 
+2
+Memory (GB):
+ 
+12
+Local disk:
+ 
+Block storage only
 
 
