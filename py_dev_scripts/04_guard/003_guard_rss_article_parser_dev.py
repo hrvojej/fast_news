@@ -47,13 +47,13 @@ class KeywordExtractor:
         return keywords
 
 def recreate_table(connection: psycopg2.extensions.connection, cursor: psycopg2.extensions.cursor) -> None:
-    """Create a single combined articles table for BBC."""
+    """Create a single combined articles table."""
     try:
-        print("Recreating BBC articles table...")
+        print("Recreating Guardian articles table...")
         cursor.execute("""
-        DROP TABLE IF EXISTS bbc.articles;
+        DROP TABLE IF EXISTS guardian.articles;
 
-        CREATE TABLE bbc.articles (
+        CREATE TABLE guardian.articles (
             article_id SERIAL PRIMARY KEY,
             title TEXT NOT NULL,
             url TEXT NOT NULL,
@@ -61,7 +61,7 @@ def recreate_table(connection: psycopg2.extensions.connection, cursor: psycopg2.
             description TEXT,
             author TEXT[],
             pub_date TIMESTAMPTZ,
-            category_id INT NOT NULL REFERENCES bbc.categories(category_id) ON DELETE CASCADE,
+            category_id INT NOT NULL REFERENCES guardian.categories(category_id) ON DELETE CASCADE,
             keywords TEXT[],
             image_url TEXT,
             image_width INT,
@@ -71,40 +71,53 @@ def recreate_table(connection: psycopg2.extensions.connection, cursor: psycopg2.
         );
         """)
         connection.commit()
-        print("BBC articles table recreated successfully.")
+        print("Guardian articles table recreated successfully.")
     except psycopg2.Error as e:
         print(f"Error recreating table: {e}")
         connection.rollback()
         raise
 
 def parse_article(item: BeautifulSoup, category_id: int, keyword_extractor: KeywordExtractor) -> Dict:
-    """Parse a single BBC RSS item."""
+    """Parse a single Guardian RSS item."""
     title = item.find('title').text.strip() if item.find('title') else ''
     description = item.find('description').text.strip() if item.find('description') else ''
     link = item.find('link').text.strip() if item.find('link') else ''
     guid = item.find('guid').text.strip() if item.find('guid') else ''
     pub_date = item.find('pubDate').text.strip() if item.find('pubDate') else None
     
-    # Extract keywords from title only
+    # Extract authors
+    authors = []
+    dc_creator = item.find('dc:creator')
+    if dc_creator:
+        authors = [author.strip() for author in dc_creator.text.split(',')]
+    
+    # Extract keywords from title
     keywords = keyword_extractor.extract_keywords(title) if title else []
 
-    # Get image from media:thumbnail
+    # Get the largest image (assuming larger width means better quality)
     image_url = None
     image_width = None
     image_credit = None
-    thumbnail = item.find('media:thumbnail')
+    media_contents = item.find_all('media:content')
     
-    if thumbnail:
-        image_url = thumbnail.get('url')
-        image_width = int(thumbnail.get('width')) if thumbnail.get('width') and thumbnail.get('width').isdigit() else None
-        image_credit = 'BBC News'
+    if media_contents:
+        # Sort media content by width and get the largest
+        valid_media = [(m.get('url'), int(m.get('width', 0)), m.find('media:credit'))
+                      for m in media_contents
+                      if m.get('url') and m.get('width')]
+        
+        if valid_media:
+            # Sort by width in descending order
+            sorted_media = sorted(valid_media, key=lambda x: x[1], reverse=True)
+            image_url, image_width, credit_tag = sorted_media[0]
+            image_credit = credit_tag.text if credit_tag else None
 
     return {
         'title': title,
         'url': link,
         'guid': guid,
         'description': description,
-        'author': [],  # BBC doesn't provide authors in RSS
+        'author': authors,
         'pub_date': pub_date,
         'category_id': category_id,
         'keywords': keywords,
@@ -119,7 +132,7 @@ def batch_insert_articles(cursor: psycopg2.extensions.cursor, articles: List[Dic
         return 0
 
     insert_query = """
-    INSERT INTO bbc.articles (
+    INSERT INTO guardian.articles (
         title, url, guid, description, author, pub_date, category_id,
         keywords, image_url, image_width, image_credit
     )
@@ -148,8 +161,8 @@ def batch_insert_articles(cursor: psycopg2.extensions.cursor, articles: List[Dic
     result = execute_values(cursor, insert_query, article_data, fetch=True)
     return len(result)
 
-def process_bbc_rss():
-    """Main function to process BBC RSS feeds."""
+def process_guardian_rss():
+    """Main function to process Guardian RSS feeds."""
     db_config = {
         'dbname': 'news_aggregator',
         'user': 'news_admin',
@@ -166,13 +179,13 @@ def process_bbc_rss():
         connection = psycopg2.connect(**db_config)
         cursor = connection.cursor()
 
-        # First recreate the articles table
+        # Recreate the articles table
         recreate_table(connection, cursor)
 
-        print("Fetching BBC categories...")
+        print("Fetching Guardian categories...")
         cursor.execute("""
             SELECT category_id, atom_link, name 
-            FROM bbc.categories 
+            FROM guardian.categories 
             WHERE atom_link IS NOT NULL 
             ORDER BY category_id;
         """)
@@ -195,6 +208,7 @@ def process_bbc_rss():
                 items = soup.find_all('item')
                 print(f"Found {len(items)} items in feed")
 
+                # Process items in batches
                 batch_size = 50
                 category_articles = 0
                 category_with_images = 0
@@ -202,11 +216,12 @@ def process_bbc_rss():
                 
                 for i in range(0, len(items), batch_size):
                     batch_items = items[i:i + batch_size]
+                    print(f"Processing batch {i//batch_size + 1} of {(len(items) + batch_size - 1)//batch_size}")
                     
-                    # Parse batch of articles
+                    # Parse and insert batch of articles
                     parsed_articles = [parse_article(item, category_id, keyword_extractor) for item in batch_items]
                     
-                    # Count articles with images and keywords
+                    # Count articles with images and keywords before insertion
                     articles_with_images = sum(1 for a in parsed_articles if a['image_url'])
                     articles_with_keywords = sum(1 for a in parsed_articles if a['keywords'])
                     
@@ -254,4 +269,4 @@ def process_bbc_rss():
             print("\nDatabase connection closed.")
 
 if __name__ == "__main__":
-    process_bbc_rss()
+    process_guardian_rss()

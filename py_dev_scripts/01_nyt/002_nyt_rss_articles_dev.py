@@ -2,31 +2,23 @@ import requests
 from bs4 import BeautifulSoup
 import psycopg2
 from psycopg2.extras import execute_values
+from datetime import datetime
+from typing import Dict, List, Tuple
+import logging
 
-def recreate_tables():
-    # Database configuration
-    db_config = {
-        'dbname': 'news_aggregator',
-        'user': 'news_admin',
-        'password': 'fasldkflk423mkj4k24jk242',
-        'host': 'localhost',
-        'port': '5432',
-    }
+# Set up logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S'
+)
+logger = logging.getLogger(__name__)
 
-    connection = None
-    cursor = None
-
+def recreate_table(connection: psycopg2.extensions.connection, cursor: psycopg2.extensions.cursor) -> None:
+    """Create a single combined articles table for NYT."""
     try:
-        print("Step 1: Connecting to PostgreSQL...")
-        connection = psycopg2.connect(**db_config)
-        cursor = connection.cursor()
-
-        print("Step 2: Dropping and recreating tables...")
-
-        # Drop and recreate tables
+        print("Recreating NYT articles table...")
         cursor.execute("""
-        DROP TABLE IF EXISTS nyt.media;
-        DROP TABLE IF EXISTS nyt.keywords;
         DROP TABLE IF EXISTS nyt.articles;
 
         CREATE TABLE nyt.articles (
@@ -38,50 +30,116 @@ def recreate_tables():
             author TEXT[],
             pub_date TIMESTAMPTZ,
             category_id INT NOT NULL REFERENCES nyt.categories(category_id) ON DELETE CASCADE,
-            created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
-            updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
-        );
-
-        CREATE TABLE nyt.keywords (
-            keyword_id SERIAL PRIMARY KEY,
-            article_id INT NOT NULL REFERENCES nyt.articles(article_id) ON DELETE CASCADE,
-            domain TEXT NOT NULL,
-            keyword TEXT NOT NULL,
-            created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
-            updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
-            UNIQUE (article_id, domain, keyword)
-        );
-
-        CREATE TABLE nyt.media (
-            media_id SERIAL PRIMARY KEY,
-            article_id INT NOT NULL REFERENCES nyt.articles(article_id) ON DELETE CASCADE,
-            url TEXT NOT NULL,
-            medium TEXT,
-            width INT,
-            height INT,
-            credit TEXT,
-            description TEXT,
+            keywords TEXT[],
+            image_url TEXT,
+            image_width INT,
+            image_credit TEXT,
             created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
         );
         """)
         connection.commit()
-        print("Tables recreated successfully.")
-
+        print("NYT articles table recreated successfully.")
     except psycopg2.Error as e:
-        print(f"Database error: {e}")
+        print(f"Error recreating table: {e}")
+        connection.rollback()
+        raise
 
-    finally:
-        # Close the database connection
-        if cursor:
-            cursor.close()
-            print("Database cursor closed.")
-        if connection:
-            connection.close()
-            print("Database connection closed.")
+def parse_article(item: BeautifulSoup, category_id: int) -> Dict:
+    """Parse a single NYT RSS item."""
+    # Extract basic article information
+    title = item.find('title').text.strip() if item.find('title') else ''
+    description = item.find('description').text.strip() if item.find('description') else ''
+    link = item.find('link').text.strip() if item.find('link') else ''
+    guid = item.find('guid').text.strip() if item.find('guid') else ''
+    pub_date = item.find('pubDate').text.strip() if item.find('pubDate') else None
+    
+    # Extract authors
+    authors = []
+    dc_creators = item.find_all('dc:creator')
+    if dc_creators:
+        authors = [creator.text.strip() for creator in dc_creators]
+    
+    # Extract keywords from categories
+    keywords = []
+    for category in item.find_all('category'):
+        keyword = category.text.strip()
+        if keyword and len(keyword) > 2:  # Filter out very short keywords
+            keywords.append(keyword)
+    
+    # Get the largest image from media:content
+    image_url = None
+    image_width = None
+    image_credit = None
+    media_contents = item.find_all('media:content')
+    
+    if media_contents:
+        # Sort media content by width and get the largest
+        valid_media = []
+        for media in media_contents:
+            width = media.get('width')
+            url = media.get('url')
+            if width and url and width.isdigit():
+                credit = media.find('media:credit')
+                valid_media.append((url, int(width), credit))
+        
+        if valid_media:
+            # Sort by width in descending order
+            sorted_media = sorted(valid_media, key=lambda x: x[1], reverse=True)
+            image_url, image_width, credit_tag = sorted_media[0]
+            image_credit = credit_tag.text if credit_tag else None
 
-def fetch_and_store_articles_and_keywords():
-    # Database configuration
+    return {
+        'title': title,
+        'url': link,
+        'guid': guid,
+        'description': description,
+        'author': authors,
+        'pub_date': pub_date,
+        'category_id': category_id,
+        'keywords': keywords,
+        'image_url': image_url,
+        'image_width': image_width,
+        'image_credit': image_credit
+    }
+
+def batch_insert_articles(cursor: psycopg2.extensions.cursor, articles: List[Dict]) -> int:
+    """Insert articles in batch and return number of inserted articles."""
+    if not articles:
+        return 0
+
+    insert_query = """
+    INSERT INTO nyt.articles (
+        title, url, guid, description, author, pub_date, category_id,
+        keywords, image_url, image_width, image_credit
+    )
+    VALUES %s
+    ON CONFLICT (guid) DO NOTHING
+    RETURNING article_id;
+    """
+    
+    article_data = [
+        (
+            article['title'],
+            article['url'],
+            article['guid'],
+            article['description'],
+            article['author'],
+            article['pub_date'],
+            article['category_id'],
+            article['keywords'],
+            article['image_url'],
+            article['image_width'],
+            article['image_credit']
+        )
+        for article in articles
+    ]
+    
+    result = execute_values(cursor, insert_query, article_data, fetch=True)
+    return len(result)
+
+def process_nyt_rss():
+    """Main function to process NYT RSS feeds."""
     db_config = {
         'dbname': 'news_aggregator',
         'user': 'news_admin',
@@ -90,123 +148,99 @@ def fetch_and_store_articles_and_keywords():
         'port': '5432',
     }
 
-    connection = None
-    cursor = None
-
     try:
-        print("Step 1: Connecting to PostgreSQL...")
+        print("Connecting to PostgreSQL...")
         connection = psycopg2.connect(**db_config)
         cursor = connection.cursor()
 
-        # Fetch categories with atom_link
-        cursor.execute("SELECT category_id, atom_link FROM nyt.categories WHERE atom_link IS NOT NULL;")
+        # First recreate the articles table
+        recreate_table(connection, cursor)
+
+        print("Fetching NYT categories...")
+        cursor.execute("""
+            SELECT category_id, atom_link, name 
+            FROM nyt.categories 
+            WHERE atom_link IS NOT NULL 
+            ORDER BY category_id;
+        """)
         categories = cursor.fetchall()
-        print(f"Found {len(categories)} categories with atom_link.")
+        print(f"Found {len(categories)} categories to process")
 
-        articles = []
-        keywords = []
-        media_entries = []
+        total_articles = 0
+        total_with_images = 0
+        total_with_keywords = 0
 
-        for category_id, atom_link in categories:
-            print(f"Fetching RSS feed: {atom_link}")
-            response = requests.get(atom_link)
-            response.raise_for_status()
-            soup = BeautifulSoup(response.content, 'xml')
+        for category_id, atom_link, category_name in categories:
+            try:
+                print(f"\nProcessing category {category_id} - {category_name}")
+                print(f"Feed URL: {atom_link}")
+                
+                response = requests.get(atom_link, timeout=10)
+                response.raise_for_status()
+                soup = BeautifulSoup(response.content, 'xml')
 
-            for item in soup.find_all('item'):
-                # Extract core article fields
-                title = item.find('title').text if item.find('title') else None
-                link = item.find('link').text if item.find('link') else None
-                guid = item.find('guid').text if item.find('guid') else None
-                description = item.find('description').text if item.find('description') else None
-                author = [creator.text for creator in item.find_all('dc:creator')] if item.find('dc:creator') else []
-                pub_date = item.find('pubDate').text if item.find('pubDate') else None
+                items = soup.find_all('item')
+                print(f"Found {len(items)} items in feed")
 
-                # Append article data
-                articles.append((
-                    title, link, guid, description, author, pub_date, category_id, 'now()', 'now()'
-                ))
+                # Process items in batches
+                batch_size = 50
+                category_articles = 0
+                category_with_images = 0
+                category_with_keywords = 0
+                
+                for i in range(0, len(items), batch_size):
+                    batch_items = items[i:i + batch_size]
+                    print(f"Processing batch {i//batch_size + 1} of {(len(items) + batch_size - 1)//batch_size}")
+                    
+                    # Parse batch of articles
+                    parsed_articles = [parse_article(item, category_id) for item in batch_items]
+                    
+                    # Count articles with images and keywords
+                    articles_with_images = sum(1 for a in parsed_articles if a['image_url'])
+                    articles_with_keywords = sum(1 for a in parsed_articles if a['keywords'])
+                    
+                    # Insert articles
+                    inserted_count = batch_insert_articles(cursor, parsed_articles)
+                    connection.commit()
 
-        print(f"Parsed {len(articles)} articles.")
+                    # Update counts
+                    category_articles += inserted_count
+                    category_with_images += articles_with_images
+                    category_with_keywords += articles_with_keywords
 
-        # Insert articles into the database
-        insert_articles_query = """
-        INSERT INTO nyt.articles (
-            title, url, guid, description, author, pub_date, category_id, created_at, updated_at
-        )
-        VALUES %s
-        ON CONFLICT (guid) DO NOTHING;
-        """
-        execute_values(cursor, insert_articles_query, articles)
-        connection.commit()
+                print(f"Category {category_name} processing complete:")
+                print(f"- Articles inserted: {category_articles}")
+                print(f"- Articles with images: {category_with_images}")
+                print(f"- Articles with keywords: {category_with_keywords}")
 
-        # Fetch article IDs for inserted articles
-        cursor.execute("SELECT article_id, guid FROM nyt.articles;")
-        article_map = {row[1]: row[0] for row in cursor.fetchall()}
+                total_articles += category_articles
+                total_with_images += category_with_images
+                total_with_keywords += category_with_keywords
 
-        # Prepare keywords and media with correct article_id
-        for item in soup.find_all('item'):
-            guid = item.find('guid').text if item.find('guid') else None
-            article_id = article_map.get(guid)
+            except requests.exceptions.RequestException as e:
+                print(f"Error fetching feed {atom_link}: {e}")
+                continue
+            except Exception as e:
+                print(f"Error processing category {category_name}: {e}")
+                continue
 
-            # Extract keywords
-            for category in item.find_all('category'):
-                domain = category.get('domain', 'unknown')
-                keyword = category.text.strip()
-                keywords.append((article_id, domain, keyword, 'now()', 'now()'))
+        print("\nProcessing complete. Final counts:")
+        print(f"Total categories processed: {len(categories)}")
+        print(f"Total articles inserted: {total_articles}")
+        print(f"Total articles with images: {total_with_images}")
+        print(f"Total articles with keywords: {total_with_keywords}")
 
-            # Extract media content
-            for media in item.find_all('media:content'):
-                url = media.get('url')
-                medium = media.get('medium')
-                width = media.get('width')
-                height = media.get('height')
-                credit = item.find('media:credit').text if item.find('media:credit') else None
-                description = item.find('media:description').text if item.find('media:description') else None
-                media_entries.append((article_id, url, medium, width, height, credit, description, 'now()', 'now()'))
-
-        print(f"Parsed {len(keywords)} keywords and {len(media_entries)} media entries.")
-
-        # Insert keywords into the database
-        insert_keywords_query = """
-        INSERT INTO nyt.keywords (
-            article_id, domain, keyword, created_at, updated_at
-        )
-        VALUES %s
-        ON CONFLICT DO NOTHING;
-        """
-        execute_values(cursor, insert_keywords_query, keywords)
-
-        # Insert media into the database
-        insert_media_query = """
-        INSERT INTO nyt.media (
-            article_id, url, medium, width, height, credit, description, created_at, updated_at
-        )
-        VALUES %s
-        ON CONFLICT DO NOTHING;
-        """
-        execute_values(cursor, insert_media_query, media_entries)
-
-        connection.commit()
-        print("Articles, keywords, and media entries inserted successfully.")
-
-    except requests.exceptions.RequestException as e:
-        print(f"Error fetching RSS feed: {e}")
-
-    except psycopg2.Error as e:
-        print(f"Database error: {e}")
+    except Exception as e:
+        print(f"Error: {e}")
+        if connection:
+            connection.rollback()
 
     finally:
-        # Close the database connection
         if cursor:
             cursor.close()
-            print("Database cursor closed.")
         if connection:
             connection.close()
-            print("Database connection closed.")
-
-
+            print("\nDatabase connection closed.")
 
 if __name__ == "__main__":
-    recreate_tables()
-    fetch_and_store_articles_and_keywords()
+    process_nyt_rss()
