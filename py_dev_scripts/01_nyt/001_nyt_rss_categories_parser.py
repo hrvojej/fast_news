@@ -48,8 +48,6 @@ def fetch_and_store_categories():
             image_title TEXT,
             image_url TEXT,
             image_link TEXT,
-            created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
-            updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
             UNIQUE (slug, portal_id)
         );
         """
@@ -59,7 +57,7 @@ def fetch_and_store_categories():
 
         print("Step 2: Fetching HTML content from the NYT RSS page...")
         response = requests.get(url)
-        response.raise_for_status()  # Raise an error for HTTP issues
+        response.raise_for_status()
         soup = BeautifulSoup(response.content, 'html.parser')
         print("HTML content fetched successfully.")
 
@@ -122,7 +120,7 @@ def fetch_and_store_categories():
         INSERT INTO nyt.categories (
             name, slug, portal_id, path, level, title, link, atom_link, description,
             language, copyright_text, last_build_date, pub_date,
-            image_title, image_url, image_link, created_at, updated_at
+            image_title, image_url, image_link
         )
         VALUES %s
         ON CONFLICT (slug, portal_id) DO NOTHING;
@@ -135,22 +133,15 @@ def fetch_and_store_categories():
             """
             if not value:
                 return "unknown"
-            # Replace '>' with '.' to represent hierarchy
             value = value.replace(">", ".").strip()
-            # Replace non-alphanumeric characters (except '.') with underscores
             value = re.sub(r"[^a-zA-Z0-9.]+", "_", value.lower())
-            # Remove consecutive dots or underscores
             value = re.sub(r"[._]{2,}", ".", value)
-            # Trim leading or trailing dots or underscores
             return value.strip("._")
-
-
-
 
         values = []
         for category in categories:
             slug = clean_ltree(category['title'] or 'unknown')
-            portal_id = 1  # Assuming '1' is the portal_id for NYT; adjust accordingly
+            portal_id = 1  # Assuming '1' is the portal_id for NYT
             path = clean_ltree(category['title'] or 'unknown')
             level = 1  # Default level
             values.append((
@@ -158,8 +149,7 @@ def fetch_and_store_categories():
                 category['link'], category['atom_link'], category['description'],
                 category['language'], category['copyright_text'],
                 category['last_build_date'], category['pub_date'],
-                category['image_title'], category['image_url'], category['image_link'],
-                'now()', 'now()'
+                category['image_title'], category['image_url'], category['image_link']
             ))
 
         execute_values(cursor, insert_query, values)
@@ -173,7 +163,6 @@ def fetch_and_store_categories():
         print(f"Database error: {e}")
 
     finally:
-        # Close the database connection
         if cursor:
             cursor.close()
             print("Database cursor closed.")

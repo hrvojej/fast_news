@@ -76,7 +76,7 @@ def fetch_page_with_retry(url: str, max_retries: int = 3) -> str:
 
     for attempt in range(max_retries):
         try:
-            time.sleep(random.uniform(1, 2))
+            # time.sleep(random.uniform(1, 2))
             response = requests.get(url, headers=headers, timeout=30)
             response.raise_for_status()
             return response.text
@@ -169,7 +169,7 @@ def parse_article(card: BeautifulSoup, category_id: int, base_url: str, keyword_
         'guid': full_url,
         'description': None,
         'author': [],  # CNN HTML doesn't provide authors in card view
-        'pub_date': datetime.now(),
+        'pub_date': datetime.now(), # Incorrect, but we don't have the actual date
         'category_id': category_id,
         'keywords': keywords,
         'image_url': image_url,

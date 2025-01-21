@@ -5,74 +5,49 @@ from psycopg2.extras import execute_values
 import re
 
 def clean_cdata(text):
-    """Remove CDATA tags and clean the text"""
     if not text:
         return None
-    # Remove CDATA sections and clean whitespace
     cleaned = re.sub(r'<!\[CDATA\[(.*?)\]\]>', r'\1', str(text)).strip()
     return cleaned if cleaned else None
 
 def generate_slug(url, title):
-    """
-    Generate a unique slug from URL and title
-    Example: https://feeds.bbci.co.uk/news/world/europe/rss.xml -> news_world_europe
-    """
     if not url:
         return clean_ltree(title or 'unknown')
         
-    # Extract path from URL
-    path = url.split('//')[1].split('/')[2:-1]  # Skip domain and 'rss.xml'
+    path = url.split('//')[1].split('/')[2:-1]
     if not path:
         return clean_ltree(title or 'unknown')
         
-    # Join path parts with underscores
     return '_'.join(path)
 
 def clean_ltree(value):
-    """
-    Converts a category title into a valid ltree path.
-    Maintains hierarchy using '.' and replaces invalid characters.
-    """
     if not value:
         return "unknown"
-    # Replace '>' with '.' to represent hierarchy
     value = value.replace(">", ".").strip()
-    # Replace non-alphanumeric characters (except '.') with underscores
     value = re.sub(r"[^a-zA-Z0-9.]+", "_", value.lower())
-    # Remove consecutive dots or underscores
     value = re.sub(r"[._]{2,}", ".", value)
-    # Trim leading or trailing dots or underscores
     return value.strip("._")
 
 def is_valid_rss(rss_url):
-    """
-    Check if RSS feed is valid and contains actual content
-    Returns (is_valid, soup, error_message)
-    """
     try:
         print(f"\nValidating RSS feed: {rss_url}")
         response = requests.get(rss_url, timeout=10)
         response.raise_for_status()
         
-        # Parse the content
         soup = BeautifulSoup(response.content, 'xml')
         
-        # Check if it has basic RSS structure
         channel = soup.find('channel')
         if not channel:
             return False, None, "No channel element found"
             
-        # Check if it has a title
         title = channel.find('title')
         if not title:
             return False, None, "No title element found"
         
-        # Check if it has items
         items = channel.find_all('item')
         if not items:
             print(f"Warning: No items found in feed {rss_url}")
         
-        # Print feed details for debugging
         print(f"Feed title: {title.text}")
         if channel.find('description'):
             print(f"Description: {channel.find('description').text}")
@@ -124,7 +99,6 @@ def fetch_and_store_bbc_categories():
         "https://feeds.bbci.co.uk/news/live/rss.xml"  # Live news
     ]
 
-    # Database configuration
     db_config = {
         'dbname': 'news_aggregator',
         'user': 'news_admin',
@@ -163,8 +137,6 @@ def fetch_and_store_bbc_categories():
             image_title TEXT,
             image_url TEXT,
             image_link TEXT,
-            created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
-            updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
             UNIQUE (slug, portal_id)
         );
         """
@@ -172,7 +144,6 @@ def fetch_and_store_bbc_categories():
         connection.commit()
         print("Categories table recreated successfully.")
 
-        # Step 2: Process each known RSS feed
         print("\nStep 2: Processing known RSS feeds...")
         categories = []
         
@@ -199,7 +170,6 @@ def fetch_and_store_bbc_categories():
                     copyright_text = clean_cdata(channel.find('copyright').string if channel.find('copyright') else None)
                     last_build_date = clean_cdata(channel.find('lastBuildDate').string if channel.find('lastBuildDate') else None)
                     
-                    # Add image data if available
                     image = channel.find('image')
                     image_title = clean_cdata(image.find('title').string if image and image.find('title') else None)
                     image_url = clean_cdata(image.find('url').string if image and image.find('url') else None)
@@ -235,13 +205,12 @@ def fetch_and_store_bbc_categories():
         for idx, category in enumerate(categories, 1):
             print(f"{idx}. {category['title']} ({category['link']})")
 
-        # Step 3: Insert categories into the table
         print("\nStep 3: Inserting categories into the database...")
         insert_query = """
         INSERT INTO bbc.categories (
             name, slug, portal_id, path, level, title, link, atom_link, description,
             language, copyright_text, last_build_date, pub_date,
-            image_title, image_url, image_link, created_at, updated_at
+            image_title, image_url, image_link
         )
         VALUES %s
         ON CONFLICT (slug, portal_id) DO NOTHING;
@@ -250,18 +219,17 @@ def fetch_and_store_bbc_categories():
         values = []
         for category in categories:
             slug = generate_slug(category['atom_link'], category['title'])
-            print(f"Generated slug for {category['title']}: {slug}")  # Debug output
+            print(f"Generated slug for {category['title']}: {slug}")
             portal_id = 2  # portal_id for BBC
             path = clean_ltree(category['title'] or 'unknown')
-            level = len(slug.split('_'))  # Use depth in URL as level
+            level = len(slug.split('_'))
             
             values.append((
                 category['title'], slug, portal_id, path, level, category['title'],
                 category['link'], category['atom_link'], category['description'],
                 category['language'], category['copyright_text'],
                 category['last_build_date'], category['pub_date'],
-                category['image_title'], category['image_url'], category['image_link'],
-                'now()', 'now()'
+                category['image_title'], category['image_url'], category['image_link']
             ))
 
         execute_values(cursor, insert_query, values)

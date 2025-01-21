@@ -3,8 +3,6 @@ from bs4 import BeautifulSoup
 import psycopg2
 from psycopg2.extras import execute_values
 import re
-from datetime import datetime
-import time
 
 def validate_html_content(html_content):
     """Validate if the HTML content is properly accessible and contains expected elements"""
@@ -79,10 +77,10 @@ def extract_categories_from_footer(html_content):
             'title': main_title,
             'link': main_href,
             'atom_link': None,
-            'description': f"CNN {main_title} section",
+            'description': f"{main_title}",
             'language': 'en',
-            'copyright_text': f'© {datetime.now().year} Cable News Network',
-            'last_build_date': datetime.now(),
+            'copyright_text': None,
+            'last_build_date': None,
             'pub_date': None,
             'image_title': None,
             'image_url': None,
@@ -106,10 +104,10 @@ def extract_categories_from_footer(html_content):
                     'title': sub_title,
                     'link': sub_href,
                     'atom_link': None,
-                    'description': f"CNN {main_title} - {sub_title}",
+                    'description': f"{main_title} - {sub_title}",
                     'language': 'en',
-                    'copyright_text': f'© {datetime.now().year} Cable News Network',
-                    'last_build_date': datetime.now(),
+                    'copyright_text': None,
+                    'last_build_date': None,
                     'pub_date': None,
                     'image_title': None,
                     'image_url': None,
@@ -172,8 +170,6 @@ def setup_cnn_categories(html_content):
             image_title TEXT,
             image_url TEXT,
             image_link TEXT,
-            created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
-            updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
             UNIQUE (slug, portal_id)
         );
         """
@@ -217,9 +213,7 @@ def setup_cnn_categories(html_content):
                 category['pub_date'],
                 category['image_title'],
                 category['image_url'],
-                category['image_link'],
-                'now()',
-                'now()'
+                category['image_link']
             ))
             
             # Add subcategories
@@ -246,9 +240,7 @@ def setup_cnn_categories(html_content):
                     subcategory['pub_date'],
                     subcategory['image_title'],
                     subcategory['image_url'],
-                    subcategory['image_link'],
-                    'now()',
-                    'now()'
+                    subcategory['image_link']
                 ))
 
         print(f"\nStep 4: Inserting {len(values)} total records...")
@@ -257,7 +249,7 @@ def setup_cnn_categories(html_content):
             INSERT INTO cnn.categories (
                 name, slug, portal_id, path, level, title, link, atom_link, description,
                 language, copyright_text, last_build_date, pub_date,
-                image_title, image_url, image_link, created_at, updated_at
+                image_title, image_url, image_link
             )
             VALUES %s
             ON CONFLICT (slug, portal_id) DO NOTHING;

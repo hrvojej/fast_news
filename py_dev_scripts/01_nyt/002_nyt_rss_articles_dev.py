@@ -33,9 +33,7 @@ def recreate_table(connection: psycopg2.extensions.connection, cursor: psycopg2.
             keywords TEXT[],
             image_url TEXT,
             image_width INT,
-            image_credit TEXT,
-            created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
-            updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+            image_credit TEXT
         );
         """)
         connection.commit()
