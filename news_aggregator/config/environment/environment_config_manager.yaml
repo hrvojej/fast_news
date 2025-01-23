@@ -1,0 +1,44 @@
+development:
+  database:
+    name: news_aggregator_dev
+    user: news_admin_dev
+    password: fasldkflk423mkj4k24jk242
+    host: localhost
+    port: 5432
+  logging:
+    level: DEBUG
+    file: logs/news_aggregator_dev.log
+    format: '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+  api_keys:
+    newsapi: YOUR_DEV_API_KEY
+    nytimes: YOUR_DEV_API_KEY
+
+production:
+  database:
+    name: news_aggregator_prod
+    user: news_admin_prod
+    password: fasldkflk423mkj4k24jk242
+    host: localhost
+    port: 5432
+  logging:
+    level: INFO
+    file: logs/news_aggregator_prod.log
+    format: '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+  api_keys:
+    newsapi: YOUR_PROD_API_KEY
+    nytimes: YOUR_PROD_API_KEY
+
+testing:
+  database:
+    name: news_aggregator_test
+    user: news_admin_dev
+    password: fasldkflk423mkj4k24jk242
+    host: localhost
+    port: 5432
+  logging:
+    level: DEBUG
+    file: logs/news_aggregator_test.log
+    format: '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+  api_keys:
+    newsapi: YOUR_TEST_API_KEY
+    nytimes: YOUR_TEST_API_KEY

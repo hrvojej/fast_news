@@ -32,29 +32,19 @@ PGPASSWORD='fasldkflk423mkj4k24jk242' psql -U news_admin -d news_aggregator -h l
 # Image details
 Image details
 Operating system:
- 
 Oracle Linux
-Version:
- 
-8
+Version:8
 Image:
- 
 Oracle-Linux-8.10-aarch64-2024.10.31-0
 Shape configuration
-Shape:
- 
-VM.Standard.A2.Flex
-OCPU count:
- 
-2
-Network bandwidth (Gbps):
- 
-2
-Memory (GB):
- 
-12
-Local disk:
- 
-Block storage only
+Shape: VM.Standard.A2.Flex
+OCPU count:2
+Memory (GB):12
+
+
+# db
+## db setup:
+sudo -u postgres /home/opc/miniforge3/envs/pytorch_env/bin/python \
+    /home/opc/news_dagster-etl/news_aggregator/db_scripts/setup_database.py dev
 
 
