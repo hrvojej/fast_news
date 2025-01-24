@@ -2,7 +2,7 @@ from typing import Optional, Dict, Any
 import requests
 import random
 from urllib.parse import urlparse
-from .rate_limiter import rate_limiter
+from .rate_limiter import rate_limiter 
 from .retry_manager import retry_manager
 from etl.common.logging.logging_manager import logging_manager
 

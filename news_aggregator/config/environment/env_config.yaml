@@ -5,13 +5,18 @@ development:
     password: fasldkflk423mkj4k24jk242
     host: localhost
     port: 5432
+
   logging:
     level: DEBUG
     file: logs/news_aggregator_dev.log
     format: '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    max_bytes: 10485760  # 10MB
+    backup_count: 5
+
   api_keys:
-    newsapi: YOUR_DEV_API_KEY
-    nytimes: YOUR_DEV_API_KEY
+    nyt: your_nyt_api_key
+    guardian: your_guardian_api_key
+    reuters: your_reuters_api_key
 
 production:
   database:
@@ -20,25 +25,15 @@ production:
     password: fasldkflk423mkj4k24jk242
     host: localhost
     port: 5432
+
   logging:
     level: INFO
     file: logs/news_aggregator_prod.log
     format: '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-  api_keys:
-    newsapi: YOUR_PROD_API_KEY
-    nytimes: YOUR_PROD_API_KEY
+    max_bytes: 52428800  # 50MB
+    backup_count: 10
 
-testing:
-  database:
-    name: news_aggregator_test
-    user: news_admin_dev
-    password: fasldkflk423mkj4k24jk242
-    host: localhost
-    port: 5432
-  logging:
-    level: DEBUG
-    file: logs/news_aggregator_test.log
-    format: '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
   api_keys:
-    newsapi: YOUR_TEST_API_KEY
-    nytimes: YOUR_TEST_API_KEY
+    nyt: prod_nyt_api_key
+    guardian: prod_guardian_api_key 
+    reuters: prod_reuters_api_key
