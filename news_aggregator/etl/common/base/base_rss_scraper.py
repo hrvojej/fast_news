@@ -1,6 +1,5 @@
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Tuple
 from bs4 import BeautifulSoup
-import xml.etree.ElementTree as ET
 from dateutil import parser as date_parser
 from datetime import datetime, timezone
 from .base_scraper import BaseScraper
@@ -11,7 +10,7 @@ class BaseRssScraper(BaseScraper):
     def get_feed_content(self, url: str) -> Optional[BeautifulSoup]:
         """Fetch and parse RSS feed content."""
         response = self.request_manager.get(url)
-        return BeautifulSoup(response.content, 'xml')
+        return BeautifulSoup(response.content, 'xml') if response else None
 
     def parse_feed_metadata(self, channel: BeautifulSoup) -> Dict[str, Any]:
         """Parse RSS feed metadata."""
@@ -52,27 +51,21 @@ class BaseRssScraper(BaseScraper):
     def _get_image_data(self, channel: BeautifulSoup, attribute: str) -> Optional[str]:
         """Extract image data from channel."""
         image = channel.find('image')
-        if image:
-            found = image.find(attribute)
-            return found.text.strip() if found else None
-        return None
+        return image.find(attribute).text.strip() if image and image.find(attribute) else None
 
     def _get_authors(self, item: BeautifulSoup) -> List[str]:
         """Extract authors from item."""
         authors = []
-        # Check standard author
         if item.find('author'):
             authors.append(item.find('author').text.strip())
-        # Check DC creator
         dc_creators = item.find_all('dc:creator')
-        if dc_creators:
-            authors.extend([creator.text.strip() for creator in dc_creators])
+        authors.extend([creator.text.strip() for creator in dc_creators])
         return list(set(filter(None, authors)))
 
     def _get_keywords(self, item: BeautifulSoup) -> List[str]:
         """Extract keywords from item."""
         categories = item.find_all('category')
-        return list(set(cat.text.strip() for cat in categories if cat.text.strip()))
+        return list({cat.text.strip() for cat in categories if cat.text.strip()})
 
     def _get_media_content(self, item: BeautifulSoup, attribute: str) -> Optional[str]:
         """Extract media content from item."""

@@ -44,37 +44,7 @@ class BBCRssCategoryParser(BaseRssScraper):
             "https://feeds.bbci.co.uk/news/live/rss.xml"  # Live news
         ]
 
-    def validate_rss(self, rss_url: str) -> Tuple[bool, Optional[BeautifulSoup], Optional[str]]:
-        """Validate RSS feed and return soup if valid."""
-        try:
-            logger.info(f"Validating RSS feed: {rss_url}")
-            soup = self.get_feed_content(rss_url)
-            
-            if not soup:
-                return False, None, "Failed to fetch feed content"
-
-            channel = soup.find('channel')
-            if not channel:
-                return False, None, "No channel element found"
-                
-            title = channel.find('title')
-            if not title:
-                return False, None, "No title element found"
-            
-            items = channel.find_all('item')
-            if not items:
-                logger.warning(f"No items found in feed {rss_url}")
-            
-            logger.info(f"Feed title: {title.text}")
-            if channel.find('description'):
-                logger.info(f"Description: {channel.find('description').text}")
-                
-            return True, soup, None
-            
-        except Exception as e:
-            return False, None, f"Error: {str(e)}"
-
-    def fetch_and_parse_categories(self) -> List[Dict[str, Any]]:
+    def get_categories(self) -> List[Dict[str, Any]]:
         """Fetch and parse BBC RSS categories."""
         categories = []
         
@@ -89,7 +59,6 @@ class BBCRssCategoryParser(BaseRssScraper):
                 channel = soup.find('channel')
                 metadata = self.parse_feed_metadata(channel)
                 
-                # Generate unique slug from URL
                 path = rss_url.split('//')[1].split('/')[2:-1]
                 slug = '_'.join(path) if path else 'main'
                 
@@ -120,6 +89,26 @@ class BBCRssCategoryParser(BaseRssScraper):
 
         return categories
 
+    def get_articles(self, category_id: int, category_url: str) -> List[Dict[str, Any]]:
+        """Fetch and parse articles for a category."""
+        articles = []
+        is_valid, soup, error = self.validate_rss(category_url)
+        
+        if not is_valid:
+            logger.error(f"Invalid RSS feed for category {category_id}: {error}")
+            return articles
+
+        items = soup.find_all('item')
+        for item in items:
+            try:
+                article = self.parse_feed_item(item, category_id)
+                articles.append(article)
+            except Exception as e:
+                logger.error(f"Error parsing article: {str(e)}")
+                continue
+
+        return articles
+
     def clean_ltree(self, value: str) -> str:
         """Clean string for use as ltree path."""
         if not value:
@@ -128,3 +117,20 @@ class BBCRssCategoryParser(BaseRssScraper):
         value = re.sub(r"[^a-zA-Z0-9.]+", "_", value.lower())
         value = re.sub(r"[._]{2,}", ".", value)
         return value.strip("._")
+
+    def validate_rss(self, rss_url: str) -> Tuple[bool, Optional[BeautifulSoup], Optional[str]]:
+        """Validate RSS feed and return soup if valid."""
+        try:
+            logger.info(f"Validating RSS feed: {rss_url}")
+            soup = self.get_feed_content(rss_url)
+            
+            if not soup:
+                return False, None, "Failed to fetch feed content"
+
+            if not soup.find('channel'):
+                return False, None, "No channel element found"
+                
+            return True, soup, None
+            
+        except Exception as e:
+            return False, None, f"Error: {str(e)}"
