@@ -9,8 +9,18 @@ class BaseRssScraper(BaseScraper):
     
     def get_feed_content(self, url: str) -> Optional[BeautifulSoup]:
         """Fetch and parse RSS feed content."""
+        logger.debug(f"Fetching RSS feed from {url}")
         response = self.request_manager.get(url)
-        return BeautifulSoup(response.content, 'xml') if response else None
+        if not response:
+            logger.warning(f"Failed to fetch RSS feed from {url}")
+            return None
+        try:
+            soup = BeautifulSoup(response.content, 'xml')
+            logger.debug(f"Successfully parsed RSS feed from {url}")
+            return soup
+        except Exception as e:
+            logger.error(f"Error parsing RSS feed from {url}: {str(e)}")
+            return None
 
     def parse_feed_metadata(self, channel: BeautifulSoup) -> Dict[str, Any]:
         """Parse RSS feed metadata."""
@@ -91,3 +101,22 @@ class BaseRssScraper(BaseScraper):
             return dt.astimezone(timezone.utc) if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
         except (ValueError, TypeError):
             return None
+
+    def validate_rss(self, content: str) -> Tuple[bool, Optional[BeautifulSoup], Optional[str]]:
+        """Validate RSS feed content.
+        
+        Args:
+            content: Raw RSS feed content
+            
+        Returns:
+            Tuple of (is_valid, parsed_content, error_message)
+        """
+        try:
+            soup = BeautifulSoup(content, 'xml')
+            if not soup.find('rss'):
+                return False, None, "Invalid RSS format: missing <rss> tag"
+            if not soup.find('channel'):
+                return False, None, "Invalid RSS format: missing <channel> tag"
+            return True, soup, None
+        except Exception as e:
+            return False, None, f"RSS parsing error: {str(e)}"
