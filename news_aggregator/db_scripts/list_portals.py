@@ -1,6 +1,6 @@
 import psycopg2
-from data_adapter import PortalDataAdapter
-from db_utils import get_db_connection
+from news_dagster_etl.news_aggregator.db_scripts.db_utils import get_db_connection
+from news_dagster_etl.news_aggregator.db_scripts.generic_db_crud import generic_read
 
 def list_portals():
     conn = get_db_connection()
@@ -8,14 +8,13 @@ def list_portals():
         print("Failed to connect to the database.")
         return
 
-    portal_adapter = PortalDataAdapter(conn)
-
-    portals = portal_adapter.list_all()
+    table_name = "news_portals"
+    portals = generic_read(conn, table_name)
 
     if portals:
         print("List of Portals:")
         for portal in portals:
-            print(f"  ID: {portal.portal_id}, Name: {portal.portal_name}, Domain: {portal.portal_domain}, Bucket Prefix: {portal.bucket_prefix}")
+            print(f"  ID: {portal['portal_id']}, Name: {portal['portal_name']}, Domain: {portal['portal_domain']}, Bucket Prefix: {portal['bucket_prefix']}")
     else:
         print("No portals found in the database.")
 

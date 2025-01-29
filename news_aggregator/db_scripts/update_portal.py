@@ -1,14 +1,12 @@
-import psycopg2
-from data_adapter import Portal, PortalDataAdapter
-from db_utils import get_db_connection
+from news_dagster_etl.news_aggregator.db_scripts.data_adapter import Portal, PortalDataAdapter
+from news_dagster_etl.news_aggregator.db_scripts.db_utils import get_db_connection
+from news_dagster_etl.news_aggregator.db_scripts.generic_db_crud import generic_update
 
 def update_portal():
     conn = get_db_connection()
     if not conn:
         print("Failed to connect to the database.")
         return
-
-    portal_adapter = PortalDataAdapter(conn)
 
     portal_id = input("Enter portal ID to update: ")
     portal_name = input("Enter new portal name: ")
@@ -17,10 +15,11 @@ def update_portal():
 
     portal = Portal(portal_id=portal_id, portal_name=portal_name, portal_domain=portal_domain, bucket_prefix=bucket_prefix)
 
-    updated_portal = portal_adapter.update(portal_id, portal)
+    condition = {'portal_id': portal_id}
+    updated_portal = generic_update(conn, "news_portals", portal.__dict__, condition)
 
     if updated_portal:
-        print(f"Portal '{updated_portal.portal_name}' with ID: {updated_portal.portal_id} updated successfully.")
+        print(f"Portal '{portal.portal_name}' with ID: {updated_portal['portal_id']} updated successfully.")
     else:
         print(f"Failed to update portal with ID: {portal_id}.")
 

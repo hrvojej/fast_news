@@ -1,15 +1,16 @@
-from news_dagster_etl.news_aggregator.db_scripts.db_context import DatabaseContext
-from news_dagster_etl.news_aggregator.db_scripts.data_adapter import CategoryDataAdapter
+import argparse
+from db_scripts.db_context import DatabaseContext
+from db_scripts.generic_db_crud import generic_delete
 
-def delete_category(category_id: int, portal_prefix: str):
+def delete_category(category_id: int, portal_prefix: str, env: str):
     try:
-        with DatabaseContext() as db_context:
+        with DatabaseContext(env=env) as db_context:
             conn = db_context.get_connection()
-            category_adapter = CategoryDataAdapter(conn)
+            table_name = f"{portal_prefix}.categories"
+            condition = {'category_id': category_id}
+            deleted_category = generic_delete(conn, table_name, condition)
 
-            deleted_rows = category_adapter.delete(portal_prefix, category_id)
-
-            if deleted_rows > 0:
+            if deleted_category:
                 print(f"Category with id {category_id} deleted successfully.")
             else:
                 print(f"Category with id {category_id} not found or failed to delete.")
@@ -18,7 +19,11 @@ def delete_category(category_id: int, portal_prefix: str):
         print(f"Error deleting category: {e}")
 
 if __name__ == '__main__':
+    parser = argparse.ArgumentParser(description="Delete a category.")
+    parser.add_argument("-env", type=str, default="dev", help="Environment to use (dev or prod)")
+    args = parser.parse_args()
+
     # Example usage:
     category_id_to_delete = 1
     portal_prefix = "public" # Assuming 'public' is the portal_prefix for the portal you are working with.
-    delete_category(category_id_to_delete, portal_prefix)
+    delete_category(category_id_to_delete, portal_prefix, args.env)

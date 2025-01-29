@@ -1,15 +1,16 @@
-from news_dagster_etl.news_aggregator.db_scripts.db_context import DatabaseContext
-from news_dagster_etl.news_aggregator.db_scripts.data_adapter import ArticleDataAdapter
+import argparse
+from db_scripts.db_context import DatabaseContext
+from db_scripts.generic_db_crud import generic_delete
 
-def delete_article(article_id: int, portal_prefix: str):
+def delete_article(article_id: int, portal_prefix: str, env: str):
     try:
-        with DatabaseContext() as db_context:
+        with DatabaseContext(env=env) as db_context:
             conn = db_context.get_connection()
-            article_adapter = ArticleDataAdapter(conn)
+            table_name = f"{portal_prefix}.articles"
+            condition = {'article_id': article_id}
+            deleted_article = generic_delete(conn, table_name, condition)
 
-            deleted_rows = article_adapter.delete(portal_prefix, article_id)
-
-            if deleted_rows > 0:
+            if deleted_article:
                 print(f"Article with id {article_id} deleted successfully.")
             else:
                 print(f"Article with id {article_id} not found or failed to delete.")
@@ -18,7 +19,11 @@ def delete_article(article_id: int, portal_prefix: str):
         print(f"Error deleting article: {e}")
 
 if __name__ == '__main__':
+    parser = argparse.ArgumentParser(description="Delete an article.")
+    parser.add_argument("-env", type=str, default="dev", help="Environment to use (dev or prod)")
+    args = parser.parse_args()
+
     # Example usage:
     article_id_to_delete = 1
     portal_prefix = "public" # Assuming 'public' is the portal_prefix for the portal you are working with.
-    delete_article(article_id_to_delete, portal_prefix)
+    delete_article(article_id_to_delete, portal_prefix, args.env)

@@ -20,7 +20,14 @@ def get_db_connection(env='dev'):
         return None
 
     try:
-        conn = psycopg2.connect(**db_config[env])
+        db_params = db_config[env]
+        conn = psycopg2.connect(
+            user=db_params['user'],
+            password=db_params['password'],
+            host=db_params['host'],
+            port=db_params['port'],
+            database=db_params['name']
+        )
         return conn
     except psycopg2.Error as e:
         print(f"Database connection error: {e}")

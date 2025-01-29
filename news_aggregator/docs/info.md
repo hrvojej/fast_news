@@ -47,4 +47,5 @@ Memory (GB):12
 sudo -u postgres /home/opc/miniforge3/envs/pytorch_env/bin/python \
     /home/opc/news_dagster-etl/news_aggregator/db_scripts/setup_database.py dev
 
+ALTER USER news_admin_prod WITH PASSWORD 'fasldkflk423mkj4k24jk242';
 

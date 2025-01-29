@@ -1,16 +1,16 @@
 from news_dagster_etl.news_aggregator.db_scripts.db_context import DatabaseContext
-from news_dagster_etl.news_aggregator.db_scripts.data_adapter import ArticleDataAdapter
+from news_dagster_etl.news_aggregator.db_scripts.generic_db_crud import generic_read
 
 def read_article(article_id: int, portal_prefix: str):
     try:
         with DatabaseContext() as db_context:
             conn = db_context.get_connection()
-            article_adapter = ArticleDataAdapter(conn)
-
-            article = article_adapter.get_by_id(portal_prefix, article_id)
+            table_name = f"{portal_prefix}.articles"
+            condition = {'article_id': article_id}
+            article = generic_read(conn, table_name, condition=condition)
 
             if article:
-                print(f"Article details: {article}")
+                print(f"Article details: {article[0]}")
             else:
                 print(f"Article with id {article_id} not found.")
 

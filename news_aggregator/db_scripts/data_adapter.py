@@ -3,6 +3,27 @@ from dataclasses import dataclass
 from typing import List, Optional
 from abc import ABC, abstractmethod
 
+class DataAdapter(ABC):
+    @abstractmethod
+    def get_by_id(self, *args, **kwargs):
+        pass
+
+    @abstractmethod
+    def create(self, *args, **kwargs):
+        pass
+
+    @abstractmethod
+    def update(self, *args, **kwargs):
+        pass
+
+    @abstractmethod
+    def delete(self, *args, **kwargs):
+        pass
+
+    @abstractmethod
+    def list_all(self, *args, **kwargs) -> list:
+        pass
+
 @dataclass
 class Portal:
     portal_id: int
@@ -39,11 +60,11 @@ class Article:
     article_id: int
     title: str
     url: str
+    category_id: int
     guid: Optional[str] = None
     description: Optional[str] = None
     author: Optional[List[str]] = None
     pub_date: Optional[str] = None
-    category_id: int
     keywords: Optional[List[str]] = None
     image_url: Optional[str] = None
     image_width: Optional[int] = None
@@ -55,8 +76,8 @@ class Article:
 class Event:
     event_id: int
     title: str
-    description: Optional[str] = None
     start_time: str
+    description: Optional[str] = None
     end_time: Optional[str] = None
     status: Optional[str] = 'active'
     confidence_score: Optional[float] = None
@@ -69,9 +90,9 @@ class Topic:
     name: str
     description: Optional[str] = None
     parent_topic_id: Optional[int] = None
-    confidence_score: Optional[float] = None
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
+    confidence_score: Optional[float] = None
 
 @dataclass
 class Entity:
@@ -101,12 +122,12 @@ class TopicEvent:
 class EntityEvent:
     entity_id: int
     event_id: int
-    role: Optional[str] = None
     confidence_score: float
+    role: Optional[str] = None
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
 
-class DataAdapter(ABC):
+class Repository(ABC):
     def __init__(self, conn):
         self.conn = conn
         # self.cursor = self.conn.cursor() # Cursor will be created in concrete classes - Removed from base class
@@ -132,7 +153,7 @@ class DataAdapter(ABC):
         pass
 
 
-class PortalDataAdapter(DataAdapter):
+class PortalRepository(Repository):
     def get_by_id(self, portal_id: int) -> Optional[Portal]:
         self.cursor.execute("SELECT * FROM public.news_portals WHERE portal_id = %s", (portal_id,))
         record = self.cursor.fetchone()
@@ -182,7 +203,11 @@ class PortalDataAdapter(DataAdapter):
             portals.append(Portal(*record))
         return portals
 
-class CategoryDataAdapter(DataAdapter):
+class CategoryDataAdapter(DataAdapter, Repository):
+    def __init__(self, conn):
+        Repository.__init__(self, conn)
+        self.cursor = self.conn.cursor()
+
     def get_by_id(self, portal_prefix: str, category_id: int) -> Optional[Category]:
         self.cursor.execute(f"SELECT * FROM {portal_prefix}.categories WHERE category_id = %s", (category_id,))
         record = self.cursor.fetchone()

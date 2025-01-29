@@ -1,23 +1,27 @@
 from news_dagster_etl.news_aggregator.db_scripts.db_context import DatabaseContext
 from news_dagster_etl.news_aggregator.db_scripts.data_adapter import Category, CategoryDataAdapter
+from news_dagster_etl.news_aggregator.db_scripts.generic_db_crud import generic_update
+from news_dagster_etl.news_aggregator.db_scripts.generic_db_crud import generic_read
 
 def update_category(category_id: int, category_data: dict, portal_prefix: str):
     try:
         with DatabaseContext() as db_context:
             conn = db_context.get_connection()
-            category_adapter = CategoryDataAdapter(conn)
 
-            existing_category = category_adapter.get_by_id(portal_prefix, category_id)
-            if not existing_category:
+            table_name = f"{portal_prefix}.categories"
+            condition = {'category_id': category_id}
+
+            # Fetch existing category data using generic_read
+            existing_category_data = generic_read(conn, table_name, condition)
+            if not existing_category_data:
                 print(f"Category with id {category_id} not found.")
                 return
 
-            updated_category_info = {**existing_category._asdict(), **category_data}
-            updated_category = Category(**updated_category_info)
+            updated_category_data = {**existing_category_data, **category_data}
 
-            rows_updated = category_adapter.update(portal_prefix, category_id, updated_category)
+            rows_updated = generic_update(conn, table_name, updated_category_data, condition)
 
-            if rows_updated > 0:
+            if rows_updated:
                 print(f"Category with id {category_id} updated successfully.")
             else:
                 print(f"Failed to update category with id {category_id}.")

@@ -1,7 +1,7 @@
-from news_dagster_etl.news_aggregator.db_scripts.db_utils import get_db_connection
+from db_scripts.db_utils import get_db_connection
 
 class DatabaseContext:
-    def __init__(self, env='dev'):
+    def __init__(self, env: str):
         self.conn = get_db_connection(env)
         if not self.conn:
             raise Exception("Failed to initialize database context due to connection error.")
