@@ -26,18 +26,18 @@ if __name__ == '__main__':
     args = parser.parse_args()
 
     # Example usage:
-    article_info = {
-        "url": "https://example.com/article1",
-        "category_id": 1,
-        "title": "Example Article",
-        "description": "This is an example article.",
-        "guid": "some-guid",
-        "author": ["John Doe"],
-        "pub_date": "2024-01-28 10:00:00",
-        "keywords": ["example", "article"],
-        "image_url": "https://example.com/image.jpg",
-        "image_width": 600,
-        "image_credit": "Example Credit",
-        "article_id": 1
-    }
-    create_article(article_info, args.env, args.schema)
+    article_info = Article(
+        url="https://example.com/article1",
+        category_id=1,
+        title="Example Article",
+        description="This is an example article.",
+        guid="some-guid",
+        author=["John Doe"],
+        pub_date="2024-01-28 10:00:00",
+        keywords=["example", "article"],
+        image_url="https://example.com/image.jpg",
+        image_width=600,
+        image_credit="Example Credit",
+        article_id=1
+    )
+    create_article(article_info.__dict__, args.env, args.schema)

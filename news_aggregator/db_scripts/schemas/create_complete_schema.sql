@@ -6,10 +6,10 @@ DO $$
 DECLARE
     portal RECORD;
 BEGIN
-    FOR portal IN SELECT bucket_prefix FROM public.news_portals
+    FOR portal IN SELECT portal_prefix FROM public.news_portals
     LOOP
         -- 1) Kreiranje sheme
-        EXECUTE format('CREATE SCHEMA IF NOT EXISTS %I', portal.bucket_prefix);
+        EXECUTE format('CREATE SCHEMA IF NOT EXISTS %I', portal.portal_prefix);
 
         -- 2) categories tablica
         EXECUTE format('
@@ -34,7 +34,7 @@ BEGIN
                 created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
                 UNIQUE(slug, portal_id)
-            )', portal.bucket_prefix);
+            )', portal.portal_prefix);
 
         -- 3) articles tablica
         EXECUTE format('
@@ -53,7 +53,7 @@ BEGIN
                 image_credit TEXT,
                 created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
-            )', portal.bucket_prefix, portal.bucket_prefix);
+            )', portal.portal_prefix, portal.portal_prefix);
     END LOOP;
 END $$;
 
@@ -152,7 +152,7 @@ DO $$
 DECLARE
     portal RECORD;
 BEGIN
-    FOR portal IN SELECT bucket_prefix FROM public.news_portals
+    FOR portal IN SELECT portal_prefix FROM public.news_portals
     LOOP
         EXECUTE format('
             DROP TRIGGER IF EXISTS update_categories_updated_at ON %I.categories;
@@ -160,7 +160,7 @@ BEGIN
                 BEFORE UPDATE ON %I.categories
                 FOR EACH ROW
                 EXECUTE FUNCTION update_updated_at_column();
-        ', portal.bucket_prefix, portal.bucket_prefix);
+        ', portal.portal_prefix, portal.portal_prefix);
 
         EXECUTE format('
             DROP TRIGGER IF EXISTS update_articles_updated_at ON %I.articles;
@@ -168,7 +168,7 @@ BEGIN
                 BEFORE UPDATE ON %I.articles
                 FOR EACH ROW
                 EXECUTE FUNCTION update_updated_at_column();
-        ', portal.bucket_prefix, portal.bucket_prefix);
+        ', portal.portal_prefix, portal.portal_prefix);
     END LOOP;
 
     -- Events
