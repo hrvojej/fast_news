@@ -53,10 +53,10 @@ BEGIN
         -- Kreiranje tablice categories
         EXECUTE format('
             CREATE TABLE IF NOT EXISTS %I.categories (
-                category_id SERIAL PRIMARY KEY,
+                category_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
                 name VARCHAR(255) NOT NULL,
                 slug VARCHAR(255) NOT NULL,
-                portal_id INT NOT NULL REFERENCES public.news_portals(portal_id) ON DELETE CASCADE,
+                portal_id UUID NOT NULL DEFAULT gen_random_uuid() REFERENCES public.news_portals(portal_id) ON DELETE CASCADE,
                 path LTREE NOT NULL,
                 level INT NOT NULL,
                 description TEXT,
@@ -70,7 +70,7 @@ BEGIN
         -- Kreiranje tablice articles
         EXECUTE format('
             CREATE TABLE IF NOT EXISTS %I.articles (
-                article_id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+                article_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
                 title TEXT NOT NULL,
                 url TEXT NOT NULL,
                 guid TEXT UNIQUE,
@@ -78,7 +78,7 @@ BEGIN
                 content TEXT,
                 author TEXT[],
                 pub_date TIMESTAMPTZ,
-                category_id INT NOT NULL REFERENCES %I.categories(category_id) ON DELETE CASCADE,
+                category_id UUID NOT NULL REFERENCES %I.categories(category_id) ON DELETE CASCADE,
                 keywords TEXT[],
                 reading_time_minutes INTEGER,
                 language_code VARCHAR(10),
@@ -125,7 +125,7 @@ CREATE SCHEMA IF NOT EXISTS events;
 
 -- 7.1 Tablica events
 CREATE TABLE events.events (
-   event_id SERIAL PRIMARY KEY,
+   event_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
    title TEXT NOT NULL,
    description TEXT,
    start_time TIMESTAMPTZ NOT NULL,
@@ -136,16 +136,16 @@ CREATE TABLE events.events (
    tags TEXT[],
    sentiment_score FLOAT CHECK (sentiment_score BETWEEN -1 AND 1),
    status VARCHAR(50) DEFAULT 'active' CHECK (status IN ('active', 'completed', 'archived', 'merged')),
-   parent_event_id INTEGER REFERENCES events.events(event_id) ON DELETE CASCADE,
+   parent_event_id UUID REFERENCES events.events(event_id) ON DELETE CASCADE,
    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
    updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
 );
 
 -- 7.2 Tablica event_articles
 CREATE TABLE events.event_articles (
-   event_id INT REFERENCES events.events(event_id) ON DELETE CASCADE,
-   article_id INT NOT NULL,
-   portal_id INT REFERENCES public.news_portals(portal_id) ON DELETE CASCADE,
+   event_id UUID REFERENCES events.events(event_id) ON DELETE CASCADE,
+article_id UUID NOT NULL DEFAULT gen_random_uuid(),
+   portal_id UUID REFERENCES public.news_portals(portal_id) ON DELETE CASCADE,
    similarity_score FLOAT CHECK (similarity_score BETWEEN 0 AND 1),
    context_summary TEXT,
    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
@@ -154,10 +154,10 @@ CREATE TABLE events.event_articles (
 
 -- 7.3 Particionirana tablica timeline_entries (IDENTITY + kompozitni PK)
 CREATE TABLE events.timeline_entries (
-   entry_id INT GENERATED ALWAYS AS IDENTITY,
-   event_id INT REFERENCES events.events(event_id) ON DELETE CASCADE,
-   article_id INT NOT NULL,
-   portal_id INT REFERENCES public.news_portals(portal_id) ON DELETE CASCADE,
+   entry_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+   event_id UUID REFERENCES events.events(event_id) ON DELETE CASCADE,
+   article_id UUID NOT NULL,
+   portal_id UUID REFERENCES public.news_portals(portal_id) ON DELETE CASCADE,
    entry_timestamp TIMESTAMPTZ NOT NULL,
    entry_type VARCHAR(50) NOT NULL CHECK (entry_type IN ('initial', 'update', 'development', 'conclusion')),
    summary TEXT NOT NULL,
@@ -256,8 +256,8 @@ CREATE SCHEMA IF NOT EXISTS comments;
 -- 8.1 Tablica comments particionirana po posted_at
 CREATE TABLE comments.comments (
     comment_id TEXT,
-    article_id INT NOT NULL, -- Veza na portal_prefix.articles
-    portal_id INT REFERENCES public.news_portals(portal_id) ON DELETE CASCADE,
+    article_id UUID NOT NULL,
+    portal_id UUID REFERENCES public.news_portals(portal_id) ON DELETE CASCADE,
     content TEXT NOT NULL,
     content_html TEXT,
     author_id TEXT,
@@ -277,8 +277,8 @@ CREATE TABLE comments.comments (
 
 -- 8.2 Tablica article_comment_stats
 CREATE TABLE comments.article_comment_stats (
-    article_id INT NOT NULL,
-    portal_id INT REFERENCES public.news_portals(portal_id) ON DELETE CASCADE,
+    article_id UUID NOT NULL,
+    portal_id UUID REFERENCES public.news_portals(portal_id) ON DELETE CASCADE,
     total_comments_count INT DEFAULT 0,
     top_level_comments_count INT DEFAULT 0,
     reply_comments_count INT DEFAULT 0,
@@ -339,45 +339,7 @@ CREATE TRIGGER validate_comment_references
     EXECUTE FUNCTION comments.validate_comment_references();
 
 -- 8.6 **NOVO**: Validacija članka (article_id) unutar comments
-CREATE OR REPLACE FUNCTION comments.validate_article_reference()
-RETURNS TRIGGER AS $$
-DECLARE
-    portal_prefix text;
-    article_exists boolean;
-BEGIN
-    IF NEW.portal_id IS NULL THEN
-        RAISE EXCEPTION 'portal_id is required for referencing articles';
-    END IF;
-
-    SELECT portal_prefix INTO portal_prefix
-    FROM public.news_portals
-    WHERE portal_id = NEW.portal_id;
-    
-    IF portal_prefix IS NULL THEN
-        RAISE EXCEPTION 'Invalid portal_id %', NEW.portal_id;
-    END IF;
-
-    EXECUTE format('
-        SELECT EXISTS (
-            SELECT 1 
-            FROM %I.articles 
-            WHERE article_id = $1
-        )', portal_prefix)
-    INTO article_exists
-    USING NEW.article_id;
-
-    IF NOT article_exists THEN
-        RAISE EXCEPTION 'Article % does not exist in portal schema %', NEW.article_id, portal_prefix;
-    END IF;
-
-    RETURN NEW;
-END;
-$$ LANGUAGE plpgsql;
-
-CREATE TRIGGER validate_comment_article_reference
-    BEFORE INSERT OR UPDATE ON comments.comments
-    FOR EACH ROW
-    EXECUTE FUNCTION comments.validate_article_reference();
+-- Removed duplicate function and trigger definition
 
 -- 8.7 Funkcija i triger za kreiranje particija comments
 CREATE OR REPLACE FUNCTION comments.create_comment_partitions(
@@ -409,7 +371,7 @@ CREATE SCHEMA IF NOT EXISTS topics;
 
 -- 9.1 Tablica topic_categories
 CREATE TABLE topics.topic_categories (
-   category_id SERIAL PRIMARY KEY,
+   category_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
    name VARCHAR(255) NOT NULL,
    slug VARCHAR(255) NOT NULL UNIQUE,
    description TEXT,
@@ -422,7 +384,7 @@ CREATE TABLE topics.topic_categories (
 -- 9.2 Tablica topics
 CREATE TABLE topics.topics (
    topic_id SERIAL PRIMARY KEY,
-   category_id INT REFERENCES topics.topic_categories(category_id) ON DELETE CASCADE,
+   category_id UUID DEFAULT gen_random_uuid() REFERENCES topics.topic_categories(category_id) ON DELETE CASCADE,
    name VARCHAR(255) NOT NULL,
    slug VARCHAR(255) NOT NULL,
    description TEXT,
@@ -449,7 +411,7 @@ CREATE TABLE topics.topic_content (
        content_type IN ('article', 'event', 'comment')
    ),
    content_id TEXT NOT NULL, -- TEXT, može sadržavati i comment_id
-   portal_id INT REFERENCES public.news_portals(portal_id) ON DELETE CASCADE,
+   portal_id UUID REFERENCES public.news_portals(portal_id) ON DELETE CASCADE,
    relevance_score FLOAT CHECK (relevance_score BETWEEN 0 AND 1),
    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
    PRIMARY KEY (topic_id, content_type, content_id)
@@ -636,7 +598,7 @@ CREATE TABLE analysis.content_analysis (
         source_type IN ('article', 'comment', 'title', 'summary')
     ),
     source_id TEXT NOT NULL,
-    portal_id INT REFERENCES public.news_portals(portal_id) ON DELETE CASCADE,
+    portal_id UUID REFERENCES public.news_portals(portal_id) ON DELETE CASCADE,
     content_length INT,
     language_code VARCHAR(10),
     readability_score FLOAT,
@@ -699,6 +661,9 @@ BEGIN
         WHEN 'comment' THEN
             PERFORM 1 FROM comments.comments 
             WHERE comment_id = NEW.source_id;
+        WHEN 'event' THEN
+            PERFORM 1 FROM events.events 
+            WHERE event_id = NEW.source_id::INT;
     END CASE;
     
     IF NOT FOUND THEN
@@ -760,8 +725,8 @@ CREATE TABLE social.platforms (
 CREATE TABLE social.posts (
     post_id TEXT PRIMARY KEY,
     platform_id INT REFERENCES social.platforms(platform_id) ON DELETE CASCADE,
-    article_id INT NOT NULL,
-    portal_id INT REFERENCES public.news_portals(portal_id) ON DELETE CASCADE,
+    article_id UUID NOT NULL,
+    portal_id UUID REFERENCES public.news_portals(portal_id) ON DELETE CASCADE,
     content TEXT NOT NULL,
     content_type VARCHAR(50) CHECK (
         content_type IN ('text', 'image', 'video', 'link', 'mixed')
@@ -781,8 +746,8 @@ CREATE TABLE social.posts (
 
 -- 11.3 Tablica article_social_metrics
 CREATE TABLE social.article_social_metrics (
-    article_id INT NOT NULL,
-    portal_id INT REFERENCES public.news_portals(portal_id) ON DELETE CASCADE,
+    article_id UUID NOT NULL,
+    portal_id UUID REFERENCES public.news_portals(portal_id) ON DELETE CASCADE,
     platform_id INT REFERENCES social.platforms(platform_id) ON DELETE CASCADE,
     total_posts_count INT DEFAULT 0,
     total_likes_count INT DEFAULT 0,
@@ -920,7 +885,7 @@ CREATE TABLE entities.entity_mentions (
         content_type IN ('article', 'comment')
     ),
     content_id TEXT NOT NULL,
-    portal_id INT REFERENCES public.news_portals(portal_id) ON DELETE CASCADE,
+    portal_id UUID REFERENCES public.news_portals(portal_id) ON DELETE CASCADE,
     context_snippet TEXT,
     sentiment_score FLOAT CHECK (sentiment_score BETWEEN -1 AND 1),
     created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
