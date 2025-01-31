@@ -4,7 +4,7 @@ CREATE EXTENSION IF NOT EXISTS ltree;
 
 -- 2. Osnovna tablica s portalima
 CREATE TABLE public.news_portals (
-    portal_id SERIAL PRIMARY KEY,
+    portal_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     portal_prefix VARCHAR(50) NOT NULL UNIQUE,
     name VARCHAR(255) NOT NULL,
     base_url TEXT NOT NULL,
@@ -70,7 +70,7 @@ BEGIN
         -- Kreiranje tablice articles
         EXECUTE format('
             CREATE TABLE IF NOT EXISTS %I.articles (
-                article_id SERIAL PRIMARY KEY,
+                article_id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
                 title TEXT NOT NULL,
                 url TEXT NOT NULL,
                 guid TEXT UNIQUE,

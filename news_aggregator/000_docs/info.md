@@ -49,3 +49,8 @@ sudo -u postgres /home/opc/miniforge3/envs/pytorch_env/bin/python \
 
 ALTER USER news_admin_prod WITH PASSWORD 'fasldkflk423mkj4k24jk242';
 
+
+
+Dosljedni tipovi ID-jeva: Trenutačno se miješaju tipovi (neke tablice imaju INT, neke TEXT, neke SERIAL). U većim sustavima korisno je preći na UUID ili bar dosljedno BIGINT.
+Normalizacija: Za polja poput event_type, content_type, relationship_type i slično moglo bi se razmisliti o posebnim lookup tablicama radi veće fleksibilnosti i održavanja.
+
