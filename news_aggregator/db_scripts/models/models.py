@@ -14,7 +14,6 @@ from sqlalchemy.ext.declarative import declarative_base
 
 Base = declarative_base()
 
-
 # ────────────────────────────────────────────── Public Schema ──────────────────────────────────────────────
 
 class NewsPortal(Base):
@@ -50,7 +49,7 @@ def create_portal_category_model(schema: str):
         __tablename__ = 'categories'
         __table_args__ = (
             UniqueConstraint('slug', 'portal_id', name=f'uq_{schema}_categories_slug_portal_id'),
-            Index(f'idx_{schema}_category_path', 'path', postgresql_using='gist'),
+            Index(f'idx_{schema}_category_path', 'path', postgresql_using='btree'),
             Index(f'idx_{schema}_category_portal', 'portal_id'),
             {'schema': schema}
         )
@@ -181,7 +180,7 @@ class Comment(Base):
     __table_args__ = (
         Index('idx_comments_article', 'article_id', 'portal_id'),
         Index('idx_comments_hierarchy', 'parent_comment_id', 'root_comment_id'),
-        Index('idx_comments_path', 'thread_path', postgresql_using='gist'),
+        Index('idx_comments_path', 'thread_path', postgresql_using='btree'),  
         Index('idx_comments_temporal', 'posted_at'),
         Index('idx_comments_author', 'author_id'),
         {'schema': 'comments'}
@@ -305,7 +304,8 @@ class SentimentLexicon(Base):
     word_id = sa.Column(sa.Integer, primary_key=True, autoincrement=True)
     word = sa.Column(sa.String(255), nullable=False)
     language_code = sa.Column(sa.String(10), nullable=False, server_default=sa.text("'en'"))
-    base_score = sa.Column(sa.Float, nullable=False, CheckConstraint('base_score BETWEEN -1 AND 1'))
+    base_score = sa.Column(sa.Float, CheckConstraint('base_score BETWEEN -1 AND 1'), nullable=False)
+
 
 
 class ContentAnalysis(Base):
@@ -436,10 +436,7 @@ class Entity(Base):
         Index('idx_entities_status', 'status'),
         Index('idx_entities_normalized_name', 'normalized_name'),
         Index('idx_entities_temporal', 'last_seen_at'),
-        Index('idx_entities_text_search',
-              sa.text("to_tsvector('english', coalesce(name, '') || ' ' || coalesce(description, '') || ' ' || coalesce(array_to_string(aliases, ' '), ''))"),
-              postgresql_using='gin'),
-        {'schema': 'entities'}
+                {'schema': 'entities'}
     )
 
     entity_id = sa.Column(sa.Integer, primary_key=True, autoincrement=True)
@@ -463,6 +460,7 @@ class Entity(Base):
     mention_count = sa.Column(sa.Integer, server_default=sa.text("0"))
     first_seen_at = sa.Column(TIMESTAMP(timezone=True))
     last_seen_at = sa.Column(TIMESTAMP(timezone=True))
+    search_vector = sa.Column(sa.Text)
 
 
 class EntityRelationship(Base):
@@ -517,6 +515,7 @@ class EntityMention(Base):
 if __name__ == '__main__':
     # Example: create an engine and create all tables (if needed)
     engine = sa.create_engine("postgresql+psycopg2://user:password@localhost:5432/your_database")
+    
     Base.metadata.create_all(engine)
 
     # Example: instantiate dynamic models for a given portal schema (e.g. "portal1")

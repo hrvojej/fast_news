@@ -223,6 +223,13 @@ CREATE TRIGGER validate_content_reference
   FOR EACH ROW
   EXECUTE FUNCTION analysis.validate_content_reference();
 
+
+CREATE EXTENSION IF NOT EXISTS ltree;
+ALTER TABLE comments.comments 
+ALTER COLUMN thread_path TYPE ltree USING thread_path::ltree;
+
+
+
 -- 6. Social posts validation trigger.
 CREATE OR REPLACE FUNCTION social.validate_post_references()
 RETURNS TRIGGER AS $$
@@ -303,6 +310,33 @@ CREATE TRIGGER validate_entity_mention
   BEFORE INSERT OR UPDATE ON entities.entity_mentions
   FOR EACH ROW
   EXECUTE FUNCTION entities.validate_entity_mention();
+
+-- Add tsvector column
+ALTER TABLE entities.entities 
+ADD COLUMN search_vector tsvector;
+
+-- Create trigger function
+CREATE OR REPLACE FUNCTION entities.update_entity_search_vector()
+RETURNS trigger AS $$
+BEGIN
+  NEW.search_vector := to_tsvector('english', 
+    COALESCE(NEW.name, '') || ' ' || 
+    COALESCE(NEW.description, '') || ' ' || 
+    COALESCE(array_to_string(NEW.aliases, ' '), '')
+  );
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Create trigger
+CREATE TRIGGER update_entity_search_vector
+  BEFORE INSERT OR UPDATE ON entities.entities
+  FOR EACH ROW
+  EXECUTE FUNCTION entities.update_entity_search_vector();
+
+-- Create index on search_vector
+CREATE INDEX idx_entities_text_search ON entities.entities 
+USING gin(search_vector);
 
 -- 8. Prevent cycles in entity relationships.
 CREATE OR REPLACE FUNCTION entities.check_relationship_cycle()
