@@ -1,13 +1,19 @@
-Here is direcotry structure of my python data engineering project for fetching and scrapping RSS and HTML pages of categories and articles of 20 most popular portals:
-run tree -f on news_aggregator folder to see it.
+Here is direcotry structure of my python data engineering project for fetching and scrapping RSS and HTML pages of categories and articles of 20 most popular portals and doing content analysis upon them:
+/home/opc/news_dagster-etl/news_aggregator
 
-Lets focus on 
+Ive just upgraded significantly schema :
+news_dagster-etl/news_aggregator/db_scripts/schemas/create_schemas.sql
+which holds full db schema that I would like to recreate in my databases for developement and production. 
+They are empty currently:
+
+
 /home/opc/news_dagster-etl/news_aggregator/db_scripts
-- here is everything related to Database.
+- here is everything related to Databases and how to control and recreate databases. 
+Please inspect it.
 
 
 #################
-
+Ive also did:
 
 Phase 1: Set up Database Migrations with Alembic
 Goal: Initialize Alembic for database migrations to manage schema changes effectively.
@@ -22,6 +28,11 @@ First, we'll need to read the contents of alembic.ini and db_utils.py in ACT mod
 Then, we will update alembic.ini to use the database connection settings from db_utils.load_db_config(). We will likely need to set the sqlalchemy.url in alembic.ini to dynamically use the configuration loaded by db_utils.py.
 Step 1.4: Create Initial Migration: Generate a migration script to represent the current database schema.
 We will use execute_command in ACT mode to run alembic revision --autogenerate -m "Initial schema". This will create the first migration script in alembic/versions/.
+
+I need you now to in :
+/home/opc/news_dagster-etl/news_aggregator/config/database
+create document that will explain how to upgrade database version with alembic. 
+Make it short with commands to be comprehensive so I know how to do db versioning in the future. 
 
 
 Phase 2: Implement Generic CRUD Functions
