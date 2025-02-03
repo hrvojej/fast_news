@@ -3,8 +3,10 @@
 -- ========================================
 
 -- 1. Validation trigger for event_articles to check that the referenced article exists.
+CREATE EXTENSION IF NOT EXISTS ltree;
+
 CREATE OR REPLACE FUNCTION events.validate_article_reference()
-RETURNS trigger AS $$
+RETURNS trigger AS $func$
 DECLARE
     portal_prefix text;
     article_exists boolean;
@@ -28,7 +30,7 @@ BEGIN
     END IF;
     RETURN NEW;
 END;
-$$ LANGUAGE plpgsql;
+$func$ LANGUAGE plpgsql;
 
 CREATE TRIGGER validate_event_article_reference
   BEFORE INSERT OR UPDATE ON events.event_articles
@@ -38,7 +40,7 @@ CREATE TRIGGER validate_event_article_reference
 
 -- 2. Validation trigger for comments: check that portal exists and, if present, parent_comment_id is valid.
 CREATE OR REPLACE FUNCTION comments.validate_comment_references()
-RETURNS trigger AS $$
+RETURNS trigger AS $func$
 BEGIN
   IF NOT EXISTS (
       SELECT 1 FROM public.news_portals p
@@ -54,7 +56,7 @@ BEGIN
   END IF;
   RETURN NEW;
 END;
-$$ LANGUAGE plpgsql;
+$func$ LANGUAGE plpgsql;
 
 CREATE TRIGGER validate_comment_references
   BEFORE INSERT OR UPDATE ON comments.comments
@@ -64,7 +66,7 @@ CREATE TRIGGER validate_comment_references
 
 -- 3. Topics triggers: update topic path/level and prevent cycles.
 CREATE OR REPLACE FUNCTION topics.update_topic_path()
-RETURNS TRIGGER AS $$
+RETURNS TRIGGER AS $func$
 BEGIN
     IF NEW.parent_topic_id IS NULL THEN
         NEW.path = text2ltree(NEW.topic_id::text);
@@ -92,7 +94,7 @@ BEGIN
     END IF;
     RETURN NEW;
 END;
-$$ LANGUAGE plpgsql;
+$func$ LANGUAGE plpgsql;
 
 CREATE TRIGGER set_topic_path
   BEFORE INSERT OR UPDATE OF parent_topic_id ON topics.topics
@@ -100,7 +102,7 @@ CREATE TRIGGER set_topic_path
   EXECUTE FUNCTION topics.update_topic_path();
 
 CREATE OR REPLACE FUNCTION topics.check_topic_cycle()
-RETURNS trigger AS $$
+RETURNS trigger AS $func$
 DECLARE
     path_count integer;
 BEGIN
@@ -125,7 +127,7 @@ BEGIN
     END IF;
     RETURN NEW;
 END;
-$$ LANGUAGE plpgsql;
+$func$ LANGUAGE plpgsql;
 
 CREATE TRIGGER prevent_topic_cycles
   BEFORE INSERT OR UPDATE ON topics.topics
@@ -134,7 +136,7 @@ CREATE TRIGGER prevent_topic_cycles
 
 -- 4. Topic content validation trigger.
 CREATE OR REPLACE FUNCTION topics.validate_content_reference()
-RETURNS trigger AS $$
+RETURNS trigger AS $func$
 DECLARE
     portal_prefix text;
     content_exists boolean;
@@ -177,7 +179,7 @@ BEGIN
     END IF;
     RETURN NEW;
 END;
-$$ LANGUAGE plpgsql;
+$func$ LANGUAGE plpgsql;
 
 CREATE TRIGGER validate_topic_content_reference
   BEFORE INSERT OR UPDATE ON topics.topic_content
@@ -186,7 +188,7 @@ CREATE TRIGGER validate_topic_content_reference
 
 -- 5. Analysis validation function.
 CREATE OR REPLACE FUNCTION analysis.validate_content_reference()
-RETURNS TRIGGER AS $$
+RETURNS TRIGGER AS $func$
 DECLARE
     portal_prefix TEXT;
 BEGIN
@@ -216,7 +218,7 @@ BEGIN
     END IF;
     RETURN NEW;
 END;
-$$ LANGUAGE plpgsql;
+$func$ LANGUAGE plpgsql;
 
 CREATE TRIGGER validate_content_reference
   BEFORE INSERT OR UPDATE ON analysis.content_analysis
@@ -224,7 +226,6 @@ CREATE TRIGGER validate_content_reference
   EXECUTE FUNCTION analysis.validate_content_reference();
 
 
-CREATE EXTENSION IF NOT EXISTS ltree;
 ALTER TABLE comments.comments 
 ALTER COLUMN thread_path TYPE ltree USING thread_path::ltree;
 
@@ -232,7 +233,7 @@ ALTER COLUMN thread_path TYPE ltree USING thread_path::ltree;
 
 -- 6. Social posts validation trigger.
 CREATE OR REPLACE FUNCTION social.validate_post_references()
-RETURNS TRIGGER AS $$
+RETURNS TRIGGER AS $func$
 DECLARE
     portal_prefix TEXT;
     article_exists BOOLEAN;
@@ -268,7 +269,7 @@ BEGIN
     END IF;
     RETURN NEW;
 END;
-$$ LANGUAGE plpgsql;
+$func$ LANGUAGE plpgsql;
 
 CREATE TRIGGER validate_post_references
   BEFORE INSERT OR UPDATE ON social.posts
@@ -277,7 +278,7 @@ CREATE TRIGGER validate_post_references
 
 -- 7. Entity mention validation trigger.
 CREATE OR REPLACE FUNCTION entities.validate_entity_mention()
-RETURNS TRIGGER AS $$
+RETURNS TRIGGER AS $func$
 DECLARE
     portal_prefix TEXT;
 BEGIN
@@ -304,7 +305,7 @@ BEGIN
     END IF;
     RETURN NEW;
 END;
-$$ LANGUAGE plpgsql;
+$func$ LANGUAGE plpgsql;
 
 CREATE TRIGGER validate_entity_mention
   BEFORE INSERT OR UPDATE ON entities.entity_mentions
@@ -317,7 +318,7 @@ ADD COLUMN search_vector tsvector;
 
 -- Create trigger function
 CREATE OR REPLACE FUNCTION entities.update_entity_search_vector()
-RETURNS trigger AS $$
+RETURNS trigger AS $func$
 BEGIN
   NEW.search_vector := to_tsvector('english', 
     COALESCE(NEW.name, '') || ' ' || 
@@ -326,7 +327,7 @@ BEGIN
   );
   RETURN NEW;
 END;
-$$ LANGUAGE plpgsql;
+$func$ LANGUAGE plpgsql;
 
 -- Create trigger
 CREATE TRIGGER update_entity_search_vector
@@ -340,7 +341,7 @@ USING gin(search_vector);
 
 -- 8. Prevent cycles in entity relationships.
 CREATE OR REPLACE FUNCTION entities.check_relationship_cycle()
-RETURNS trigger AS $$
+RETURNS trigger AS $func$
 DECLARE
     path_exists boolean;
 BEGIN
@@ -378,7 +379,7 @@ BEGIN
     END IF;
     RETURN NEW;
 END;
-$$ LANGUAGE plpgsql;
+$func$ LANGUAGE plpgsql;
 
 CREATE TRIGGER prevent_relationship_cycles
   BEFORE INSERT OR UPDATE ON entities.entity_relationships
@@ -391,7 +392,7 @@ CREATE OR REPLACE FUNCTION events.create_timeline_partitions(
     end_date DATE,
     interval_months INT DEFAULT 3
 )
-RETURNS void AS $$
+RETURNS void AS $func$
 DECLARE
     current_date DATE := start_date;
 BEGIN
@@ -407,14 +408,14 @@ BEGIN
         current_date := current_date + interval '3 months';
     END LOOP;
 END;
-$$ LANGUAGE plpgsql;
+$func$ LANGUAGE plpgsql;
 
 CREATE OR REPLACE FUNCTION comments.create_comment_partitions(
     start_date DATE,
     end_date DATE,
     interval_months INT DEFAULT 3
 )
-RETURNS void AS $$
+RETURNS void AS $func$
 DECLARE
     current_date DATE := start_date;
 BEGIN
@@ -430,15 +431,15 @@ BEGIN
         current_date := current_date + interval '3 months';
     END LOOP;
 END;
-$$ LANGUAGE plpgsql;
+$func$ LANGUAGE plpgsql;
 
 -- 10. Materialized view refresh function.
 CREATE OR REPLACE FUNCTION public.refresh_materialized_views()
-RETURNS void AS $$
+RETURNS void AS $func$
 BEGIN
     REFRESH MATERIALIZED VIEW CONCURRENTLY analysis.content_statistics_mv;
 END;
-$$ LANGUAGE plpgsql;
+$func$ LANGUAGE plpgsql;
 
 -- Cron jobs for partition creation (requires pg_cron):
 SELECT cron.schedule(

@@ -24,9 +24,39 @@ CREATE DATABASE news_aggregator;
 CREATE USER news_admin WITH PASSWORD 'fasldkflk423mkj4k24jk242';
 sudo -u postgres psql
 \c news_aggregator
-PGPASSWORD='fasldkflk423mkj4k24jk242' psql -U news_admin -d news_aggregator -h localhost
-
+PGPASSWORD='fasldkflk423mkj4k24jk242' psql -U news_admin_dev -d news_aggregator_dev -h localhost
 \dn - list schemas
+
+## show all tables even if they are emtpy
+PGPASSWORD='fasldkflk423mkj4k24jk242' psql -U news_admin_dev -d news_aggregator_dev -h localhost -c "
+SELECT schemaname, tablename, COALESCE(reltuples, 0) AS approximate_row_count
+FROM pg_catalog.pg_tables 
+LEFT JOIN pg_class ON pg_tables.tablename = pg_class.relname
+WHERE schemaname NOT IN ('pg_catalog', 'information_schema')
+ORDER BY schemaname, tablename;"
+
+## show all tables even if they are emtpy + fn + trgg
+PGPASSWORD='fasldkflk423mkj4k24jk242' psql -U news_admin_dev -d news_aggregator_dev -h localhost -c "
+SELECT 'TABLE' AS type, schemaname, tablename AS name 
+FROM pg_catalog.pg_tables 
+WHERE schemaname NOT IN ('pg_catalog', 'information_schema')
+UNION ALL
+SELECT 'SEQUENCE' AS type, schemaname, sequencename AS name 
+FROM pg_catalog.pg_sequences 
+WHERE schemaname NOT IN ('pg_catalog', 'information_schema')
+UNION ALL
+SELECT 'FUNCTION' AS type, n.nspname AS schemaname, p.proname AS name
+FROM pg_proc p
+JOIN pg_namespace n ON p.pronamespace = n.oid
+WHERE n.nspname NOT IN ('pg_catalog', 'information_schema')
+UNION ALL
+SELECT 'TRIGGER' AS type, event_object_schema AS schemaname, trigger_name AS name
+FROM information_schema.triggers
+WHERE event_object_schema NOT IN ('pg_catalog', 'information_schema')
+ORDER BY type,schemaname, name;"
+
+
+
 
 
 # Image details
@@ -53,4 +83,107 @@ ALTER USER news_admin_prod WITH PASSWORD 'fasldkflk423mkj4k24jk242';
 
 Dosljedni tipovi ID-jeva: Trenutačno se miješaju tipovi (neke tablice imaju INT, neke TEXT, neke SERIAL). U većim sustavima korisno je preći na UUID ili bar dosljedno BIGINT.
 Normalizacija: Za polja poput event_type, content_type, relationship_type i slično moglo bi se razmisliti o posebnim lookup tablicama radi veće fleksibilnosti i održavanja.
+
+# Alembic Migrations Tutorial
+
+This tutorial provides a comprehensive guide on how to use Alembic for database migrations in your project.
+
+## Basic Commands
+
+### 1. Create a new migration
+
+Use this command to generate a new migration script. Alembic will automatically detect changes in your models and generate the necessary SQL statements.
+
+```bash
+alembic revision -m "Your migration message"
+```
+
+   - `-m`:  Specifies a message describing the migration. This is important for tracking changes.
+   - Example: `alembic revision -m "Add new column to users table"`
+
+### 2. Upgrade to the latest revision
+
+Use this command to apply all pending migrations to your database.
+
+```bash
+alembic upgrade head
+```
+
+   - `head`: Refers to the latest revision available.
+
+### 3. Downgrade to a specific revision
+
+Use this command to revert your database to a previous state.
+
+```bash
+alembic downgrade <revision_id>
+```
+
+   - `<revision_id>`: The specific revision ID to downgrade to.
+   - Example: `alembic downgrade 0002`
+
+### 4. Show migration history
+
+Use this command to view the history of your migrations.
+
+```bash
+alembic history
+```
+
+   - This will show you the revision IDs, messages, and the order in which migrations were applied.
+
+### 5. Show current revision
+
+Use this command to see the current revision of the database.
+
+```bash
+alembic current
+```
+
+   - This will show you the current revision ID.
+
+### 6. Autogenerate migrations
+
+Use this command to automatically generate migrations based on changes in your models.
+
+```bash
+alembic revision --autogenerate -m "Your migration message"
+```
+
+   - `--autogenerate`: Tells Alembic to automatically detect changes.
+   - `-m`: Specifies a message describing the migration.
+
+### 7. Stamp the database with a specific revision
+
+Use this command to mark the database as being at a specific revision without actually running the migrations. This is useful when you are starting with an existing database.
+
+```bash
+alembic stamp <revision_id>
+```
+
+   - `<revision_id>`: The specific revision ID to stamp the database with.
+   - Example: `alembic stamp head`
+
+## Important Notes
+
+-   Always run migrations in the correct order.
+-   Use descriptive messages for your migrations.
+-   Test your migrations in a development environment before applying them to production.
+-   Be careful when downgrading, as it can lead to data loss.
+
+## Example Workflow
+
+1.  Make changes to your SQLAlchemy models.
+2.  Run `alembic revision --autogenerate -m "Your migration message"` to generate a new migration script.
+3.  Review the generated script and make any necessary adjustments.
+4.  Run `alembic upgrade head` to apply the migration to your database.
+5.  Test your changes thoroughly.
+
+## Configuration
+
+-   The `alembic.ini` file contains the configuration for Alembic.
+-   The `alembic/env.py` file contains the environment setup for Alembic.
+-   The migration scripts are located in the `alembic/versions` directory.
+
+This tutorial should help you understand the basic commands for using Alembic migrations. If you have any further questions, please let me know.
 

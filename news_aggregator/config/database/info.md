@@ -16,6 +16,7 @@ GRANT ALL PRIVILEGES ON DATABASE news_aggregator_dev TO news_admin_dev;
 ALTER DATABASE news_aggregator_dev OWNER TO news_admin_dev;
 
 
+
 ## Create DB PROD
 CREATE DATABASE news_aggregator_prod;
 CREATE USER news_admin_prod WITH PASSWORD 'fasldkflk423mkj4k24jk242';
@@ -31,5 +32,11 @@ alembic revision --autogenerate -m "Initial migration"
 - model.py is upgraded so it creates schemas in start
 alembic upgrade head
 
+
+# ################################# PSQL commnads ############################3
+
+PGPASSWORD='fasldkflk423mkj4k24jk242' psql -U news_admin_dev -d news_aggregator_dev -c "\dn"
+
+(pytorch_env) [opc@dagster-etl-vm ~]$ PGPASSWORD='fasldkflk423mkj4k24jk242' psql -U news_admin_dev -d news_aggregator_dev -c "
 
 

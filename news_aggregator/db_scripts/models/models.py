@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# path: news_dagster-etl/news_aggregator/db_scripts/models/models.py
 """
 SQLAlchemy ORM models based on the PostgreSQL 16 schema.
 Note:
@@ -9,7 +10,7 @@ Note:
 
 import sqlalchemy as sa
 from sqlalchemy import CheckConstraint, Index, UniqueConstraint, PrimaryKeyConstraint
-from sqlalchemy.dialects.postgresql import UUID, ARRAY, JSONB, TIMESTAMP
+from sqlalchemy.dialects.postgresql import UUID, ARRAY, JSONB, TIMESTAMP, TSVECTOR
 from sqlalchemy.ext.declarative import declarative_base
 
 Base = declarative_base()
@@ -460,7 +461,7 @@ class Entity(Base):
     mention_count = sa.Column(sa.Integer, server_default=sa.text("0"))
     first_seen_at = sa.Column(TIMESTAMP(timezone=True))
     last_seen_at = sa.Column(TIMESTAMP(timezone=True))
-    search_vector = sa.Column(sa.Text)
+    search_vector = sa.Column(TSVECTOR)
 
 
 class EntityRelationship(Base):

@@ -1,8 +1,39 @@
+from sqlalchemy import event, inspect
+from contextlib import contextmanager
+from .models import Base, NewsPortal, create_portal_category_model, create_portal_article_model
 import psycopg2
 import yaml
 from pathlib import Path
 
 CONFIG_PATH = Path(__file__).parent.parent / "config"
+
+PORTAL_MODEL_REGISTRY = {}
+
+@contextmanager
+def portal_schema_session(engine):
+    """Context manager for handling portal schemas"""
+    with engine.connect() as connection:
+        # Create schemas first
+        inspector = inspect(engine)
+        existing_schemas = inspector.get_schema_names()
+        
+        # Get all portal prefixes
+        portals = connection.execute("SELECT portal_prefix FROM public.news_portals")
+        
+        for (prefix,) in portals:
+            if prefix not in existing_schemas:
+                connection.execute(f"CREATE SCHEMA {prefix}")
+                
+                # Generate models
+                PortalCategory = create_portal_category_model(prefix)
+                PortalArticle = create_portal_article_model(prefix)
+                
+                # Create tables
+                PortalCategory.__table__.create(connection)
+                PortalArticle.__table__.create(connection)
+                
+        yield connection
+
 
 def load_db_config():
     config_path = CONFIG_PATH / "database" / "database_config.yaml"

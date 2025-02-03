@@ -1,3 +1,4 @@
+# path: /home/opc/news_dagster-etl/news_aggregator/alembic/env.py
 from logging.config import fileConfig
 from sqlalchemy import engine_from_config
 from sqlalchemy import pool
@@ -16,7 +17,6 @@ config = context.config
 # This line sets up loggers basically.
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
-
 
 
 def run_migrations_offline() -> None:
@@ -43,7 +43,7 @@ def run_migrations_offline() -> None:
         context.run_migrations()
 
 
-def run_migrations_online() -> None:
+def run_migrations_online():
     """Run migrations in 'online' mode."""
     connectable = engine_from_config(
         config.get_section(config.config_ini_section, {}),
@@ -52,19 +52,30 @@ def run_migrations_online() -> None:
     )
 
     with connectable.connect() as connection:
-        # Create required schemas automatically
+        # Step 1: Create necessary schemas BEFORE migrations
         required_schemas = ['analysis', 'events', 'comments', 'topics', 'social', 'entities']
         for schema in required_schemas:
-            connection.execute(text(f'CREATE SCHEMA IF NOT EXISTS {schema}'))
+            print(f"Ensuring schema exists: {schema}")
+            connection.execute(text(f'CREATE SCHEMA IF NOT EXISTS {schema};'))
 
+        # Step 2: Configure Alembic and apply migrations
         context.configure(
             connection=connection,
-            target_metadata=target_metadata
+            target_metadata=target_metadata,
+            include_schemas=False,
+            version_table_schema='public',
+            compare_type=True,
+            include_symbol=lambda object, name, type_, reflected, compare_to: (
+                hasattr(object, 'schema') and object.schema == 'public'
+            )
         )
 
         with context.begin_transaction():
+            print("Running Alembic migrations...")
             context.run_migrations()
+            connection.execute(text("COMMIT;"))
 
+        print("Schema initialization complete!")
 
 
 if context.is_offline_mode():
