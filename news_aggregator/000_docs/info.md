@@ -26,6 +26,11 @@ sudo -u postgres psql
 \c news_aggregator
 PGPASSWORD='fasldkflk423mkj4k24jk242' psql -U news_admin_dev -d news_aggregator_dev -h localhost
 \dn - list schemas
+\d+ pt_bbc.categories
+\d+ pt_bbc.articles
+\di pt_bbc.*
+
+
 
 ## show all tables even if they are emtpy
 PGPASSWORD='fasldkflk423mkj4k24jk242' psql -U news_admin_dev -d news_aggregator_dev -h localhost -c "
@@ -87,6 +92,24 @@ Normalizacija: Za polja poput event_type, content_type, relationship_type i sliÄ
 # Alembic Migrations Tutorial
 
 This tutorial provides a comprehensive guide on how to use Alembic for database migrations in your project.
+
+# Migrations
+0001_initial_public.py: Creates the base news_portals table in public schema
+
+0002_base_schemas.py: Creates necessary schemas (events, comments, analysis, topics, social, entities)
+
+0003_create_tables_from_models.py: Creates all tables from SQLAlchemy models including:
+Static tables in various schemas
+Dynamic portal-specific tables (categories and articles) with proper indexes
+
+0004_load_portal_data.py: Loads initial portal configuration data
+
+0005_functions_triggers.py: Creates all necessary functions and triggers for:
+Data validation
+Reference integrity
+Search functionality
+Preventing cycles in hierarchical relationships
+Automatic updates of search vectors
 
 ## Basic Commands
 
