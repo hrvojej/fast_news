@@ -61,6 +61,7 @@ def create_portal_category_model(schema: str):
             'level': sa.Column(sa.Integer, nullable=False),
             'description': sa.Column(sa.Text),
             'link': sa.Column(sa.Text),
+            'atom_link': sa.Column(sa.Text),
             'is_active': sa.Column(sa.Boolean, server_default=sa.text("true"))
         }
     )

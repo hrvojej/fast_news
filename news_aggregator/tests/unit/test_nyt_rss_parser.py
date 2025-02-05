@@ -1,15 +1,14 @@
-#!/usr/bin/env python3
+#python -m unittest tests/unit/test_nyt_rss_parser.py
+
 import unittest
 from unittest.mock import patch, MagicMock
-from news_aggregator.portals.nyt.rss_categories_parser import NYTRSSCategoriesParser
-from news_aggregator.db_scripts.db_context import DatabaseContext
+from portals.nyt.rss_categories_parser import NYTRSSCategoriesParser
+from db_scripts.db_context import DatabaseContext
 from sqlalchemy import text
-
 
 class TestNYTRSSParser(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        from sqlalchemy import text
         cls.db_context = DatabaseContext.get_instance('dev')
         
         with cls.db_context.session() as session:
@@ -72,15 +71,15 @@ class TestNYTRSSParser(unittest.TestCase):
         '''
         
         def mock_get_response(*args, **kwargs):
-            url = args[0]
-            print(f"Mocking request to URL: {url}")
-            if url == self.parser.base_url:
+            link = args[0]
+            print(f"Mocking request to link: {link}")
+            if link == self.parser.base_url:
                 return mock_directory_response
-            elif 'World.xml' in url:
+            elif 'World.xml' in link:
                 return mock_world_response
-            elif 'Technology.xml' in url:
+            elif 'Technology.xml' in link:
                 return mock_tech_response
-            raise Exception(f"Unexpected URL: {url}")
+            raise Exception(f"Unexpected link: {link}")
         
         mock_get.side_effect = mock_get_response
         
@@ -89,6 +88,7 @@ class TestNYTRSSParser(unittest.TestCase):
         for feed in feeds:
             print(f"Feed: {feed}")
 
+        # Pronalaženje feed-ova po naslovu
         world_feed = next(f for f in feeds if f['title'] == 'NYT > World News')
         tech_feed = next(f for f in feeds if f['title'] == 'NYT > Technology')
         
@@ -100,34 +100,62 @@ class TestNYTRSSParser(unittest.TestCase):
         print(f"Description: {tech_feed['description']}")
         print(f"Path: {tech_feed['path']}")
 
-
     def test_store_categories(self):
+        cleaned_title = self.parser.clean_ltree('Test Category')
         test_category = {
             'title': 'Test Category',
+            'slug': cleaned_title,
+            'portal_id': self.portal_id,
             'link': 'https://www.nytimes.com/section/test',
             'description': 'Test category description',
-            'path': 'test_category',
-            'level': 1
+            'path': cleaned_title,
+            'level': len(cleaned_title.split('.')),
+            'is_active': True,
+            'atom_link': 'https://rss.nytimes.com/services/xml/rss/nyt/test.xml'
         }
         
         with self.db_context.session() as session:
             session.execute(
                 text("""
+                    DELETE FROM pt_nyt.categories
+                    WHERE slug = :slug AND portal_id = :portal_id
+                """),
+                {'slug': cleaned_title, 'portal_id': self.portal_id}
+            )
+            session.commit()
+
+        with self.db_context.session() as session:
+            session.execute(
+                text("""
                     INSERT INTO pt_nyt.categories 
-                    (name, url, description, path, level, is_active, created_at, updated_at)
-                    VALUES (:title, :link, :description, :path, :level, true, NOW(), NOW())
+                    (name, slug, portal_id, link, description, path, level, is_active, atom_link)
+                    VALUES (:title, :slug, :portal_id, :link, :description, :path, :level, :is_active, :atom_link)
                 """),
                 test_category
             )
             session.commit()
 
+        with self.db_context.session() as session:
+            result = session.execute(
+                text("""
+                    SELECT * FROM pt_nyt.categories
+                    WHERE portal_id = :portal_id AND link = :link
+                """),
+                {'portal_id': self.portal_id, 'link': 'https://www.nytimes.com/section/test'}
+            ).fetchone()
+            
+            if result:
+                result_dict = dict(result._mapping)
+                assert result_dict['atom_link'] == test_category['atom_link']
 
-        @classmethod
-        def tearDownClass(cls):
-            print("\n=== Tearing down TestNYTRSSParser ===")
-            if hasattr(cls, 'db_context'):
-                cls.db_context.dispose()
-                print("Database context disposed")
+            session.execute(
+                text("""
+                    DELETE FROM pt_nyt.categories
+                    WHERE portal_id = :portal_id AND link = :link
+                """),
+                {'portal_id': self.portal_id, 'link': 'https://www.nytimes.com/section/test'}
+            )
+            session.commit()
 
 if __name__ == '__main__':
-    unittest.main(verbose=True)
+    unittest.main(verbosity=2)

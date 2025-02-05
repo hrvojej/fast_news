@@ -5,7 +5,7 @@ import sqlalchemy as sa
 from sqlalchemy.engine import Engine, Connection
 from sqlalchemy.orm import sessionmaker, Session
 from sqlalchemy.pool import QueuePool
-from news_aggregator.db_scripts.db_utils import load_db_config
+from db_scripts.db_utils import load_db_config
 
 class DatabaseContext:
     _instances: Dict[str, 'DatabaseContext'] = {}
