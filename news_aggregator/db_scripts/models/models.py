@@ -42,73 +42,59 @@ class NewsPortal(Base):
 # ───────────────────────────────────── Dynamic Portal Models (Categories & Articles) ─────────────────────────────
 
 def create_portal_category_model(schema: str):
-    """
-    Returns a Category model class for the given portal schema.
-    (The underlying table is “categories” in the specified schema.)
-    """
-    class Category(Base):
-        __tablename__ = 'categories'
-        __table_args__ = (
-            UniqueConstraint('slug', 'portal_id', name=f'uq_{schema}_categories_slug_portal_id'),
-            Index(f'idx_{schema}_category_path', 'path', postgresql_using='btree'),
-            Index(f'idx_{schema}_category_portal', 'portal_id'),
-            {'schema': schema}
-        )
-
-        category_id = sa.Column(UUID(as_uuid=True), primary_key=True,
-                                server_default=sa.text("gen_random_uuid()"))
-        name = sa.Column(sa.String(255), nullable=False)
-        slug = sa.Column(sa.String(255), nullable=False)
-        # Although “portal_id” is a FK to public.news_portals, here we just define it as UUID.
-        portal_id = sa.Column(UUID(as_uuid=True), nullable=False)
-        # The “ltree” type is not built‐in; here we store it as TEXT (with the understanding that the DB uses ltree).
-        path = sa.Column(sa.Text, nullable=False)
-        level = sa.Column(sa.Integer, nullable=False)
-        description = sa.Column(sa.Text)
-        link = sa.Column(sa.Text)
-        is_active = sa.Column(sa.Boolean, server_default=sa.text("true"))
-
-    return Category
-
+    return type(
+        f'Category_{schema}',
+        (Base,),
+        {
+            '__tablename__': 'categories',
+            '__table_args__': (
+                UniqueConstraint('slug', 'portal_id', name=f'uq_{schema}_categories_slug_portal_id'),
+                Index(f'idx_{schema}_category_path', 'path', postgresql_using='btree'),
+                Index(f'idx_{schema}_category_portal', 'portal_id'),
+                {'schema': schema}
+            ),
+            'category_id': sa.Column(UUID(as_uuid=True), primary_key=True, server_default=sa.text("gen_random_uuid()")),
+            'name': sa.Column(sa.String(255), nullable=False),
+            'slug': sa.Column(sa.String(255), nullable=False),
+            'portal_id': sa.Column(UUID(as_uuid=True), nullable=False),
+            'path': sa.Column(sa.Text, nullable=False),
+            'level': sa.Column(sa.Integer, nullable=False),
+            'description': sa.Column(sa.Text),
+            'link': sa.Column(sa.Text),
+            'is_active': sa.Column(sa.Boolean, server_default=sa.text("true"))
+        }
+    )
 
 def create_portal_article_model(schema: str):
-    """
-    Returns an Article model class for the given portal schema.
-    (The underlying table is “articles” in the specified schema.)
-    """
-    class Article(Base):
-        __tablename__ = 'articles'
-        __table_args__ = (
-            Index(f'idx_{schema}_articles_pub_date', 'pub_date'),
-            Index(f'idx_{schema}_articles_category', 'category_id'),
-            # Note: The full‑text search index (using to_tsvector) is not represented here.
-            {'schema': schema}
-        )
-
-        article_id = sa.Column(UUID(as_uuid=True), primary_key=True,
-                               server_default=sa.text("gen_random_uuid()"))
-        title = sa.Column(sa.Text, nullable=False)
-        url = sa.Column(sa.Text, nullable=False)
-        guid = sa.Column(sa.Text, unique=True)
-        description = sa.Column(sa.Text)
-        content = sa.Column(sa.Text)
-        author = sa.Column(ARRAY(sa.Text))
-        pub_date = sa.Column(TIMESTAMP(timezone=True))
-        # FK reference: note that the referenced table is “categories” in the same schema.
-        category_id = sa.Column(UUID(as_uuid=True),
-                                sa.ForeignKey(f'{schema}.categories.category_id', ondelete='CASCADE'),
-                                nullable=False)
-        keywords = sa.Column(ARRAY(sa.Text))
-        reading_time_minutes = sa.Column(sa.Integer)
-        language_code = sa.Column(sa.String(10))
-        image_url = sa.Column(sa.Text)
-        sentiment_score = sa.Column(sa.Float, CheckConstraint('sentiment_score BETWEEN -1 AND 1'))
-        share_count = sa.Column(sa.Integer, server_default=sa.text("0"))
-        view_count = sa.Column(sa.Integer, server_default=sa.text("0"))
-        comment_count = sa.Column(sa.Integer, server_default=sa.text("0"))
-
-    return Article
-
+    return type(
+        f'Article_{schema}',
+        (Base,),
+        {
+            '__tablename__': 'articles',
+            '__table_args__': (
+                Index(f'idx_{schema}_articles_pub_date', 'pub_date'),
+                Index(f'idx_{schema}_articles_category', 'category_id'),
+                {'schema': schema}
+            ),
+            'article_id': sa.Column(UUID(as_uuid=True), primary_key=True, server_default=sa.text("gen_random_uuid()")),
+            'title': sa.Column(sa.Text, nullable=False),
+            'url': sa.Column(sa.Text, nullable=False),
+            'guid': sa.Column(sa.Text, unique=True),
+            'description': sa.Column(sa.Text),
+            'content': sa.Column(sa.Text),
+            'author': sa.Column(ARRAY(sa.Text)),
+            'pub_date': sa.Column(TIMESTAMP(timezone=True)),
+            'category_id': sa.Column(UUID(as_uuid=True), sa.ForeignKey(f'{schema}.categories.category_id', ondelete='CASCADE'), nullable=False),
+            'keywords': sa.Column(ARRAY(sa.Text)),
+            'reading_time_minutes': sa.Column(sa.Integer),
+            'language_code': sa.Column(sa.String(10)),
+            'image_url': sa.Column(sa.Text),
+            'sentiment_score': sa.Column(sa.Float, CheckConstraint('sentiment_score BETWEEN -1 AND 1')),
+            'share_count': sa.Column(sa.Integer, server_default=sa.text("0")),
+            'view_count': sa.Column(sa.Integer, server_default=sa.text("0")),
+            'comment_count': sa.Column(sa.Integer, server_default=sa.text("0"))
+        }
+    )
 
 # ────────────────────────────────────────────── Events Schema ───────────────────────────────────────────────
 

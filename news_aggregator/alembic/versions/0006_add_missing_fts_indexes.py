@@ -1,3 +1,4 @@
+# path: news_dagster-etl/news_aggregator/alembic/versions/0006_add_missing_fts_indexes.py
 """Add missing full-text search indexes
 
 Revision ID: 0006

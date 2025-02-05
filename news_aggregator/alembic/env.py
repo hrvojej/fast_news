@@ -62,12 +62,9 @@ def run_migrations_online():
         context.configure(
             connection=connection,
             target_metadata=target_metadata,
-            include_schemas=False,
+            include_schemas=True,
             version_table_schema='public',
-            compare_type=True,
-            include_symbol=lambda object, name, type_, reflected, compare_to: (
-                hasattr(object, 'schema') and object.schema == 'public'
-            )
+            compare_type=True
         )
 
         with context.begin_transaction():

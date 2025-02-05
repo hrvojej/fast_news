@@ -1,3 +1,4 @@
+# path: news_dagster-etl/news_aggregator/alembic/versions/0005_functions_triggers.py
 """Create functions and triggers
 
 Revision ID: 0005
