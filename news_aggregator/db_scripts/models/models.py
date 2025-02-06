@@ -72,9 +72,14 @@ def create_portal_article_model(schema: str):
         (Base,),
         {
             '__tablename__': 'articles',
-            '__table_args__': (
+           '__table_args__': (
                 Index(f'idx_{schema}_articles_pub_date', 'pub_date'),
                 Index(f'idx_{schema}_articles_category', 'category_id'),
+                sa.ForeignKeyConstraint(
+                    ['category_id'], 
+                    [f'{schema}.categories.category_id'],
+                    name=f'fk_{schema}_article_category'
+                ),
                 {'schema': schema}
             ),
             'article_id': sa.Column(UUID(as_uuid=True), primary_key=True, server_default=sa.text("gen_random_uuid()")),
@@ -84,8 +89,8 @@ def create_portal_article_model(schema: str):
             'description': sa.Column(sa.Text),
             'content': sa.Column(sa.Text),
             'author': sa.Column(ARRAY(sa.Text)),
-            'pub_date': sa.Column(TIMESTAMP(timezone=True)),
-            'category_id': sa.Column(UUID(as_uuid=True), sa.ForeignKey(f'{schema}.categories.category_id', ondelete='CASCADE'), nullable=False),
+            'pub_date': sa.Column(TIMESTAMP(timezone=True)),            
+            'category_id': sa.Column(UUID(as_uuid=True), nullable=False),            
             'keywords': sa.Column(ARRAY(sa.Text)),
             'reading_time_minutes': sa.Column(sa.Integer),
             'language_code': sa.Column(sa.String(10)),

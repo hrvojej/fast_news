@@ -20,7 +20,6 @@ Start-Process -FilePath "C:\Program Files\Google\Chrome\Application\chrome.exe" 
 # pg
 user: postgres 
 pss: Dedko2020
-
 psql -U postgres -W
 DROP DATABASE news_aggregator_dev;
 DROP ROLE news_admin_dev;

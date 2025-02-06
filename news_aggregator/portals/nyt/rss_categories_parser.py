@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+# path: news_dagster-etl/news_aggregator/portals/nyt/rss_categories_parser.py
 """
 NYT RSS Categories Parser
 Fetches and stores NYT RSS feed categories using SQLAlchemy ORM.
@@ -228,6 +228,11 @@ def main():
     """
     Script entry point.
     """
+    import argparse
+    # Import Base from your models file to inspect the metadata
+    from db_scripts.models.models import Base
+    print("Registered tables in metadata:", Base.metadata.tables.keys())
+
     argparser = argparse.ArgumentParser(description="NYT RSS Categories Parser")
     argparser.add_argument(
         '--env',

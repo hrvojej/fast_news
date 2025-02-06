@@ -1,3 +1,4 @@
+# path: /home/leandro/Documents/News_Aggregator/news_dagster-etl/py_dev_scripts/01_nyt/002_nyt_rss_articles_dev.py
 import requests
 from bs4 import BeautifulSoup
 import psycopg2
