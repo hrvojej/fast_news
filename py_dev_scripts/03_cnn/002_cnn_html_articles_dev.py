@@ -237,15 +237,15 @@ def process_cnn():
         cursor.execute("""
             WITH subcategories AS (
                 SELECT c1.category_id, c1.link, c1.name
-                FROM cnn.categories c1
+                FROM pt_cnn.categories c1
                 WHERE c1.level = 2
                 UNION
                 SELECT c2.category_id, c2.link, c2.name
-                FROM cnn.categories c2
+                FROM pt_cnn.categories c2
                 WHERE c2.level = 1
                 AND NOT EXISTS (
                     SELECT 1 
-                    FROM cnn.categories sub 
+                    FROM pt_cnn.categories sub 
                     WHERE sub.path <@ c2.path 
                     AND sub.level = 2
                 )
