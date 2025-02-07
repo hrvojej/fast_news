@@ -1,6 +1,0 @@
-SQLAlchemy>=1.4.0
-psycopg2-binary>=2.9.0
-requests>=2.25.0
-beautifulsoup4>=4.9.0
-mock>=4.0.0
-pytest>=6.0.0  # Optional: for more advanced testing features
