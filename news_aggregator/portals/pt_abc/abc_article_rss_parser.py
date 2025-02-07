@@ -6,12 +6,18 @@ Fetches and stores ABC RSS feed articles using SQLAlchemy ORM.
 import sys
 import os
 from datetime import datetime
-from typing import Dict
+from typing import Dict, List
 from uuid import UUID
 import requests
 from bs4 import BeautifulSoup
 import argparse
 from sqlalchemy import text
+
+# New imports for keyword extraction:
+from sentence_transformers import SentenceTransformer
+from sklearn.metrics.pairwise import cosine_similarity
+from nltk.corpus import stopwords
+import nltk
 
 # Add package root to path
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -26,6 +32,7 @@ from db_scripts.models.models import create_portal_category_model, create_portal
 ABCCategory = create_portal_category_model("pt_abc")
 ABCArticle = create_portal_article_model("pt_abc")
 
+
 def fetch_portal_id_by_prefix(portal_prefix: str, env: str = 'dev') -> UUID:
     """Fetches the portal_id from the news_portals table."""
     from db_scripts.db_context import DatabaseContext
@@ -39,6 +46,50 @@ def fetch_portal_id_by_prefix(portal_prefix: str, env: str = 'dev') -> UUID:
             return result[0]
         raise Exception(f"Portal with prefix '{portal_prefix}' not found.")
 
+
+class KeywordExtractor:
+    """
+    Uses a SentenceTransformer model to extract keywords from text.
+    """
+    def __init__(self):
+        self.model = SentenceTransformer('all-MiniLM-L6-v2')
+        try:
+            self.stop_words = set(stopwords.words('english'))
+        except LookupError:
+            nltk.download('stopwords')
+            self.stop_words = set(stopwords.words('english'))
+            
+    def extract_keywords(self, text: str, max_keywords: int = 5) -> List[str]:
+        if not text:
+            return []
+        
+        # Split text into individual words (chunks)
+        chunks = text.split()
+        if not chunks:
+            return []
+            
+        text_embedding = self.model.encode([text])
+        chunk_embeddings = self.model.encode(chunks)
+        
+        similarities = cosine_similarity(text_embedding, chunk_embeddings).flatten()
+        scored_chunks = sorted(
+            [(chunks[i], score) for i, score in enumerate(similarities)],
+            key=lambda x: x[1],
+            reverse=True
+        )
+        
+        keywords = []
+        seen = set()
+        for word, _ in scored_chunks:
+            word = word.lower()
+            if word not in self.stop_words and word not in seen and len(word) > 2:
+                keywords.append(word)
+                seen.add(word)
+            if len(keywords) >= max_keywords:
+                break
+        return keywords
+
+
 class ABCRSSArticlesParser:
     """Parser for ABC RSS feed articles."""
 
@@ -46,6 +97,8 @@ class ABCRSSArticlesParser:
         self.portal_id = portal_id
         self.env = env
         self.ABCArticle = article_model
+        # Instantiate the keyword extractor (SentenceTransformer based)
+        self.keyword_extractor = KeywordExtractor()
 
     def get_session(self):
         """Obtain a database session from the DatabaseContext."""
@@ -86,14 +139,12 @@ class ABCRSSArticlesParser:
         # Authors: ABC feed does not provide an explicit author field, so we leave it empty.
         authors = []
 
-        # Keywords: gather from <category> tags and also check for <media:keywords>
-        keywords = [cat.text.strip() for cat in item.find_all('category')
-                    if cat.text.strip() and len(cat.text.strip()) > 2]
-        media_keywords_tag = item.find('media:keywords')
-        if media_keywords_tag and media_keywords_tag.text.strip():
-            keyword_text = media_keywords_tag.text.strip()
-            if keyword_text not in keywords:
-                keywords.append(keyword_text)
+        # ----------------------------
+        # NEW: Keyword extraction
+        # Instead of relying solely on <category> or media:keywords tags,
+        # we now extract keywords from the title using our KeywordExtractor.
+        keywords = self.keyword_extractor.extract_keywords(title) if title else []
+        # ----------------------------
 
         # Get image URL from <media:thumbnail> elements.
         image_url = None
@@ -200,6 +251,7 @@ class ABCRSSArticlesParser:
             print(f"Error processing ABC articles: {e}")
             raise
 
+
 def main():
     """Script entry point."""
     argparser = argparse.ArgumentParser(description="ABC RSS Articles Parser")
@@ -218,6 +270,7 @@ def main():
     except Exception as e:
         print(f"Script execution failed: {e}")
         raise
+
 
 if __name__ == "__main__":
     main()

@@ -1,10 +1,6 @@
-"""
-CNN Articles Parser
-Fetches and stores CNN articles using SQLAlchemy ORM.
-"""
-
 import sys
 import os
+import re
 from datetime import datetime
 from typing import Dict, List
 from uuid import UUID
@@ -16,9 +12,9 @@ from sentence_transformers import SentenceTransformer
 from sklearn.metrics.pairwise import cosine_similarity
 from nltk.corpus import stopwords
 import nltk
-import re
 import unicodedata
 from urllib.parse import urljoin
+from urllib.parse import urlparse
 
 # Add package root to path
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -33,6 +29,23 @@ CNNCategory = create_portal_category_model("pt_cnn")
 # Create the dynamic article model for CNN portal
 from db_scripts.models.models import create_portal_article_model
 CNNArticle = create_portal_article_model("pt_cnn")
+
+
+def extract_pub_date_from_url(url: str) -> str:
+    # Extract just the path from the URL.
+    path = urlparse(url).path
+    # Look for the date anywhere in the path.
+    match = re.search(r'/(\d{4})/(\d{2})/(\d{2})/', path)
+    if match:
+        year, month, day = match.groups()
+        return f"{year}-{month}-{day}"
+    return None
+
+# Example usage:
+# url = "/2025/02/06/tech/deepseek-ai-us-ban-bill/index.html"
+# publication_date = extract_pub_date_from_url(url)
+# print("Publication date:", publication_date)
+
 
 def fetch_portal_id_by_prefix(portal_prefix: str, env: str = 'dev') -> UUID:
     """Fetches the portal_id from news_portals table."""
@@ -49,6 +62,7 @@ def fetch_portal_id_by_prefix(portal_prefix: str, env: str = 'dev') -> UUID:
             return result[0]
         print(f"[DEBUG] No portal found for prefix: {portal_prefix}")
         raise Exception(f"Portal with prefix '{portal_prefix}' not found.")
+
 
 class KeywordExtractor:
     """Extracts keywords from text using sentence transformers."""
@@ -96,6 +110,7 @@ class KeywordExtractor:
                 break
         print(f"[DEBUG] Extracted keywords: {keywords}")
         return keywords
+
 
 class CNNArticlesParser:
     """Parser for CNN articles"""
@@ -158,6 +173,7 @@ class CNNArticlesParser:
                 if attempt == max_retries - 1:
                     raise
                 print("[DEBUG] Retrying...")
+                import time
                 time.sleep(2)
 
     def parse_article(self, card: BeautifulSoup, category_id: UUID, base_url: str) -> Dict:
@@ -172,17 +188,28 @@ class CNNArticlesParser:
         full_url = urljoin(base_url, relative_url)
         print(f"[DEBUG] Processing article URL: {full_url}")
 
-        # Extract title
+        # Extract publication date from the relative URL using the new helper function.
+        publication_date = extract_pub_date_from_url(relative_url)
+        if publication_date:
+            print(f"[DEBUG] Extracted publication date: {publication_date}")
+        else:
+            print("[DEBUG] Publication date not found in URL")
+
         title = None
-        title_elem = link_elem.find('span', class_='container__headline-text')
+        author = None
+
+        # Extract title solely from dedicated elements (no splitting on " - By ").
+        title_elem = card.find('span', class_='container__headline-text')
         if title_elem:
-            title = self.clean_text(title_elem.text)
-            print(f"[DEBUG] Found title from headline-text: {title}")
+            title = self.clean_text(title_elem.get_text())
+            print(f"[DEBUG] Extracted title from headline-text: {title}")
+
         if not title:
             headline_div = link_elem.find('div', class_='container__headline')
             if headline_div:
-                title = self.clean_text(headline_div.text)
+                title = self.clean_text(headline_div.get_text())
                 print(f"[DEBUG] Found title from headline div: {title}")
+
         if not title:
             link_text = self.clean_text(link_elem.get_text())
             if len(link_text) > 10:
@@ -193,28 +220,36 @@ class CNNArticlesParser:
             print("[DEBUG] No valid title found")
             return None
 
-        # Clean the title
+        # Extract the author separately from its dedicated element.
+        author_elem = card.find('span', class_='metadata__byline__author')
+        if author_elem:
+            author = self.clean_text(author_elem.get_text())
+            author = re.sub(r'^By\s+', '', author)
+            print(f"[DEBUG] Extracted author from metadata: {author}")
+        else:
+            print("[DEBUG] No author element found")
+
+        # Clean the title further if necessary.
         title = re.sub(r'►\s*Video\s*►\s*', '', title)
         title = re.sub(r'▶\s*', '', title)
         title = re.sub(r'\s*\d+:\d+\s*$', '', title)
         print(f"[DEBUG] Cleaned title: {title}")
 
-        # Extract image
+        # Extract image.
         image = card.find('img')
         image_url = None
-        image_width = None
         if image:
             image_url = image.get('src') or image.get('data-src')
-            image_width = int(image.get('width')) if image.get('width') and image.get('width').isdigit() else None
-            print(f"[DEBUG] Found image: {image_url}, width: {image_width}")
+            if image_url:
+                image_url = image_url.strip()
+            print(f"[DEBUG] Found image: {image_url}")
 
-        # Calculate reading time
-        text_content = title
-        word_count = len(text_content.split())
+        # Calculate reading time based on title word count.
+        word_count = len(title.split())
         reading_time = max(1, round(word_count / 200))
         print(f"[DEBUG] Calculated reading time: {reading_time} minutes")
 
-        # Extract keywords
+        # Extract keywords using the title text.
         keywords = self.keyword_extractor.extract_keywords(title) if title else []
         print(f"[DEBUG] Extracted keywords: {keywords}")
 
@@ -225,8 +260,8 @@ class CNNArticlesParser:
             'category_id': category_id,
             'description': None,
             'content': None,
-            'author': [],
-            'pub_date': None,  # Leave empty since we don't have actual pub date
+            'author': [author] if author else [],
+            'pub_date': publication_date,
             'keywords': keywords,
             'reading_time_minutes': reading_time,
             'language_code': 'en',
@@ -311,6 +346,7 @@ class CNNArticlesParser:
         except Exception as e:
             print(f"[DEBUG] Error processing articles: {str(e)}")
             raise
+
 
 def main():
     """Script entry point."""
