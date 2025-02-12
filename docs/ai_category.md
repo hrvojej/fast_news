@@ -1,18 +1,16 @@
 # Categories question
 I need to parse RSS categories from:
-pt_aljazeera
+pt_wapo schema which is
 
 base url:
-https://abcnews.go.com/Site/page/rss-feeds-3520115
+https://www.washingtonpost.com/discussions/2018/10/12/washington-post-rss-feeds/
 
-RSS feeds are stored in that page in elements like:
-<a target="_blank" href="https://feeds.abcnews.com/abcnews/usheadlines"><img src="https://s.abcnews.com/images/technology/rss_chicklet.jpg"></a>
+
+
+
+
 Leave default or empty fields that are not present. 
 
-In case there i pub_date or similar field to fill in - never put timestamp there if data is not present in source parsed. Just leave that date field empty. 
-
-portal prefix:
-pt_abc
 
 Make sure you use all fields from model.py :
 def create_portal_categorymodel(schema: str):

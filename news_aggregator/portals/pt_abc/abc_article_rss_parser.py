@@ -190,6 +190,12 @@ class ABCRSSArticlesParser:
         """Fetch and store articles from all ABC RSS feeds."""
         print("Starting fetch_and_store_articles for ABC...")
         session = self.get_session()
+
+        # Counters and details for reporting.
+        new_articles_count = 0
+        updated_articles_count = 0
+        updated_articles_details = []  # list of tuples (article title, old pub_date, new pub_date)
+
         print("Executing categories query...")
         try:
             # Select all active categories that have an atom_link defined
@@ -203,13 +209,20 @@ class ABCRSSArticlesParser:
             print(f"Found {len(categories)} categories.")
 
             for category_id, atom_link in categories:
-                print(f"Processing category: {category_id} with feed URL: {atom_link}")
+                print(f"\nProcessing category: {category_id} with feed URL: {atom_link}")
                 try:
                     response = requests.get(atom_link, timeout=10)
                     response.raise_for_status()
                     soup = BeautifulSoup(response.content, 'xml')
 
-                    for item in soup.find_all('item'):
+                    # Get all articles (items) and calculate total count.
+                    items = soup.find_all('item')
+                    total_articles = len(items)
+                    print(f"Found {total_articles} articles in feed {atom_link}.")
+
+                    for article_index, item in enumerate(items, start=1):
+                        # Print progress message for current article.
+                        print(f"Article {article_index}/{total_articles}")
                         article_data = self.parse_article(item, category_id)
                         # Check for duplicate based on guid
                         existing = session.query(self.ABCArticle).filter(
@@ -219,14 +232,20 @@ class ABCRSSArticlesParser:
                         if not existing:
                             article = self.ABCArticle(**article_data)
                             session.add(article)
+                            new_articles_count += 1
                             print(f"Added new article: {article_data['title']}")
                         else:
                             # If needed, update the existing record (e.g., if pub_date has changed)
                             if existing.pub_date != article_data['pub_date']:
+                                old_pub_date = existing.pub_date
+                                new_pub_date = article_data['pub_date']
                                 for key, value in article_data.items():
                                     setattr(existing, key, value)
+                                updated_articles_count += 1
+                                updated_articles_details.append(
+                                    (article_data['title'], old_pub_date, new_pub_date)
+                                )
                                 print(f"Updated article: {article_data['title']}")
-
                     session.commit()
                     print(f"Finished processing feed: {atom_link}")
 
@@ -234,6 +253,15 @@ class ABCRSSArticlesParser:
                     print(f"Error processing feed {atom_link}: {e}")
                     session.rollback()
                     continue
+
+            # Final reporting
+            print("\nFinal Report:")
+            print(f"Newly added articles: {new_articles_count}")
+            print(f"Updated articles: {updated_articles_count}")
+            if updated_articles_details:
+                print("\nDetails of updated articles:")
+                for title, old_date, new_date in updated_articles_details:
+                    print(f" - Article '{title}': pub_date in DB: {old_date}, pub_date online: {new_date}")
 
         except Exception as e:
             print(f"Error in fetch_and_store_articles: {e}")

@@ -19,7 +19,7 @@ def main():
        url = "https://edition.cnn.com/2025/02/04/politics/cia-workforce-buyouts/index.html"
        tab.Page.navigate(url=url)
        
-       time.sleep(15)
+       time.sleep(5)
        
        clean_html_js = """
        function cleanHTML() {

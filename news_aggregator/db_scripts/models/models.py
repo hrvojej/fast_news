@@ -101,6 +101,34 @@ def create_portal_article_model(schema: str):
             'comment_count': sa.Column(sa.Integer, server_default=sa.text("0"))
         }
     )
+    
+# ────────────────────────────────────────────── Dynamic Portal Model (Article Status) ───────────────────────────────────────────────
+
+def create_portal_article_status_model(schema: str):
+    return type(
+        f'ArticleStatus_{schema}',
+        (Base,),
+        {
+            '__tablename__': 'article_status',
+            '__table_args__': (
+                Index(f'idx_{schema}_article_status_url', 'url'),
+                {'schema': schema}
+            ),
+            # Primary key (UUID for consistency with your other models)
+            'status_id': sa.Column(UUID(as_uuid=True), primary_key=True, server_default=sa.text("gen_random_uuid()")),
+            # Article URL to be tracked; uniqueness ensures that you don’t re‑fetch the same URL
+            'url': sa.Column(sa.Text, nullable=False, unique=True),
+            # Timestamp when the HTML was successfully fetched
+            'fetched_at': sa.Column(TIMESTAMP(timezone=True), nullable=False),
+            # Optionally, record when the article has been parsed.
+            # If this remains NULL then the article’s content is not yet processed.
+            'parsed_at': sa.Column(TIMESTAMP(timezone=True)),
+            # New field to track publication date, similar to the articles table.
+            'pub_date': sa.Column(TIMESTAMP(timezone=True))
+        }
+    )
+
+
 
 # ────────────────────────────────────────────── Events Schema ───────────────────────────────────────────────
 

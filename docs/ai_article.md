@@ -1,58 +1,30 @@
 
 # ###################################### article question ############################
-I similar way how nyt article parser (below) is created now I need to create 
-fox news article parser from categories atom_link url
+I need to create 
+reuters news article parser from sitemap links.
 
-So you need to iterate over 
-SELECT atom_link FROM pt_fox.categories
+So you need to iterate over pages from 1  to 50 one by one, pause 5-9 seconds between pages:
+https://www.reuters.com/sitemap/2025-02/07/1/
+...
+to the last
+https://www.reuters.com/sitemap/2025-02/07/50/
 
-Example of atom_link returned:
-https://moxie.foxnews.com/google-publisher/travel.xml
+and look for:
 
-# Example source code of RSS category, first few lines with several item elements:
-<item>
-<link>https://www.foxnews.com/tech/beware-fake-reddit-solutions-delivering-dangerous-malware</link>
-<guid isPermaLink="true">https://www.foxnews.com/tech/beware-fake-reddit-solutions-delivering-dangerous-malware</guid>
-<title>Beware of fake Reddit solutions delivering dangerous malware</title>
-<description>Bad actors are now mimicking Reddit to spread malware that can steal personal information. CyberGuy shares what you need to know about fake Reddit pages.</description>
-<content:encoded><p>Sometimes, when you need an answer to a complex life situation or a way to troubleshoot an error on <a href="https://www.foxnews.com/category/tech/topics/computers" target="_blank" rel="noopener">your computer</a>, regular articles on the web don’t help. Some issues are so niche that no one writes about them, and those who do often say nothing useful in 1,000 words. </p><p>In these cases, adding Reddit to your search query can be a game changer. Nine times out of 10, someone on Reddit has faced the same issue, and there's probably a solution. </p><p>But bad actors have caught on to this, too. They’re now mimicking Reddit to spread malware that can steal your personal information.</p><p><a href="https://cyberguy.com/newsletter/" target="_blank" rel="nofollow noopener"><strong><u>GET SECURITY ALERTS, EXPERT TIPS - SIGN UP FOR KURT’S NEWSLETTER - THE CYBERGUY REPORT HERE</u></strong></a></p><p>Hackers are distributing nearly <a href="https://www.foxnews.com/category/tech/topics/hackers" target="_blank" rel="noopener">1,000 fake websites</a> mimicking Reddit and WeTransfer to spread the Lumma Stealer malware. These sites are designed to trick you into downloading malicious software by imitating legitimate discussions and file-sharing services.</p><p>On these fake Reddit pages, attackers create a fabricated discussion where one user asks for help downloading a tool, another offers a WeTransfer link and a third expresses gratitude to make the exchange seem real. Clicking the link redirects victims to a counterfeit WeTransfer site, where the download button delivers the Lumma Stealer malware.</p><p>All these fake pages have the following things in common:</p><p>These fake websites were discovered by <a href="https://x.com/crep1x/status/1881404758843699402" target="_blank" rel="nofollow noopener"><u>Sekoia researcher crep1x</u></a>, who compiled a full list of the pages involved in the scheme. In total, 529 of these sites mimic Reddit, while 407 impersonate WeTransfer to trick users into downloading malware.</p><p>According to <a href="https://www.bleepingcomputer.com/news/security/hundreds-of-fake-reddit-sites-push-lumma-stealer-malware/" target="_blank" rel="nofollow noopener"><u>BleepingComputer</u></a>, hackers may be driving traffic to these fake pages through methods like malicious ads (<a href="https://cyberguy.com/security/older-americans-are-being-targeted-in-a-malvertising-campaign/" target="_blank" rel="nofollow noopener"><u>malvertising</u></a>), search engine manipulation (SEO poisoning), harmful websites, direct messages on social media and other deceptive tactics.</p><p><a href="https://cyberguy.com/privacy/best-services-for-removing-your-personal-information-from-the-internet/" target="_blank" rel="nofollow noopener"><strong><u>HOW TO REMOVE YOUR PRIVATE DATA FROM THE INTERNET</u></strong></a></p><p>Hackers are using fake Reddit pages to spread Lumma Stealer, a powerful malware designed to steal personal data while staying under the radar. Once it infects a device, it can grab passwords stored in web browsers and session tokens, allowing attackers to hijack accounts without even needing a password.</p><p>But Reddit isn’t the only way this malware spreads. Hackers also push it through GitHub comments, deepfake websites and shady online ads. Once they <a href="https://www.foxnews.com/category/tech/topics/security" target="_blank" rel="noopener">steal login credentials</a>, they often sell them on hacker forums, where others can use them for further attacks.</p><p>This type of malware has already played a role in major security breaches, including attacks on <a href="https://cyberguy.com/security/powerschool-data-breach-exposes-student-teacher-records/" target="_blank" rel="nofollow noopener"><u>PowerSchool</u></a>, <a href="https://cyberguy.com/security/data-breach-exposes-56-million-clothing-customers/" target="_blank" rel="nofollow noopener"><u>Hot Topic</u></a>, CircleCI and Snowflake. It’s a growing threat, especially for companies that rely on password-based security.</p><p><a href="https://www.foxnews.com/tech/what-is-ai-artificial-intelligence" target="_blank" rel="noopener"><strong>WHAT IS ARTIFICIAL INTELLIGENCE (AI)?</strong></a></p><p><a href="https://cyberguy.com/security/best-antivirus-protection/" target="_blank" rel="nofollow noopener"><strong><u>BEST ANTIVIRUS FOR MAC, PC, IPHONES AND ANDROIDS - CYBERGUY PICKS</u></strong></a></p><p><strong>1. Be cautious with download links: </strong>Avoid downloading files from random Reddit discussions, social media messages or unfamiliar websites. If an unknown user shares the link or seems out of place in the context, it’s better to err on the side of caution. If the link is directing you to a file-sharing site like WeTransfer or Google Drive, double-check the URL for any signs of manipulation—like random characters added to the domain name.</p><p><strong>2. Have strong antivirus software: </strong>The best way to safeguard yourself from malicious links that install malware originating from these Reddit discussions, potentially accessing your private information, is to have antivirus software installed on all your devices. This protection can also alert you to phishing emails and ransomware scams, keeping your personal information and digital assets safe. <a href="https://cyberguy.com/security/best-antivirus-protection/" target="_blank" rel="nofollow noopener"><u>Get my picks for the best 2025 antivirus protection winners for your Windows, Mac, Android and iOS devices</u></a>.</p><p><a href="https://www.foxbusiness.com/apps-products" target="_blank" rel="noopener"><strong>GET FOX BUSINESS ON THE GO BY CLICKING HERE</strong></a></p><p><strong>3.</strong> <strong>Verify website URLs: </strong>Fake websites often look convincing but have slight differences in their URLs. Check for misspellings, extra characters or unusual domains (e.g., ".org" or ".net" instead of the official ".com").</p><p><strong>4. Use strong, unique passwords and enable 2FA: </strong>A <a href="https://cyberguy.com/security/best-password-managers/" target="_blank" rel="nofollow noopener"><u>password manager</u></a> can help generate and store strong passwords for each site. Meanwhile, enabling two-factor authentication (<a href="https://cyberguy.com/protect-your-devices/what-is-two-factor-authentication-and-why-should-i-enable-it/" target="_blank" rel="nofollow noopener"><u>2FA</u></a>) adds an extra layer of security, making it harder for attackers to hijack your accounts. Get more details about my <a href="https://cyberguy.com/tech-tips-tricks/best-password-managers/" target="_blank" rel="nofollow noopener"><u>best expert-reviewed Password Managers of 2025 here.</u></a></p><p><strong>5. Keep your software updated: </strong>Regularly <a href="https://cyberguy.com/security/how-to-update-your-devices/" target="_blank" rel="nofollow noopener"><u>update</u></a> your operating system, apps, browsers and other software on your PC or mobile devices. Updates often include patches for security vulnerabilities that hackers can exploit.</p><p><strong>6. Watch out for malvertising and SEO traps: </strong>Hackers manipulate search engine results and <a href="https://cyberguy.com/security/older-americans-are-being-targeted-in-a-malvertising-campaign/" target="_blank" rel="nofollow noopener"><u>run deceptive ads to trick users into visiting fake sites</u></a>. Stick to official sources and avoid clicking on ads or search results that seem too good to be true. </p><p><a href="https://cyberguy.com/how-to/fight-back-against-debit-card-hackers-your-money/" target="_blank" rel="nofollow noopener"><strong><u>HOW TO FIGHT BACK AGAINST DEBIT CARD HACKERS WHO ARE AFTER YOUR MONEY</u></strong></a></p><p>Hackers are getting sneakier, using fake Reddit and WeTransfer pages to spread dangerous malware like Lumma Stealer. These sites might look real, but they’re designed to steal your personal info. To stay safe, always double-check links and be cautious about downloading files from unfamiliar sources. Use strong, unique passwords, enable two-factor authentication and keep your software updated to stay one step <a href="https://www.foxnews.com/category/tech/topics/cybercrime" target="_blank" rel="noopener">ahead of cybercriminals</a>.</p><p>Have you ever encountered a suspicious link on Reddit or social media? How did you handle it? Let us know by writing us at <a href="http://cyberguy.com/Contact" target="_blank" rel="nofollow noopener"><strong><u>Cyberguy.com/Contact</u></strong></a><a rel="nofollow noopener"><strong><u>.</u></strong></a></p><p>For more of my tech tips and security alerts, subscribe to my free CyberGuy Report Newsletter by heading to <a href="http://cyberguy.com/Newsletter" target="_blank" rel="nofollow noopener"><strong><u>Cyberguy.com/Newsletter.</u></strong></a></p><p><a href="https://cyberguy.com/contact/" target="_blank" rel="nofollow noopener"><u>Ask Kurt a question or let us know what stories you'd like us to cover</u></a><a rel="nofollow noopener"><u>.</u></a></p><p>Follow Kurt on his social channels:</p><p>Answers to the most asked CyberGuy questions:</p><p>New from Kurt:</p><p><i>Copyright 2025 CyberGuy.com. All rights reserved.</i></p></content:encoded>
-<media:content url="https://a57.foxnews.com/static.foxnews.com/foxnews.com/content/uploads/2025/02/931/523/3-beware-of-fake-reddit-solutions-delivering-dangerous-malware-outro.jpg?ve=1&tl=1" type="image/jpeg" expression="full" width="931" height="523"/>
-<category domain="foxnews.com/metadata/dc.identifier">20b36c37-8928-5323-a8f0-e29c99bd40bc</category>
-<category domain="foxnews.com/metadata/prism.channel">fnc</category>
-<category domain="foxnews.com/metadata/dc.source">Fox News</category>
-<category domain="foxnews.com/taxonomy">fox-news/tech</category>
-<category domain="foxnews.com/taxonomy">fox-news/tech/topics/security</category>
-<category domain="foxnews.com/taxonomy">fox-news/tech/topics/privacy</category>
-<category domain="foxnews.com/taxonomy">fox-news/tech/topics/cybercrime</category>
-<category domain="foxnews.com/taxonomy">fox-news/tech/topics/hackers</category>
-<category domain="foxnews.com/section-path">fox-news/tech</category>
-<category domain="foxnews.com/content-type">article</category>
-<pubDate>Thu, 06 Feb 2025 10:00:55 -0500</pubDate>
-</item>
-
-
-Use this part:
-<category domain="foxnews.com/taxonomy">fox-news/tech/topics/security</category>
-<category domain="foxnews.com/taxonomy">fox-news/tech/topics/privacy</category>
-<category domain="foxnews.com/taxonomy">fox-news/tech/topics/cybercrime</category>
-<category domain="foxnews.com/taxonomy">fox-news/tech/topics/hackers</category>
-to fill in keywords field
+# Find all article elements in pages like this:
+<li class="story-card__tpl-common__1Q7br story-card__tpl-feed-media-on-right-image-landscape-big__34KGa story-card__transition-no-description-for-mobile__2uxm- feed-list__card__Praes" data-are-authors="false" data-testid="FeedListItem"><p data-testid="Description" class="text__text__1FZLe text__dark-grey__3Ml43 text__regular__2N1Xr text__small__1kGq2 body__full_width__ekUdw body__small_body__2vQyf story-card__area-description__2JiBp">Prime Minister Justin Trudeau on Friday said U.S. President Donald Trump's talk about absorbing Canada "is a real thing" and is linked to the country's rich natural resources, a government source said.</p><div class="title__title__29EfZ story-card__area-headline__2ZAtJ"><a data-testid="TitleLink" href="/world/americas/canada-could-face-long-term-political-challenges-with-us-says-trudeau-2025-02-07/" class="text__text__1FZLe text__inherit-color__3208F text__inherit-font__1Y8w3 text__inherit-size__1DZJi link__link__3Ji6W link__underline_on_hover__2zGL4"><span data-testid="TitleHeading" class="text__text__1FZLe text__inherit-color__3208F text__medium__1kbOh text__heading_6__1qUJ5 heading__base__2T28j heading__heading_6__RtD9P title__heading__s7Jan">Trudeau says Trump talk of absorbing Canada is 'a real thing', says source</span></a></div><div class="kicker-date__kicker-date__2VBU4 story-card__area-kicker-date__2Fgfs"><span data-testid="KickerLabel" class="text__text__1FZLe text__dark-grey__3Ml43 text__light__1nZjX text__extra_small__1Mw6v label__label__f9Hew label__kicker__RW9aE"><span data-testid="KickerText" class="text__text__1FZLe text__inherit-color__3208F text__inherit-font__1Y8w3 text__inherit-size__1DZJi">World</span></span><span data-testid="Text" class="text__text__1FZLe text__dark-grey__3Ml43 text__regular__2N1Xr text__default__UPMUu">·</span><time data-testid="DateLineText" class="text__text__1FZLe text__dark-grey__3Ml43 text__light__1nZjX text__extra_small__1Mw6v" style="display: block;">a few seconds ago</time></div><div class=" image-container no-caption story-card__area-media__3P0qM" data-testid="MediaImage"><a data-testid="MediaImageLink" aria-hidden="true" tabindex="-1" href="/world/americas/canada-could-face-long-term-political-challenges-with-us-says-trudeau-2025-02-07/" class="text__text__1FZLe text__dark-grey__3Ml43 text__medium__1kbOh text__default__UPMUu link__link__3Ji6W link__underline_default__2prE_ image__container__30dKZ story-card__image-link__3uceD"><div data-testid="Image" class="image story-card__image__2XuiU"><div class="styles__image-container__3hkY5 styles__cover__34fjZ styles__center_center__1CNY5 styles__apply-ratio__1JYnB styles__transition__3hwoa" style="--aspect-ratio: 1.5;"><img sizes="(min-width: 1024px) 680px, 100vw" srcset="https://www.reuters.com/resizer/v2/KFIEGKRPNFKJPBEZGTC3NGV64A.jpg?auth=81eb307a404ed4825c03f7f4aee8d14dea11ee8582a23520760d7c6fe6cb3255&amp;width=120&amp;quality=80 120w,https://www.reuters.com/resizer/v2/KFIEGKRPNFKJPBEZGTC3NGV64A.jpg?auth=81eb307a404ed4825c03f7f4aee8d14dea11ee8582a23520760d7c6fe6cb3255&amp;width=240&amp;quality=80 240w,https://www.reuters.com/resizer/v2/KFIEGKRPNFKJPBEZGTC3NGV64A.jpg?auth=81eb307a404ed4825c03f7f4aee8d14dea11ee8582a23520760d7c6fe6cb3255&amp;width=480&amp;quality=80 480w,https://www.reuters.com/resizer/v2/KFIEGKRPNFKJPBEZGTC3NGV64A.jpg?auth=81eb307a404ed4825c03f7f4aee8d14dea11ee8582a23520760d7c6fe6cb3255&amp;width=960&amp;quality=80 960w,https://www.reuters.com/resizer/v2/KFIEGKRPNFKJPBEZGTC3NGV64A.jpg?auth=81eb307a404ed4825c03f7f4aee8d14dea11ee8582a23520760d7c6fe6cb3255&amp;width=1200&amp;quality=80 1200w" src="https://www.reuters.com/resizer/v2/KFIEGKRPNFKJPBEZGTC3NGV64A.jpg?auth=81eb307a404ed4825c03f7f4aee8d14dea11ee8582a23520760d7c6fe6cb3255&amp;width=1200&amp;quality=80" width="5000" height="3335" alt="Economic summit in Canada"></div></div></a></div></li>
 
 
 Leave default or empty fields that are not present. 
 
-This is pub_date
-<pubDate>Thu, 06 Feb 2025 10:00:55 -0500</pubDate>
-
-
-
+Try to find all elements from our model like images, publication date (pub_date), author and others.
 
 
 Make sure you use all fields from article model as is.
 In case script is run several times it should not make dupes , just insert new records if there is need for that.
 
 
-# NYT Article Parser Example - follow this example to implement all core other functionalities except extraction logic
+# NYT Article Parser Example -from this example take only  core other functionalities -model and database management etc. All other stuff should be done as explained by me. 
 """
 NYT RSS Articles Parser
 Fetches and stores NYT RSS feed articles using SQLAlchemy ORM.
@@ -336,3 +308,56 @@ def create_portal_article_model(schema: str):
         }
     )
 
+Also for opening pages you need to open them with random 8-17 seconds delay with this method:
+import pychrome
+import time
+import threading
+
+def main():
+   try:
+       browser = pychrome.Browser(url="http://127.0.0.1:9222")
+       tab = browser.new_tab()
+       
+       def handle_exception(msg):
+           print(f"Debug: {msg}")
+       
+       tab.set_listener("exception", handle_exception)
+       tab.start()
+       
+       tab.Page.enable()
+       tab.Runtime.enable()
+       
+       url = "https://edition.cnn.com/2025/02/04/politics/cia-workforce-buyouts/index.html"
+       tab.Page.navigate(url=url)
+       
+       time.sleep(5)
+       
+       clean_html_js = """
+       function cleanHTML() {
+           const elements = document.querySelectorAll('script, style, iframe, link, meta');
+           elements.forEach(el => el.remove());
+           return document.documentElement.outerHTML;
+       }
+       cleanHTML();
+       """
+       
+       result = tab.Runtime.evaluate(expression=clean_html_js)
+       html_content = result["result"]["value"]
+
+       with open("cnn.html", "w", encoding="utf-8") as f:
+           f.write(html_content)
+           
+   except Exception as e:
+       print(f"Error: {e}")
+   finally:
+       tab.stop()
+       browser.close_tab(tab)
+
+if __name__ == "__main__":
+   main()
+
+
+
+
+# Important!!!
+Make sure you ignore how sample script is using web scraping, you must not use BeautifulSoup or requests. You need to use Chromium dev browser as explained. Make sure there are pauses between requests. 

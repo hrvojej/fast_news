@@ -3,6 +3,8 @@ python -m venv venv
 .\venv\Scripts\activate
 pip install pychrome requests urllib3
 
+reuters Medo#342
+
 # Chrome DEv Tools with Profile 3
 Start-Process -FilePath "C:\Program Files\Google\Chrome\Application\chrome.exe" -ArgumentList `
   "--remote-debugging-port=9222",
@@ -16,6 +18,19 @@ Start-Process -FilePath "C:\Program Files\Google\Chrome\Application\chrome.exe" 
   "--disable-translate",
   "--disable-notifications",
   "--mute-audio"
+
+# Chrome
+Start-Process -FilePath "C:\Program Files\Google\Chrome\Application\chrome.exe" -ArgumentList `
+ "--remote-debugging-port=9222",
+ "--user-data-dir=""C:\Users\Korisnik\AppData\Local\Google\Chrome\User Data""",
+ "--profile-directory=""Profile 3""",
+ "--disable-gpu",
+ "--disable-popup-blocking",
+ "--disable-extensions",
+ "--disable-sync",
+ "--disable-translate",
+ "--disable-notifications",
+ "--mute-audio"
 
 # pg
 user: postgres 
