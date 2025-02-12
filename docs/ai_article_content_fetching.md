@@ -1,262 +1,424 @@
-Currently, I am filling in articles table in database with this script:
+Based on this script:
 
+#!/usr/bin/env python3
 """
-ABC RSS Articles Parser
-Fetches and stores ABC RSS feed articles using SQLAlchemy ORM.
+ABC Article Content Updater
+---------------------------
+This script compares the URLs and publication dates in the pt_abc.articles table
+with the corresponding records in pt_abc.article_status. For each article where:
+  - There is no record in article_status (i.e. initially the table is empty), or
+  - The URL exists in both tables but the pub_date is different, or
+  - The URL exists and pub_date is the same but one or both of fetched_at/parsed_at are missing,
+  
+the script will:
+  1. Fetch the article’s HTML (waiting a random 4–7 seconds after every fetch attempt).
+  2. Extract the plain text from the <div> identified by data-testid="prism-article-body".
+  3. Update the article’s "content" field in pt_abc.articles.
+  4. Update the status record:
+       - If a status record already exists, update its fetched_at, parsed_at, pub_date,
+         status, and status_type.
+       - If no status record exists, insert a new one with these details.
+       
+Error handling includes:
+  - Retries (up to 3 attempts) for connection errors (network errors).
+  - Immediate exit for repeated 403 responses (after 3 consecutive 403s).
+  - Reporting of distinct errors in a summary at the end.
+  
+For successful fetch and parsing:
+    status = 1, status_type = "OK"
+For errors:
+    status = 0, and status_type is set to one of:
+      - "NO_DIV" for missing content div,
+      - "HTTP403", "HTTP404", "HTTP5xx", or "HTTP_ERR" for HTTP errors,
+      - "NET" for network errors.
+      
+In the case of network errors the parsed_at field is left NULL so that the URL is picked
+up for a retry.
+      
+The script logs detailed progress and summary statistics at the end.
 """
 
 import sys
 import os
-from datetime import datetime
-from typing import Dict, List
-from uuid import UUID
+import time
+import random
+import argparse
+from datetime import datetime, timezone
+
 import requests
 from bs4 import BeautifulSoup
-import argparse
 from sqlalchemy import text
-
-# New imports for keyword extraction:
-from sentence_transformers import SentenceTransformer
-from sklearn.metrics.pairwise import cosine_similarity
-from nltk.corpus import stopwords
-import nltk
 
 # Add package root to path
 current_dir = os.path.dirname(os.path.abspath(__file__))
 package_root = os.path.abspath(os.path.join(current_dir, "../../"))
 if package_root not in sys.path:
     sys.path.insert(0, package_root)
+    
+# Import the logging configuration function.
+from logging_config import setup_script_logging
 
-# Import the dynamic model factory functions for categories and articles
-from db_scripts.models.models import create_portal_category_model, create_portal_article_model
+# Set up logging for this script.
+logger = setup_script_logging(__file__)
+logger.info("Script started.")
 
-# Create the dynamic models for the ABC portal (portal prefix: pt_abc)
+from db_scripts.models.models import (
+    create_portal_category_model,
+    create_portal_article_model,
+    create_portal_article_status_model
+)
+
+from db_scripts.db_context import DatabaseContext
+
+# Create the dynamic models for the pt_abc schema.
 ABCCategory = create_portal_category_model("pt_abc")
 ABCArticle = create_portal_article_model("pt_abc")
+ABCArticleStatus = create_portal_article_status_model("pt_abc")
 
 
-def fetch_portal_id_by_prefix(portal_prefix: str, env: str = 'dev') -> UUID:
-    """Fetches the portal_id from the news_portals table."""
-    from db_scripts.db_context import DatabaseContext
-    db_context = DatabaseContext.get_instance(env)
-    with db_context.session() as session:
-        result = session.execute(
-            text("SELECT portal_id FROM public.news_portals WHERE portal_prefix = :prefix"),
-            {'prefix': portal_prefix}
-        ).fetchone()
-        if result:
-            return result[0]
-        raise Exception(f"Portal with prefix '{portal_prefix}' not found.")
-
-
-class KeywordExtractor:
-    """
-    Uses a SentenceTransformer model to extract keywords from text.
-    """
-    def __init__(self):
-        self.model = SentenceTransformer('all-MiniLM-L6-v2')
-        try:
-            self.stop_words = set(stopwords.words('english'))
-        except LookupError:
-            nltk.download('stopwords')
-            self.stop_words = set(stopwords.words('english'))
-            
-    def extract_keywords(self, text: str, max_keywords: int = 5) -> List[str]:
-        if not text:
-            return []
-        
-        # Split text into individual words (chunks)
-        chunks = text.split()
-        if not chunks:
-            return []
-            
-        text_embedding = self.model.encode([text])
-        chunk_embeddings = self.model.encode(chunks)
-        
-        similarities = cosine_similarity(text_embedding, chunk_embeddings).flatten()
-        scored_chunks = sorted(
-            [(chunks[i], score) for i, score in enumerate(similarities)],
-            key=lambda x: x[1],
-            reverse=True
-        )
-        
-        keywords = []
-        seen = set()
-        for word, _ in scored_chunks:
-            word = word.lower()
-            if word not in self.stop_words and word not in seen and len(word) > 2:
-                keywords.append(word)
-                seen.add(word)
-            if len(keywords) >= max_keywords:
-                break
-        return keywords
-
-
-class ABCRSSArticlesParser:
-    """Parser for ABC RSS feed articles."""
-
-    def __init__(self, portal_id: UUID, env: str = 'dev', article_model=None):
-        self.portal_id = portal_id
+class ArticleContentUpdater:
+    def __init__(self, env: str = 'dev'):
         self.env = env
-        self.ABCArticle = article_model
-        # Instantiate the keyword extractor (SentenceTransformer based)
-        self.keyword_extractor = KeywordExtractor()
-
-    def get_session(self):
-        """Obtain a database session from the DatabaseContext."""
-        from db_scripts.db_context import DatabaseContext
-        db_context = DatabaseContext.get_instance(self.env)
-        return db_context.session().__enter__()
-
-    def parse_article(self, item: BeautifulSoup, category_id: UUID) -> Dict:
-        """Parse a single ABC RSS <item> element."""
-        # Required fields
-        title_tag = item.find('title')
-        title = title_tag.text.strip() if title_tag else 'Untitled'
-
-        link_tag = item.find('link')
-        link = link_tag.text.strip() if link_tag else 'https://abcnews.go.com'
-
-        guid_tag = item.find('guid')
-        guid = guid_tag.text.strip() if guid_tag else link  # Use link as fallback GUID
-
-        # Optional fields
-        description_tag = item.find('description')
-        description = description_tag.text.strip() if description_tag else None
-
-        # In this case, we use description as a fallback for content
-        content = description
-
-        # Process pubDate: if not present, leave as None (do not insert current timestamp)
-        pub_date_tag = item.find('pubDate')
-        pub_date = None
-        if pub_date_tag:
-            pub_date_str = pub_date_tag.text.strip()
-            try:
-                pub_date = datetime.strptime(pub_date_str, '%a, %d %b %Y %H:%M:%S %z')
-            except Exception as e:
-                print(f"Error parsing pubDate '{pub_date_str}': {e}")
-                pub_date = None
-
-        # Authors: ABC feed does not provide an explicit author field, so we leave it empty.
-        authors = []
-
-        # ----------------------------
-        # NEW: Keyword extraction
-        # Instead of relying solely on <category> or media:keywords tags,
-        # we now extract keywords from the title using our KeywordExtractor.
-        keywords = self.keyword_extractor.extract_keywords(title) if title else []
-        # ----------------------------
-
-        # Get image URL from <media:thumbnail> elements.
-        image_url = None
-        media_thumbnails = item.find_all('media:thumbnail')
-        if media_thumbnails:
-            valid_thumbnails = []
-            for thumb in media_thumbnails:
-                url = thumb.get('url')
-                width = thumb.get('width')
-                if url and width and width.isdigit():
-                    valid_thumbnails.append((url, int(width)))
-            if valid_thumbnails:
-                image_url = max(valid_thumbnails, key=lambda x: x[1])[0]
-
-        # Calculate reading time (estimate: 200 words per minute)
-        text_content = f"{title} {description or ''} {content or ''}"
-        word_count = len(text_content.split())
-        reading_time = max(1, round(word_count / 200)) if word_count > 0 else 1
-
-        return {
-            # Required fields
-            'title': title,
-            'url': link,
-            'guid': guid,
-            'category_id': category_id,
-
-            # Optional fields
-            'description': description,
-            'content': content,
-            'author': authors,
-            'pub_date': pub_date,
-            'keywords': keywords,
-            'reading_time_minutes': reading_time,
-            'language_code': 'en',
-            'image_url': image_url,
-            'sentiment_score': 0.0,  # Neutral sentiment by default
-            'share_count': 0,
-            'view_count': 0,
-            'comment_count': 0
+        self.db_context = DatabaseContext.get_instance(env)
+        self.ABCArticle = ABCArticle
+        self.ABCArticleStatus = ABCArticleStatus
+        self.consecutive_403_count = 0
+        self.error_counts = {}  # To record counts for each error type.
+        self.counters = {
+            "total": 0,               # Total articles processed from the articles table
+            "up_to_date": 0,          # Articles skipped because they are already up-to-date
+            "to_update": 0,           # Articles marked for update (or needing a new status record)
+            "fetched": 0,             # Articles for which HTML was fetched and parsed
+            "updated": 0,             # Articles successfully updated in the DB
+            "failed": 0               # Articles that failed during update
         }
 
-    def fetch_and_store_articles(self):
-        """Fetch and store articles from all ABC RSS feeds."""
-        print("Starting fetch_and_store_articles for ABC...")
-        session = self.get_session()
-        print("Executing categories query...")
-        try:
-            # Select all active categories that have an atom_link defined
-            categories = session.execute(
-                text("""
-                    SELECT category_id, atom_link 
-                    FROM pt_abc.categories 
-                    WHERE is_active = true AND atom_link IS NOT NULL
-                """)
-            ).fetchall()
-            print(f"Found {len(categories)} categories.")
+    def random_sleep(self):
+        sleep_time = random.uniform(3, 5)
+        logger.info(f"Sleeping for {sleep_time:.2f} seconds...")
+        time.sleep(sleep_time)
 
-            for category_id, atom_link in categories:
-                print(f"Processing category: {category_id} with feed URL: {atom_link}")
-                try:
-                    response = requests.get(atom_link, timeout=10)
-                    response.raise_for_status()
-                    soup = BeautifulSoup(response.content, 'xml')
+    def fetch_html(self, url: str):
+        """
+        Attempts to fetch the HTML content for the given URL.
+        Uses up to 3 attempts for connection errors.
+        If the HTTP response status code is 403, 404 or >=500, no retries are attempted.
+        After each attempt (successful or error), a random sleep is performed.
+        If more than 3 consecutive 403 responses occur, the script aborts.
+        
+        Returns:
+            A tuple: (html_content or None, error_type or None)
+            - On success: (content, None)
+            - On error: (None, error_type)
+        """
+        max_attempts = 3
+        attempt = 0
+        last_error_type = None
+        while attempt < max_attempts:
+            try:
+                logger.info(f"Fetching URL: {url} (Attempt {attempt + 1})")
+                response = requests.get(url, timeout=10)
+                self.random_sleep()  # Sleep after every attempt
 
-                    for item in soup.find_all('item'):
-                        article_data = self.parse_article(item, category_id)
-                        # Check for duplicate based on guid
-                        existing = session.query(self.ABCArticle).filter(
-                            self.ABCArticle.guid == article_data['guid']
+                if response.status_code == 200:
+                    self.consecutive_403_count = 0  # Reset on success
+                    return response.content, None
+                elif response.status_code == 403:
+                    self.consecutive_403_count += 1
+                    logger.error(f"Received 403 for {url}. Consecutive 403 count: {self.consecutive_403_count}")
+                    last_error_type = "HTTP403"
+                    if self.consecutive_403_count >= 3:
+                        raise Exception("Aborting: 3 consecutive 403 errors encountered.")
+                    return None, "HTTP403"
+                elif response.status_code == 404:
+                    logger.error(f"Received 404 for {url}. Skipping this URL.")
+                    return None, "HTTP404"
+                elif response.status_code >= 500:
+                    logger.error(f"Server error {response.status_code} for {url}. Skipping this URL.")
+                    return None, "HTTP5xx"
+                else:
+                    logger.error(f"Unexpected status code {response.status_code} for {url}. Skipping.")
+                    return None, "HTTP_ERR"
+
+            except Exception as e:
+                attempt += 1
+                last_error_type = "NET"
+                logger.error(f"Error fetching {url}: {e}. Attempt {attempt} of {max_attempts}.")
+                self.random_sleep()
+
+        # All attempts failed: return network error.
+        return None, last_error_type if last_error_type else "NET"
+
+    def update_article_content(self, article_info: dict) -> bool:
+        """
+        For a given article (specified by article_id, url, pub_date, and possibly a status_id),
+        fetch the HTML, extract the article text, update the article content, and update or create
+        the status record.
+        
+        In every case (success or error) the status record is updated with:
+          - status: True (1) if successful, False (0) if an error occurred.
+          - status_type: "OK" on success or a specific error type.
+          
+        For network errors, parsed_at is left as NULL so that the article is retried.
+        
+        Returns True if the update was successful, False otherwise.
+        """
+        url = article_info["url"]
+        article_id = article_info["article_id"]
+        pub_date = article_info["pub_date"]
+        status_id = article_info.get("status_id")  # May be None if no status record exists
+
+        logger.info(f"Processing article with URL: {url}")
+
+        # Attempt to fetch the HTML.
+        html_content, fetch_error = self.fetch_html(url)
+        fetched_time = datetime.now(timezone.utc)
+
+        # If no HTML content was fetched, update status record with the error.
+        if html_content is None:
+            error_type = fetch_error if fetch_error else "UNKNOWN_FETCH"
+            # For network errors leave parsed_at as None so that the URL is retried.
+            parsed_time = None if error_type == "NET" else datetime.now(timezone.utc)
+            self.error_counts[error_type] = self.error_counts.get(error_type, 0) + 1
+            logger.info(f"Failed to fetch content for article {url} with error {error_type}. Skipping update.")
+            try:
+                with self.db_context.session() as session:
+                    if status_id:
+                        status_obj = session.query(self.ABCArticleStatus).filter(
+                            self.ABCArticleStatus.status_id == status_id
                         ).first()
+                        if status_obj:
+                            status_obj.fetched_at = fetched_time
+                            status_obj.parsed_at = parsed_time
+                            status_obj.pub_date = pub_date
+                            status_obj.status = False
+                            status_obj.status_type = error_type
+                            logger.info(f"Status record {status_id} updated with error {error_type}.")
+                    else:
+                        new_status = self.ABCArticleStatus(
+                            url=url,
+                            fetched_at=fetched_time,
+                            parsed_at=parsed_time,
+                            pub_date=pub_date,
+                            status=False,
+                            status_type=error_type
+                        )
+                        session.add(new_status)
+                        logger.info(f"New status record created for article {url} with error {error_type}.")
+            except Exception as e:
+                logger.error(f"Error updating status record for article {url} with error {error_type}: {e}")
+            self.counters["failed"] += 1
+            return False
 
-                        if not existing:
-                            article = self.ABCArticle(**article_data)
-                            session.add(article)
-                            print(f"Added new article: {article_data['title']}")
-                        else:
-                            # If needed, update the existing record (e.g., if pub_date has changed)
-                            if existing.pub_date != article_data['pub_date']:
-                                for key, value in article_data.items():
-                                    setattr(existing, key, value)
-                                print(f"Updated article: {article_data['title']}")
+        # Parse the HTML and extract text from the target div.
+        soup = BeautifulSoup(html_content, 'html.parser')
+        article_div = soup.find('div', {'data-testid': 'prism-article-body'})
+        if not article_div:
+            error_type = "NO_DIV"
+            self.error_counts[error_type] = self.error_counts.get(error_type, 0) + 1
+            logger.error(f"Could not find the target content div for article {url}. Skipping update.")
+            parsed_time = datetime.now(timezone.utc)
+            try:
+                with self.db_context.session() as session:
+                    if status_id:
+                        status_obj = session.query(self.ABCArticleStatus).filter(
+                            self.ABCArticleStatus.status_id == status_id
+                        ).first()
+                        if status_obj:
+                            status_obj.fetched_at = fetched_time
+                            status_obj.parsed_at = parsed_time
+                            status_obj.pub_date = pub_date
+                            status_obj.status = False
+                            status_obj.status_type = error_type
+                            logger.info(f"Status record {status_id} updated with error {error_type}.")
+                    else:
+                        new_status = self.ABCArticleStatus(
+                            url=url,
+                            fetched_at=fetched_time,
+                            parsed_at=parsed_time,
+                            pub_date=pub_date,
+                            status=False,
+                            status_type=error_type
+                        )
+                        session.add(new_status)
+                        logger.info(f"New status record created for article {url} with error {error_type}.")
+            except Exception as e:
+                logger.error(f"Error updating status record for article {url} with error {error_type}: {e}")
+            self.counters["failed"] += 1
+            return False
 
-                    session.commit()
-                    print(f"Finished processing feed: {atom_link}")
+        new_content = article_div.get_text(separator="\n").strip()
+        if not new_content:
+            # In case the extracted content is empty, record an error.
+            error_type = "EMPTY_CONTENT"
+            self.error_counts[error_type] = self.error_counts.get(error_type, 0) + 1
+            logger.info(f"Extracted content is empty for article {url}. Skipping update.")
+            parsed_time = datetime.now(timezone.utc)
+            try:
+                with self.db_context.session() as session:
+                    if status_id:
+                        status_obj = session.query(self.ABCArticleStatus).filter(
+                            self.ABCArticleStatus.status_id == status_id
+                        ).first()
+                        if status_obj:
+                            status_obj.fetched_at = fetched_time
+                            status_obj.parsed_at = parsed_time
+                            status_obj.pub_date = pub_date
+                            status_obj.status = False
+                            status_obj.status_type = error_type
+                            logger.info(f"Status record {status_id} updated with error {error_type}.")
+                    else:
+                        new_status = self.ABCArticleStatus(
+                            url=url,
+                            fetched_at=fetched_time,
+                            parsed_at=parsed_time,
+                            pub_date=pub_date,
+                            status=False,
+                            status_type=error_type
+                        )
+                        session.add(new_status)
+                        logger.info(f"New status record created for article {url} with error {error_type}.")
+            except Exception as e:
+                logger.error(f"Error updating status record for article {url} with error {error_type}: {e}")
+            self.counters["failed"] += 1
+            return False
 
-                except Exception as e:
-                    print(f"Error processing feed {atom_link}: {e}")
-                    session.rollback()
-                    continue
+        # If we reach here, the article content was fetched and parsed successfully.
+        try:
+            with self.db_context.session() as session:
+                # Update the article’s content.
+                article_obj = session.query(self.ABCArticle).filter(
+                    self.ABCArticle.article_id == article_id
+                ).first()
+                if article_obj:
+                    article_obj.content = new_content
+                    logger.info(f"Article {url} content updated.")
+                else:
+                    logger.info(f"Article {url} not found in the articles table during update.")
+                    self.counters["failed"] += 1
+                    return False
+
+                # Update or insert the corresponding status record with success.
+                parsed_time = datetime.now(timezone.utc)
+                if status_id:
+                    status_obj = session.query(self.ABCArticleStatus).filter(
+                        self.ABCArticleStatus.status_id == status_id
+                    ).first()
+                    if status_obj:
+                        status_obj.fetched_at = fetched_time
+                        status_obj.parsed_at = parsed_time
+                        status_obj.pub_date = pub_date
+                        status_obj.status = True
+                        status_obj.status_type = "OK"
+                        logger.info(f"Status record {status_id} updated with success status.")
+                    else:
+                        logger.info(f"Status record {status_id} not found during update. This should not happen.")
+                        self.counters["failed"] += 1
+                        return False
+                else:
+                    new_status = self.ABCArticleStatus(
+                        url=url,
+                        fetched_at=fetched_time,
+                        parsed_at=parsed_time,
+                        pub_date=pub_date,
+                        status=True,
+                        status_type="OK"
+                    )
+                    session.add(new_status)
+                    logger.info(f"New status record created for article {url} with success status.")
+            self.counters["updated"] += 1
+            return True
 
         except Exception as e:
-            print(f"Error in fetch_and_store_articles: {e}")
-            session.rollback()
-            raise
-        finally:
-            session.close()
+            logger.error(f"Error updating article {url}: {e}")
+            self.counters["failed"] += 1
+            return False
 
     def run(self):
-        """Main method to fetch and store ABC articles."""
-        try:
-            self.fetch_and_store_articles()
-            print("ABC article processing completed successfully.")
-        except Exception as e:
-            print(f"Error processing ABC articles: {e}")
-            raise
+        logger.info("Starting Article Content Updater for pt_abc.")
 
+        articles_to_update = []
+        with self.db_context.session() as session:
+            # Get all articles from pt_abc.articles.
+            articles = session.execute(
+                text("SELECT article_id, url, pub_date FROM pt_abc.articles")
+            ).fetchall()
+            logger.info(f"Total articles in articles table: {len(articles)}")
+
+            # Get all status records from pt_abc.article_status.
+            status_records = session.execute(
+                text("SELECT status_id, url, pub_date, fetched_at, parsed_at, status_type FROM pt_abc.article_status")
+            ).fetchall()
+            logger.info(f"Total records in article_status table: {len(status_records)}")
+
+            # Build a dictionary keyed by URL.
+            status_dict = {record.url: record for record in status_records}
+
+            for article in articles:
+                self.counters["total"] += 1
+
+                # If the article has no URL, skip it.
+                if not article.url:
+                    logger.info(f"Article {article.article_id} has no URL. Skipping.")
+                    continue
+
+                status_record = status_dict.get(article.url)  # May be None
+
+                # Determine whether the article needs to be fetched:
+                # 1. No status record exists (new article – needs fetching).
+                # 2. The pub_date is different.
+                # 3. Fetched_at or parsed_at is missing.
+                #    (Note: for network errors, parsed_at is left NULL to force a retry.)
+                if status_record is None:
+                    logger.info(f"Article {article.article_id} with URL {article.url} has no status record. Marking for update (new status record will be created).")
+                    articles_to_update.append({
+                        "article_id": article.article_id,
+                        "url": article.url,
+                        "pub_date": article.pub_date,
+                        "status_id": None
+                    })
+                else:
+                    # If the pub_date differs or if either timestamp is missing, then mark for update.
+                    if (article.pub_date != status_record.pub_date or
+                        status_record.fetched_at is None or
+                        status_record.parsed_at is None):
+                        logger.info(f"Article {article.article_id} requires update (pub_date or fetch status differs).")
+                        articles_to_update.append({
+                            "article_id": article.article_id,
+                            "url": article.url,
+                            "pub_date": article.pub_date,
+                            "status_id": status_record.status_id
+                        })
+                    else:
+                        self.counters["up_to_date"] += 1
+
+        self.counters["to_update"] = len(articles_to_update)
+        logger.info(f"Total articles marked for update: {len(articles_to_update)}")
+
+        # Process each article that needs to be updated.
+        for idx, art in enumerate(articles_to_update, start=1):
+            logger.info(f"\nArticle {idx}/{len(articles_to_update)}")
+            success = self.update_article_content(art)
+            if success:
+                self.counters["fetched"] += 1
+            self.random_sleep()
+
+        # Log summary statistics.
+        logger.info("\nUpdate Summary:")
+        logger.info(f"  Total articles processed:         {self.counters['total']}")
+        logger.info(f"  Articles up-to-date (skipped):      {self.counters['up_to_date']}")
+        logger.info(f"  Articles marked for update:         {self.counters['to_update']}")
+        logger.info(f"  Articles where content was fetched: {self.counters['fetched']}")
+        logger.info(f"  Articles successfully updated:      {self.counters['updated']}")
+        logger.info(f"  Articles failed to update:          {self.counters['failed']}")
+
+        # Log error counts by type.
+        logger.info("Error Summary:")
+        for err_type, count in self.error_counts.items():
+            logger.info(f"  {err_type}: {count}")
 
 def main():
-    """Script entry point."""
-    argparser = argparse.ArgumentParser(description="ABC RSS Articles Parser")
+    argparser = argparse.ArgumentParser(description="ABC Article Content Updater")
     argparser.add_argument(
         '--env',
         choices=['dev', 'prod'],
@@ -266,820 +428,112 @@ def main():
     args = argparser.parse_args()
 
     try:
-        portal_id = fetch_portal_id_by_prefix("pt_abc", env=args.env)
-        parser = ABCRSSArticlesParser(portal_id=portal_id, env=args.env, article_model=ABCArticle)
-        parser.run()
+        updater = ArticleContentUpdater(env=args.env)
+        updater.run()
+        logger.info("Article content update completed successfully.")
     except Exception as e:
-        print(f"Script execution failed: {e}")
+        logger.info(f"Script execution failed: {e}")
         raise
-
 
 if __name__ == "__main__":
     main()
 
 
-# Model file don't forget to use new model - create_portal_article_status_model ###########
-#!/usr/bin/env python3
-# path: news_dagster-etl/news_aggregator/db_scripts/models/models.py
-"""
-SQLAlchemy ORM models based on the PostgreSQL 16 schema.
-Note:
-  - All “created_at” and “updated_at” columns (and their triggers) have been removed.
-  - Dynamic per‑portal tables (“categories” and “articles”) are provided via factory functions.
-  - Other business rules (checks, foreign keys, indexes, partitioning notes, etc.) are included.
-"""
+I need to create same for schema (portal) pt_aljazeera. Structure of all tables are same in that schema as in pt_abc.
+You need to fetch content of the article from:
+urls from database.
+
+When opening them extract text from:
+<div class="wysiwyg wysiwyg--all-content" aria-live="polite" aria-atomic="true"><p>United States President Donald Trump has issued an executive order that <a href="/news/2025/2/6/trump-signs-order-to-bar-trans-women-and-girls-from-female-sports">bans transgender girls and women</a> from participating in women’s sports in schools and other educational settings.</p>
+<p>The directive, titled “Keeping Men Out of Women’s Sports”, is the latest addition to a series of new executive actions that have shone a focus on gender debates within the US.</p><div class="more-on"><h2 class="more-on__heading">Recommended Stories<!-- --> </h2><span class="screen-reader-text">list of 3 items</span><article class="more-on__article"><span class="screen-reader-text">list 1 of 3</span><h3 class="more-on__article-heading"><a class="more-on__link" href="/news/2025/2/6/trump-signs-order-to-bar-trans-women-and-girls-from-female-sports?traffic_source=KeepReading">Trump signs order to bar trans women and girls from female sports</a></h3></article><article class="more-on__article"><span class="screen-reader-text">list 2 of 3</span><h3 class="more-on__article-heading"><a class="more-on__link" href="/news/2025/1/18/what-has-donald-trump-promised-to-do-on-day-one-of-his-second-term?traffic_source=KeepReading">What has Donald Trump promised to do on day one of his second term?</a></h3></article><article class="more-on__article"><span class="screen-reader-text">list 3 of 3</span><h3 class="more-on__article-heading"><a class="more-on__link" href="/sports/2024/11/27/taiwans-olympic-medallist-lin-yu-ting-quits-boxing-event-over-gender-issue?traffic_source=KeepReading">Taiwan’s Olympic medallist Lin Yu-ting quits boxing event over gender issue</a></h3></article><span class="screen-reader-text">end of list</span></div>
+<p>After signing the order in the White House’s East Room on Wednesday, Trump declared that “the war on women’s sports is over”.</p>
+<h2 id="what-does-trump-s-order-say">What does Trump’s order say?</h2>
+<p>The order instructs the Department of Justice to oversee a ban on transgender girls or women from participating in female-designated school athletics or using women’s locker rooms. If schools fail to adhere to the policy, they could lose federal funding.</p>
+<p>The directive hinges on a specific interpretation of Title IX, the US law that forbids sex discrimination in education, which now defines “sex” as the gender someone “was assigned at birth”.</p>
+<p>Defending the policy, a White House official told CNN: “If you’re going to have women’s sports, if you’re going to provide opportunities for women, then they have to be equally safe, equally fair, and equally private opportunities, and so that means that you’re going to preserve women’s sports for women.”</p>
+<figure id="attachment_3492819" aria-describedby="caption-attachment-3492819" style="width:770px" class="wp-caption aligncenter"><img data-recalc-dims="1" loading="lazy" class="size-arc-image-770 wp-image-3492819" src="https://www.aljazeera.com/wp-content/uploads/2025/02/2025-02-05T212355Z_1130798688_RC2FOCAZ40N2_RTRMADP_3_USA-TRUMP-1738846743.jpg?w=770&amp;resize=770%2C513&amp;quality=80" alt="U.S. President Donald Trump holds a signed executive order banning transgender girls and women from participating in women's sports, in the East Room at the White House in Washington, U.S., February 5, 2025. REUTERS/Leah Millis"><figcaption id="caption-attachment-3492819" class="wp-caption-text">US President Donald Trump holds a signed executive order banning transgender girls and women from participating in women’s sports, February 5, 2025 [Leah Millis/Reuters]</figcaption></figure>
+<p>The directive also has implications for professional sports. It urges government officials to block transgender women from entering the US for competitions and for the State Department to push the International Olympic Committee to stop allowing trans athletes to take part in its games.</p><div class="container--ads in-article-ads"><div class="ads"><span class="ads__title"> Advertisement </span><div class="ads__slot"><div><div class="freestar-ads" id="div-gpt-ad-241084248332"></div></div></div></div></div>
+<p>When the Olympics comes to Los Angeles in 2028, the US will use “all of our authority and our ability” to enforce Trump’s order, a White House official said.</p>
+<h2 id="why-has-trump-done-this">Why has Trump done this?</h2>
+<p>Trump repeatedly brought up the issue of transgender athletes throughout the 2024 presidential campaign, pledging to tackle it on his first day in office.</p>
+<p>“We will get critical race theory and transgender insanity the hell out of our schools,” Trump said a day before being sworn in in Washington. “We will keep men out of women’s sports. It’s over.”</p><div id="article-newsletter-slot"><div class="sib-newsletter-form general-style" aria-label="Newsletter signup Widget"><div class="sib-form-container"><div class="sib-container--large sib-container--horizontal"><div class="sign-up-for-al-jazeera-container"><h3 class="sign-up-for-al-jazeera">Sign up for Al Jazeera</h3><h4 class="newsletter-title">Americas Coverage Newsletter</h4></div><form id="sib-form-general" method="POST" data-type="subscription"><div class="sib-newsletter-form-fields-container"><span class="newsletter-description-line" aria-hidden="false"><span>US politics, Canada’s multiculturalism, South America’s geopolitical rise—we bring you the stories that matter.</span></span><div class="sib-newsletter-form-fields" aria-hidden="false"><input class="sib-newsletter-form-input" type="email" id="email" name="email" autocomplete="email" placeholder="E-mail address" data-required="true" aria-label="E-mail address" tabindex="0" value=""><button class="sib-form-submit " form="sib-form-general" type="submit" aria-label="signup for Americas Coverage Newsletter" tabindex="0">Subscribe</button></div><div class="error-message" aria-hidden="true" role="alert" aria-atomic="true" aria-live="error"><img src="/static/media/error-icon.c8fb9e1b.svg" aria-hidden="true"><span>Your subscription failed. Please try again.</span></div><div class="success-message" aria-hidden="true"><img src="/static/media/right-mark-icon.3a446adc.svg" aria-hidden="true"><span tabindex="-1">Please check your email to confirm your subscription</span></div></div><div class="sib-newsletter-privacy-policy"><span aria-hidden="true">By signing up, you agree to our </span><a href="https://privacy.aljazeera.net" aria-label="By signing up, you agree to our Privacy Policy.">Privacy Policy</a></div></form></div></div><span class="google-recaptcha-policy" aria-hidden="true">protected by <strong>reCAPTCHA</strong></span></div></div>
+<p>The debate over allowing transgender women to compete in women’s sports – which polls indicate most Americans oppose – became a lightning rod in the US culture war in the lead-up to the US presidential election last year.</p>
+<p>According to a May 2023 Gallup survey of adults in the US, nearly 70 percent of respondents said trans athletes should only be allowed to compete in their own sex categories. In other words, trans women should compete on men’s teams only. This was a rise from 62 percent in 2021.</p>
+<h2 id="what-does-the-law-say">What does the law say?</h2>
+<p>It’s complicated. While there was no specific national ban on transgender women in women’s sports prior to Trump’s executive order, 27<span style="font-size:22px">&nbsp;states already have laws, regulations or policies </span>restricting transgender students from participating in sports<span style="font-size:22px"> categories matching their gender identities rather than their biological sex, according to the Movement Advancement Project, an LGBTQ think tank.</span></p>
+<p>However, these laws have frequently been challenged in federal courts, with mixed outcomes. Generally, the courts have ruled that transgender athletes should be allowed to compete, with judgements in their favour in Idaho, West Virgina and Arizona.</p><div class="container--ads in-article-ads"><div class="ads"><span class="ads__title"> Advertisement </span><div class="ads__slot"><div><div class="freestar-ads" id="div-gpt-ad-289036979538"></div></div></div></div></div>
+<p>The National Collegiate Athletic Association (NCAA), the US’s main governing body for college sports, welcomed the clarity provided by Trump’s executive order, saying it set a unified national framework amid “a patchwork of conflicting state laws and court decisions”.</p>
+<h2 id="what-did-biden-do-regarding-trans-women-in-women-s-sports">What did Biden do regarding trans women in women’s sports?</h2>
+<p>From early on in his 2021-2025 term, former US President Joe Biden was a strong advocate of transgender rights, reversing <a href="/news/2019/6/14/trump-wins-court-victory-in-quest-for-transgender-military-ban">an order</a> from the 2017-2021 Trump era that had barred transgender people from the military (which Trump has since reinstated).</p>
+<p>Then in 2023, Biden’s administration set out to amend Title IX to provide some protections for transgender athletes. Under its proposal, which was viewed as a middle-ground approach to the contentious issue, schools would be prohibited from imposing blanket bans on transgender athletes, but would still have the ability to limit their participation if it could be proven to jeopardise fair competition or safety.</p>
+<p>However, as the former president’s term drew to a close, his administration withdrew the proposal, saying it did not have enough time to “regulate on this issue” due to conflicting feedback and drawn-out court cases.</p>
+<p>		</p>
+<div style="display:block;position:relative;min-width:0px;max-width:770px">
+<div class="video-player-facade-container"><div class="aj-video-player in-article-bc-video-player aj-parsed-component"><video-js data-video-id="6367827392112" class="video-js vjs-paused vjs-controls-enabled vjs-workinghover vjs-v8 vjs-user-active bc-player-6tKQRAx7lu_default bc-player-6tKQRAx7lu_default-index-0 vjs-mouse vjs-ad-controls vjs-ima3-html5 vjs-plugins-ready pause-controller vjs-player-info vjs-contextmenu-ui vjs-viewability vjs-errors vjs-quality-menu vjs-layout-large" playsinline="true" id="vjs_video_3" tabindex="-1" role="region" lang="en" translate="no" aria-label="Video Player"><video id="vjs_video_3_html5_api" class="vjs-tech" preload="none" playsinline="playsinline" poster="https://cf-images.eu-west-1.prod.boltdns.net/v1/static/665003303001/a823318e-5127-4227-9cf0-150beef25f54/10f26f65-5dd9-4e2a-8443-be3c6591342a/1920x1080/match/image.jpg" src="blob:https://www.aljazeera.com/d623953f-49b1-4dca-a1b4-101d1fa7ecfb"></video><div class="vjs-poster" aria-disabled="false"><picture class="vjs-poster" tabindex="-1"><img loading="lazy" alt="" src="https://cf-images.eu-west-1.prod.boltdns.net/v1/static/665003303001/a823318e-5127-4227-9cf0-150beef25f54/10f26f65-5dd9-4e2a-8443-be3c6591342a/1920x1080/match/image.jpg"></picture></div><div class="vjs-title-bar vjs-hidden"><div class="vjs-title-bar-title" id="vjs-title-bar-title-92"></div><div class="vjs-title-bar-description" id="vjs-title-bar-description-93"></div></div><div class="vjs-text-track-display" translate="yes" aria-live="off" aria-atomic="true"><div style="position: absolute; inset: 0px; margin: 1.5%;"></div></div><div class="vjs-loading-spinner" dir="ltr"><span class="vjs-control-text">Video Player is loading.</span></div><div class="vjs-ima3-ad-container"></div><button class="vjs-big-play-button" type="button" title="Play Video" aria-disabled="false"><span class="vjs-icon-placeholder" aria-hidden="true"></span><span class="vjs-control-text" aria-live="polite">Play Video</span></button><div class="vjs-control-bar" dir="ltr"><button class="vjs-play-control vjs-control vjs-button" type="button" title="Play" aria-disabled="false"><span class="vjs-icon-placeholder" aria-hidden="true"></span><span class="vjs-control-text" aria-live="polite">Play</span></button><button class="vjs-skip-backward-undefined vjs-control vjs-button vjs-hidden" type="button" title="Skip Backward" aria-disabled="false"><span class="vjs-icon-placeholder" aria-hidden="true"></span><span class="vjs-control-text" aria-live="polite">Skip Backward</span></button><button class="vjs-skip-forward-undefined vjs-control vjs-button vjs-hidden" type="button" title="Skip Forward" aria-disabled="false"><span class="vjs-icon-placeholder" aria-hidden="true"></span><span class="vjs-control-text" aria-live="polite">Skip Forward</span></button><div class="vjs-volume-panel vjs-control vjs-volume-panel-horizontal"><button class="vjs-mute-control vjs-control vjs-button vjs-vol-3" type="button" title="Mute" aria-disabled="false"><span class="vjs-icon-placeholder" aria-hidden="true"></span><span class="vjs-control-text" aria-live="polite">Mute</span></button><div class="vjs-volume-control vjs-control vjs-volume-horizontal"><div tabindex="0" class="vjs-volume-bar vjs-slider-bar vjs-slider vjs-slider-horizontal" role="slider" aria-valuenow="100" aria-valuemin="0" aria-valuemax="100" aria-label="Volume Level" aria-live="polite" aria-valuetext="100%"><div class="vjs-mouse-display"><div class="vjs-volume-tooltip" aria-hidden="true"></div></div><div class="vjs-volume-level" style="width: 100%;"><span class="vjs-control-text"></span></div></div></div></div><div class="vjs-current-time vjs-time-control vjs-control"><span class="vjs-control-text" role="presentation">Current Time&nbsp;</span><span class="vjs-current-time-display" role="presentation">0:00</span></div><div class="vjs-time-control vjs-time-divider" aria-hidden="true"><div><span>/</span></div></div><div class="vjs-duration vjs-time-control vjs-control"><span class="vjs-control-text" role="presentation">Duration&nbsp;</span><span class="vjs-duration-display" role="presentation">0:00</span></div><div class="vjs-progress-control vjs-control"><div tabindex="0" class="vjs-progress-holder vjs-slider vjs-slider-horizontal" role="slider" aria-valuenow="0.00" aria-valuemin="0" aria-valuemax="100" aria-label="Progress Bar" aria-valuetext="0:00 of 0:00"><div class="vjs-load-progress" style="width: 0%;"><span class="vjs-control-text"><span>Loaded</span>: <span class="vjs-control-text-loaded-percentage">0.00%</span></span><div data-start="0" data-end="0" style="left: 0%; width: 0%;"></div></div><div class="vjs-mouse-display"><div class="vjs-time-tooltip" aria-hidden="true"></div></div><div class="vjs-play-progress vjs-slider-bar" aria-hidden="true" style="width: 0%;"><div class="vjs-time-tooltip" aria-hidden="true" style="right: 0px;">0:00</div></div></div></div><div class="vjs-live-control vjs-control vjs-hidden"><div class="vjs-live-display" aria-live="off"><span class="vjs-control-text">Stream Type&nbsp;</span>LIVE</div></div><button class="vjs-seek-to-live-control vjs-control" type="button" title="Seek to live, currently behind live" aria-disabled="false"><span class="vjs-icon-placeholder" aria-hidden="true"></span><span class="vjs-control-text" aria-live="polite">Seek to live, currently behind live</span><span class="vjs-seek-to-live-text" aria-hidden="true">LIVE</span></button><div class="vjs-remaining-time vjs-time-control vjs-control"><span class="vjs-control-text" role="presentation">Remaining Time&nbsp;</span><span aria-hidden="true">-</span><span class="vjs-remaining-time-display" role="presentation">0:00</span></div><div class="vjs-custom-control-spacer vjs-spacer ">&nbsp;</div><div class="vjs-playback-rate vjs-menu-button vjs-menu-button-popup vjs-control vjs-button vjs-hidden"><div class="vjs-playback-rate-value" id="vjs-playback-rate-value-label-vjs_video_3_component_351">1x</div><button class="vjs-playback-rate vjs-menu-button vjs-menu-button-popup vjs-button" type="button" aria-disabled="false" title="Playback Rate" aria-haspopup="true" aria-expanded="false" aria-describedby="vjs-playback-rate-value-label-vjs_video_3_component_351"><span class="vjs-icon-placeholder" aria-hidden="true"></span><span class="vjs-control-text" aria-live="polite">Playback Rate</span></button><div class="vjs-menu"><ul class="vjs-menu-content"></ul></div></div><div class="vjs-chapters-button vjs-menu-button vjs-menu-button-popup vjs-control vjs-button vjs-hidden"><button class="vjs-chapters-button vjs-menu-button vjs-menu-button-popup vjs-button" type="button" aria-disabled="false" title="Chapters" aria-haspopup="true" aria-expanded="false"><span class="vjs-icon-placeholder" aria-hidden="true"></span><span class="vjs-control-text" aria-live="polite">Chapters</span></button><div class="vjs-menu"><ul class="vjs-menu-content"><li class="vjs-menu-title" tabindex="-1">Chapters</li></ul></div></div><div class="vjs-descriptions-button vjs-menu-button vjs-menu-button-popup vjs-control vjs-button vjs-hidden"><button class="vjs-descriptions-button vjs-menu-button vjs-menu-button-popup vjs-button" type="button" aria-disabled="false" title="Descriptions" aria-haspopup="true" aria-expanded="false"><span class="vjs-icon-placeholder" aria-hidden="true"></span><span class="vjs-control-text" aria-live="polite">Descriptions</span></button><div class="vjs-menu"><ul class="vjs-menu-content"><li class="vjs-menu-item vjs-selected" tabindex="-1" role="menuitemradio" aria-disabled="false" aria-checked="true"><span class="vjs-menu-item-text">descriptions off</span><span class="vjs-control-text" aria-live="polite">, selected</span></li></ul></div></div><div class="vjs-subs-caps-button vjs-menu-button vjs-menu-button-popup vjs-control vjs-button vjs-hidden"><button class="vjs-subs-caps-button vjs-menu-button vjs-menu-button-popup vjs-button" type="button" aria-disabled="false" title="Captions" aria-haspopup="true" aria-expanded="false"><span class="vjs-icon-placeholder" aria-hidden="true"></span><span class="vjs-control-text" aria-live="polite">Captions</span></button><div class="vjs-menu"><ul class="vjs-menu-content"><li class="vjs-menu-item vjs-texttrack-settings" tabindex="-1" role="menuitem" aria-disabled="false"><span class="vjs-menu-item-text">captions settings</span><span class="vjs-control-text" aria-live="polite">, opens captions settings dialog</span></li><li class="vjs-menu-item vjs-selected" tabindex="-1" role="menuitemradio" aria-disabled="false" aria-checked="true"><span class="vjs-menu-item-text">captions off</span><span class="vjs-control-text" aria-live="polite">, selected</span></li></ul></div></div><div class="vjs-quality-menu-wrapper vjs-menu-button vjs-menu-button-popup vjs-control vjs-button vjs-hidden" aria-label="Quality Levels"><button class="vjs-quality-menu-button vjs-menu-button vjs-menu-button-popup vjs-button" type="button" aria-disabled="false" aria-haspopup="true" aria-expanded="false" title="Quality Levels"><span class="vjs-icon-placeholder" aria-hidden="true"></span><span class="vjs-control-text" aria-live="polite">Quality Levels</span></button><div class="vjs-menu"><ul class="vjs-menu-content"></ul></div></div><div class="vjs-audio-button vjs-menu-button vjs-menu-button-popup vjs-control vjs-button vjs-hidden"><button class="vjs-audio-button vjs-menu-button vjs-menu-button-popup vjs-button" type="button" aria-disabled="false" title="Audio Track" aria-haspopup="true" aria-expanded="false"><span class="vjs-icon-placeholder" aria-hidden="true"></span><span class="vjs-control-text" aria-live="polite">Audio Track</span></button><div class="vjs-menu"><ul class="vjs-menu-content"></ul></div></div><button class="vjs-fullscreen-control vjs-control vjs-button" type="button" title="Fullscreen" aria-disabled="false"><span class="vjs-icon-placeholder" aria-hidden="true"></span><span class="vjs-control-text" aria-live="polite">Fullscreen</span></button></div><div class="vjs-error-display vjs-modal-dialog vjs-hidden " tabindex="-1" aria-describedby="vjs_video_3_component_555_description" aria-hidden="true" aria-label="Modal Window" role="dialog" aria-live="polite"><p class="vjs-modal-dialog-description vjs-control-text" id="vjs_video_3_component_555_description">This is a modal window.</p><div class="vjs-modal-dialog-content" role="document"></div></div><div class="vjs-modal-dialog vjs-hidden  vjs-text-track-settings" tabindex="-1" aria-describedby="vjs_video_3_component_561_description" aria-hidden="true" aria-label="Caption Settings Dialog" role="dialog" aria-live="polite"><p class="vjs-modal-dialog-description vjs-control-text" id="vjs_video_3_component_561_description">Beginning of dialog window. Escape will cancel and close the window.</p><div class="vjs-modal-dialog-content" role="document"><div class="vjs-track-settings-colors"><fieldset class="vjs-fg vjs-track-setting"><legend id="captions-text-legend-vjs_video_3_component_561">Text</legend><span class="vjs-text-color"><label id="captions-foreground-color-vjs_video_3_component_561" class="vjs-label" for="vjs_select_588">Color</label><select id="vjs_select_588" aria-labelledby="captions-text-legend-vjs_video_3_component_561 captions-foreground-color-vjs_video_3_component_561"><option id="captions-foreground-color-vjs_video_3_component_561-White" value="#FFF" aria-labelledby="captions-text-legend-vjs_video_3_component_561 captions-foreground-color-vjs_video_3_component_561 captions-foreground-color-vjs_video_3_component_561-White">White</option><option id="captions-foreground-color-vjs_video_3_component_561-Black" value="#000" aria-labelledby="captions-text-legend-vjs_video_3_component_561 captions-foreground-color-vjs_video_3_component_561 captions-foreground-color-vjs_video_3_component_561-Black">Black</option><option id="captions-foreground-color-vjs_video_3_component_561-Red" value="#F00" aria-labelledby="captions-text-legend-vjs_video_3_component_561 captions-foreground-color-vjs_video_3_component_561 captions-foreground-color-vjs_video_3_component_561-Red">Red</option><option id="captions-foreground-color-vjs_video_3_component_561-Green" value="#0F0" aria-labelledby="captions-text-legend-vjs_video_3_component_561 captions-foreground-color-vjs_video_3_component_561 captions-foreground-color-vjs_video_3_component_561-Green">Green</option><option id="captions-foreground-color-vjs_video_3_component_561-Blue" value="#00F" aria-labelledby="captions-text-legend-vjs_video_3_component_561 captions-foreground-color-vjs_video_3_component_561 captions-foreground-color-vjs_video_3_component_561-Blue">Blue</option><option id="captions-foreground-color-vjs_video_3_component_561-Yellow" value="#FF0" aria-labelledby="captions-text-legend-vjs_video_3_component_561 captions-foreground-color-vjs_video_3_component_561 captions-foreground-color-vjs_video_3_component_561-Yellow">Yellow</option><option id="captions-foreground-color-vjs_video_3_component_561-Magenta" value="#F0F" aria-labelledby="captions-text-legend-vjs_video_3_component_561 captions-foreground-color-vjs_video_3_component_561 captions-foreground-color-vjs_video_3_component_561-Magenta">Magenta</option><option id="captions-foreground-color-vjs_video_3_component_561-Cyan" value="#0FF" aria-labelledby="captions-text-legend-vjs_video_3_component_561 captions-foreground-color-vjs_video_3_component_561 captions-foreground-color-vjs_video_3_component_561-Cyan">Cyan</option></select></span><span class="vjs-text-opacity vjs-opacity"><label id="captions-foreground-opacity-vjs_video_3_component_561" class="vjs-label" for="vjs_select_593">Opacity</label><select id="vjs_select_593" aria-labelledby="captions-text-legend-vjs_video_3_component_561 captions-foreground-opacity-vjs_video_3_component_561"><option id="captions-foreground-opacity-vjs_video_3_component_561-Opaque" value="1" aria-labelledby="captions-text-legend-vjs_video_3_component_561 captions-foreground-opacity-vjs_video_3_component_561 captions-foreground-opacity-vjs_video_3_component_561-Opaque">Opaque</option><option id="captions-foreground-opacity-vjs_video_3_component_561-SemiTransparent" value="0.5" aria-labelledby="captions-text-legend-vjs_video_3_component_561 captions-foreground-opacity-vjs_video_3_component_561 captions-foreground-opacity-vjs_video_3_component_561-SemiTransparent">Semi-Transparent</option></select></span></fieldset><fieldset class="vjs-bg vjs-track-setting"><legend id="captions-background-vjs_video_3_component_561">Text Background</legend><span class="vjs-bg-color"><label id="captions-background-color-vjs_video_3_component_561" class="vjs-label" for="vjs_select_603">Color</label><select id="vjs_select_603" aria-labelledby="captions-background-vjs_video_3_component_561 captions-background-color-vjs_video_3_component_561"><option id="captions-background-color-vjs_video_3_component_561-Black" value="#000" aria-labelledby="captions-background-vjs_video_3_component_561 captions-background-color-vjs_video_3_component_561 captions-background-color-vjs_video_3_component_561-Black">Black</option><option id="captions-background-color-vjs_video_3_component_561-White" value="#FFF" aria-labelledby="captions-background-vjs_video_3_component_561 captions-background-color-vjs_video_3_component_561 captions-background-color-vjs_video_3_component_561-White">White</option><option id="captions-background-color-vjs_video_3_component_561-Red" value="#F00" aria-labelledby="captions-background-vjs_video_3_component_561 captions-background-color-vjs_video_3_component_561 captions-background-color-vjs_video_3_component_561-Red">Red</option><option id="captions-background-color-vjs_video_3_component_561-Green" value="#0F0" aria-labelledby="captions-background-vjs_video_3_component_561 captions-background-color-vjs_video_3_component_561 captions-background-color-vjs_video_3_component_561-Green">Green</option><option id="captions-background-color-vjs_video_3_component_561-Blue" value="#00F" aria-labelledby="captions-background-vjs_video_3_component_561 captions-background-color-vjs_video_3_component_561 captions-background-color-vjs_video_3_component_561-Blue">Blue</option><option id="captions-background-color-vjs_video_3_component_561-Yellow" value="#FF0" aria-labelledby="captions-background-vjs_video_3_component_561 captions-background-color-vjs_video_3_component_561 captions-background-color-vjs_video_3_component_561-Yellow">Yellow</option><option id="captions-background-color-vjs_video_3_component_561-Magenta" value="#F0F" aria-labelledby="captions-background-vjs_video_3_component_561 captions-background-color-vjs_video_3_component_561 captions-background-color-vjs_video_3_component_561-Magenta">Magenta</option><option id="captions-background-color-vjs_video_3_component_561-Cyan" value="#0FF" aria-labelledby="captions-background-vjs_video_3_component_561 captions-background-color-vjs_video_3_component_561 captions-background-color-vjs_video_3_component_561-Cyan">Cyan</option></select></span><span class="vjs-bg-opacity vjs-opacity"><label id="captions-background-opacity-vjs_video_3_component_561" class="vjs-label" for="vjs_select_608">Opacity</label><select id="vjs_select_608" aria-labelledby="captions-background-vjs_video_3_component_561 captions-background-opacity-vjs_video_3_component_561"><option id="captions-background-opacity-vjs_video_3_component_561-Opaque" value="1" aria-labelledby="captions-background-vjs_video_3_component_561 captions-background-opacity-vjs_video_3_component_561 captions-background-opacity-vjs_video_3_component_561-Opaque">Opaque</option><option id="captions-background-opacity-vjs_video_3_component_561-SemiTransparent" value="0.5" aria-labelledby="captions-background-vjs_video_3_component_561 captions-background-opacity-vjs_video_3_component_561 captions-background-opacity-vjs_video_3_component_561-SemiTransparent">Semi-Transparent</option><option id="captions-background-opacity-vjs_video_3_component_561-Transparent" value="0" aria-labelledby="captions-background-vjs_video_3_component_561 captions-background-opacity-vjs_video_3_component_561 captions-background-opacity-vjs_video_3_component_561-Transparent">Transparent</option></select></span></fieldset><fieldset class="vjs-window vjs-track-setting"><legend id="captions-window-vjs_video_3_component_561">Caption Area Background</legend><span class="vjs-window-color"><label id="captions-window-color-vjs_video_3_component_561" class="vjs-label" for="vjs_select_618">Color</label><select id="vjs_select_618" aria-labelledby="captions-window-vjs_video_3_component_561 captions-window-color-vjs_video_3_component_561"><option id="captions-window-color-vjs_video_3_component_561-Black" value="#000" aria-labelledby="captions-window-vjs_video_3_component_561 captions-window-color-vjs_video_3_component_561 captions-window-color-vjs_video_3_component_561-Black">Black</option><option id="captions-window-color-vjs_video_3_component_561-White" value="#FFF" aria-labelledby="captions-window-vjs_video_3_component_561 captions-window-color-vjs_video_3_component_561 captions-window-color-vjs_video_3_component_561-White">White</option><option id="captions-window-color-vjs_video_3_component_561-Red" value="#F00" aria-labelledby="captions-window-vjs_video_3_component_561 captions-window-color-vjs_video_3_component_561 captions-window-color-vjs_video_3_component_561-Red">Red</option><option id="captions-window-color-vjs_video_3_component_561-Green" value="#0F0" aria-labelledby="captions-window-vjs_video_3_component_561 captions-window-color-vjs_video_3_component_561 captions-window-color-vjs_video_3_component_561-Green">Green</option><option id="captions-window-color-vjs_video_3_component_561-Blue" value="#00F" aria-labelledby="captions-window-vjs_video_3_component_561 captions-window-color-vjs_video_3_component_561 captions-window-color-vjs_video_3_component_561-Blue">Blue</option><option id="captions-window-color-vjs_video_3_component_561-Yellow" value="#FF0" aria-labelledby="captions-window-vjs_video_3_component_561 captions-window-color-vjs_video_3_component_561 captions-window-color-vjs_video_3_component_561-Yellow">Yellow</option><option id="captions-window-color-vjs_video_3_component_561-Magenta" value="#F0F" aria-labelledby="captions-window-vjs_video_3_component_561 captions-window-color-vjs_video_3_component_561 captions-window-color-vjs_video_3_component_561-Magenta">Magenta</option><option id="captions-window-color-vjs_video_3_component_561-Cyan" value="#0FF" aria-labelledby="captions-window-vjs_video_3_component_561 captions-window-color-vjs_video_3_component_561 captions-window-color-vjs_video_3_component_561-Cyan">Cyan</option></select></span><span class="vjs-window-opacity vjs-opacity"><label id="captions-window-opacity-vjs_video_3_component_561" class="vjs-label" for="vjs_select_623">Opacity</label><select id="vjs_select_623" aria-labelledby="captions-window-vjs_video_3_component_561 captions-window-opacity-vjs_video_3_component_561"><option id="captions-window-opacity-vjs_video_3_component_561-Transparent" value="0" aria-labelledby="captions-window-vjs_video_3_component_561 captions-window-opacity-vjs_video_3_component_561 captions-window-opacity-vjs_video_3_component_561-Transparent">Transparent</option><option id="captions-window-opacity-vjs_video_3_component_561-SemiTransparent" value="0.5" aria-labelledby="captions-window-vjs_video_3_component_561 captions-window-opacity-vjs_video_3_component_561 captions-window-opacity-vjs_video_3_component_561-SemiTransparent">Semi-Transparent</option><option id="captions-window-opacity-vjs_video_3_component_561-Opaque" value="1" aria-labelledby="captions-window-vjs_video_3_component_561 captions-window-opacity-vjs_video_3_component_561 captions-window-opacity-vjs_video_3_component_561-Opaque">Opaque</option></select></span></fieldset></div><div class="vjs-track-settings-font"><fieldset class="vjs-font-percent vjs-track-setting"><legend id="captions-font-size-vjs_video_3_component_561">Font Size</legend><select id="vjs_select_638" aria-labelledby="captions-font-size-vjs_video_3_component_561 captions-font-size-vjs_video_3_component_561"><option id="captions-font-size-vjs_video_3_component_561-50" value="0.50" aria-labelledby="captions-font-size-vjs_video_3_component_561 captions-font-size-vjs_video_3_component_561 captions-font-size-vjs_video_3_component_561-50">50%</option><option id="captions-font-size-vjs_video_3_component_561-75" value="0.75" aria-labelledby="captions-font-size-vjs_video_3_component_561 captions-font-size-vjs_video_3_component_561 captions-font-size-vjs_video_3_component_561-75">75%</option><option id="captions-font-size-vjs_video_3_component_561-100" value="1.00" aria-labelledby="captions-font-size-vjs_video_3_component_561 captions-font-size-vjs_video_3_component_561 captions-font-size-vjs_video_3_component_561-100">100%</option><option id="captions-font-size-vjs_video_3_component_561-125" value="1.25" aria-labelledby="captions-font-size-vjs_video_3_component_561 captions-font-size-vjs_video_3_component_561 captions-font-size-vjs_video_3_component_561-125">125%</option><option id="captions-font-size-vjs_video_3_component_561-150" value="1.50" aria-labelledby="captions-font-size-vjs_video_3_component_561 captions-font-size-vjs_video_3_component_561 captions-font-size-vjs_video_3_component_561-150">150%</option><option id="captions-font-size-vjs_video_3_component_561-175" value="1.75" aria-labelledby="captions-font-size-vjs_video_3_component_561 captions-font-size-vjs_video_3_component_561 captions-font-size-vjs_video_3_component_561-175">175%</option><option id="captions-font-size-vjs_video_3_component_561-200" value="2.00" aria-labelledby="captions-font-size-vjs_video_3_component_561 captions-font-size-vjs_video_3_component_561 captions-font-size-vjs_video_3_component_561-200">200%</option><option id="captions-font-size-vjs_video_3_component_561-300" value="3.00" aria-labelledby="captions-font-size-vjs_video_3_component_561 captions-font-size-vjs_video_3_component_561 captions-font-size-vjs_video_3_component_561-300">300%</option><option id="captions-font-size-vjs_video_3_component_561-400" value="4.00" aria-labelledby="captions-font-size-vjs_video_3_component_561 captions-font-size-vjs_video_3_component_561 captions-font-size-vjs_video_3_component_561-400">400%</option></select></fieldset><fieldset class="vjs-edge-style vjs-track-setting"><legend id="captions-background-vjs_video_3_component_561">Text Edge Style</legend><select id="vjs_select_648" aria-labelledby="captions-background-vjs_video_3_component_561 vjs_video_3_component_561"><option id="vjs_video_3_component_561-None" value="none" aria-labelledby="captions-background-vjs_video_3_component_561 vjs_video_3_component_561 vjs_video_3_component_561-None">None</option><option id="vjs_video_3_component_561-Raised" value="raised" aria-labelledby="captions-background-vjs_video_3_component_561 vjs_video_3_component_561 vjs_video_3_component_561-Raised">Raised</option><option id="vjs_video_3_component_561-Depressed" value="depressed" aria-labelledby="captions-background-vjs_video_3_component_561 vjs_video_3_component_561 vjs_video_3_component_561-Depressed">Depressed</option><option id="vjs_video_3_component_561-Uniform" value="uniform" aria-labelledby="captions-background-vjs_video_3_component_561 vjs_video_3_component_561 vjs_video_3_component_561-Uniform">Uniform</option><option id="vjs_video_3_component_561-Dropshadow" value="dropshadow" aria-labelledby="captions-background-vjs_video_3_component_561 vjs_video_3_component_561 vjs_video_3_component_561-Dropshadow">Drop shadow</option></select></fieldset><fieldset class="vjs-font-family vjs-track-setting"><legend id="captions-font-family-vjs_video_3_component_561">Font Family</legend><select id="vjs_select_658" aria-labelledby="captions-font-family-vjs_video_3_component_561 captions-font-family-vjs_video_3_component_561"><option id="captions-font-family-vjs_video_3_component_561-ProportionalSansSerif" value="proportionalSansSerif" aria-labelledby="captions-font-family-vjs_video_3_component_561 captions-font-family-vjs_video_3_component_561 captions-font-family-vjs_video_3_component_561-ProportionalSansSerif">Proportional Sans-Serif</option><option id="captions-font-family-vjs_video_3_component_561-MonospaceSansSerif" value="monospaceSansSerif" aria-labelledby="captions-font-family-vjs_video_3_component_561 captions-font-family-vjs_video_3_component_561 captions-font-family-vjs_video_3_component_561-MonospaceSansSerif">Monospace Sans-Serif</option><option id="captions-font-family-vjs_video_3_component_561-ProportionalSerif" value="proportionalSerif" aria-labelledby="captions-font-family-vjs_video_3_component_561 captions-font-family-vjs_video_3_component_561 captions-font-family-vjs_video_3_component_561-ProportionalSerif">Proportional Serif</option><option id="captions-font-family-vjs_video_3_component_561-MonospaceSerif" value="monospaceSerif" aria-labelledby="captions-font-family-vjs_video_3_component_561 captions-font-family-vjs_video_3_component_561 captions-font-family-vjs_video_3_component_561-MonospaceSerif">Monospace Serif</option><option id="captions-font-family-vjs_video_3_component_561-Casual" value="casual" aria-labelledby="captions-font-family-vjs_video_3_component_561 captions-font-family-vjs_video_3_component_561 captions-font-family-vjs_video_3_component_561-Casual">Casual</option><option id="captions-font-family-vjs_video_3_component_561-Script" value="script" aria-labelledby="captions-font-family-vjs_video_3_component_561 captions-font-family-vjs_video_3_component_561 captions-font-family-vjs_video_3_component_561-Script">Script</option><option id="captions-font-family-vjs_video_3_component_561-SmallCaps" value="small-caps" aria-labelledby="captions-font-family-vjs_video_3_component_561 captions-font-family-vjs_video_3_component_561 captions-font-family-vjs_video_3_component_561-SmallCaps">Small Caps</option></select></fieldset></div><div class="vjs-track-settings-controls"><button class="vjs-default-button" type="button" title="restore all settings to the default values" aria-disabled="false">Reset</button><button class="vjs-done-button" type="button" title="restore all settings to the default values" aria-disabled="false">Done</button></div></div><button class="vjs-close-button vjs-control vjs-button" type="button" title="Close Modal Dialog" aria-disabled="false"><span class="vjs-icon-placeholder" aria-hidden="true"></span><span class="vjs-control-text" aria-live="polite">Close Modal Dialog</span></button><p class="vjs-control-text">End of dialog window.</p></div><div class="vjs-player-info-modal vjs-modal-dialog vjs-hidden " tabindex="-1" aria-describedby="vjs_video_3_component_1114_description" aria-hidden="true" aria-label="Player Information Dialog" role="dialog" aria-live="polite"><button class="vjs-close-button vjs-control vjs-button" type="button" title="Close Modal Dialog" aria-disabled="false"><span class="vjs-icon-placeholder" aria-hidden="true"></span><span class="vjs-control-text" aria-live="polite">Close Modal Dialog</span></button><p class="vjs-modal-dialog-description vjs-control-text" id="vjs_video_3_component_1114_description">This is a modal window. This modal can be closed by pressing the Escape key or activating the close button.</p><div class="vjs-modal-dialog-content" role="document"></div></div></video-js><script async="" charset="utf-8" src="https://players.brightcove.net/665003303001/6tKQRAx7lu_default/index.min.js"></script></div><div class="post-icon-parent"><div class="post-icon__container post-icon--large"><span class="screen-reader-text">Video Duration 2 minutes 09 seconds </span><svg class="icon icon--play-arrow icon--white icon--16 post-icon__icon post-icon--play-arrow" viewBox="0 0 5 8" version="1.1" aria-hidden="true"><title>play-arrow</title><path fill="#FFF" fill-rule="evenodd" d="M.197 7.952A.39.39 0 0 1 0 7.61V.39C0 .247.076.114.197.048a.36.36 0 0 1 .384.018l5.25 3.61A.394.394 0 0 1 6 3.998a.394.394 0 0 1-.169.327l-5.25 3.61a.362.362 0 0 1-.384.016Z"></path></svg><span class="post-icon__text">2:09</span></div></div><ul class="playlist-horizontal-container in-article-brightcove-playlist" id="playlist-container"><li tabindex="0"><article class="playlist-item-container is-playing"> <div class="playlist-item-image-container"><span class="playlist-item-showing-now" title="Now Playing">Now Playing</span><div class="post-icon-parent playlist-item-duration-container"><div class="post-icon__container post-icon--small playlist-item-duration-container"><span class="screen-reader-text">Video Duration 02 minutes 09 seconds </span><svg class="icon icon--play-arrow icon--white icon--16 post-icon__icon post-icon--play-arrow" viewBox="0 0 5 8" version="1.1" aria-hidden="true"><title>play-arrow</title><path fill="#FFF" fill-rule="evenodd" d="M.197 7.952A.39.39 0 0 1 0 7.61V.39C0 .247.076.114.197.048a.36.36 0 0 1 .384.018l5.25 3.61A.394.394 0 0 1 6 3.998a.394.394 0 0 1-.169.327l-5.25 3.61a.362.362 0 0 1-.384.016Z"></path></svg><span class="post-icon__text">02:09</span></div></div><div class="responsive-image"><img class="playlist-item-image" loading="lazy" src="https://cf-images.eu-west-1.prod.boltdns.net/v1/static/665003303001/a823318e-5127-4227-9cf0-150beef25f54/34376480-bc64-4d98-8c35-50f78e1091bd/426x240/match/image.jpg?resize=730%2C410&amp;quality=80" srcset="https://cf-images.eu-west-1.prod.boltdns.net/v1/static/665003303001/a823318e-5127-4227-9cf0-150beef25f54/34376480-bc64-4d98-8c35-50f78e1091bd/426x240/match/image.jpg?resize=270%2C152&amp;quality=80 270w, https://cf-images.eu-west-1.prod.boltdns.net/v1/static/665003303001/a823318e-5127-4227-9cf0-150beef25f54/34376480-bc64-4d98-8c35-50f78e1091bd/426x240/match/image.jpg?resize=730%2C410&amp;quality=80 730w" sizes="(max-width: 270px) 270px, (max-width: 730px) 730px, 730px" alt="Wrapping up Joe Biden’s presidential legacy"></div></div><header><h3 class="playlist-item-title" title="Wrapping up Joe Biden’s presidential legacy"> Wrapping up Joe Biden’s presidential legacy</h3></header></article></li><li tabindex="1"><article class="playlist-item-container is-next"> <div class="playlist-item-image-container"><span class="playlist-item-showing-next" title="Next">Next</span><div class="post-icon-parent playlist-item-duration-container"><div class="post-icon__container post-icon--small playlist-item-duration-container"><span class="screen-reader-text">Video Duration 02 minutes 22 seconds </span><svg class="icon icon--play-arrow icon--white icon--16 post-icon__icon post-icon--play-arrow" viewBox="0 0 5 8" version="1.1" aria-hidden="true"><title>play-arrow</title><path fill="#FFF" fill-rule="evenodd" d="M.197 7.952A.39.39 0 0 1 0 7.61V.39C0 .247.076.114.197.048a.36.36 0 0 1 .384.018l5.25 3.61A.394.394 0 0 1 6 3.998a.394.394 0 0 1-.169.327l-5.25 3.61a.362.362 0 0 1-.384.016Z"></path></svg><span class="post-icon__text">02:22</span></div></div><div class="responsive-image"><img class="playlist-item-image" loading="lazy" src="https://cf-images.eu-west-1.prod.boltdns.net/v1/static/665003303001/799c57d9-bc43-416c-9acf-45e63060214e/4ddf1fd4-f04a-48ee-8252-bd7e1ac6b88f/426x240/match/image.jpg?resize=730%2C410&amp;quality=80" srcset="https://cf-images.eu-west-1.prod.boltdns.net/v1/static/665003303001/799c57d9-bc43-416c-9acf-45e63060214e/4ddf1fd4-f04a-48ee-8252-bd7e1ac6b88f/426x240/match/image.jpg?resize=270%2C152&amp;quality=80 270w, https://cf-images.eu-west-1.prod.boltdns.net/v1/static/665003303001/799c57d9-bc43-416c-9acf-45e63060214e/4ddf1fd4-f04a-48ee-8252-bd7e1ac6b88f/426x240/match/image.jpg?resize=730%2C410&amp;quality=80 730w" sizes="(max-width: 270px) 270px, (max-width: 730px) 730px, 730px" alt="Security in Pakistan's Swat Valley heightened as Taliban threat grows"></div></div><header><h3 class="playlist-item-title" title="Security in Pakistan's Swat Valley heightened as Taliban threat grows"> Security in Pakistan's Swat Valley heightened as Taliban threat grows</h3></header></article></li><li tabindex="2"><article class="playlist-item-container u-hidden--mobile"> <div class="playlist-item-image-container"><div class="post-icon-parent playlist-item-duration-container"><div class="post-icon__container post-icon--small playlist-item-duration-container"><span class="screen-reader-text">Video Duration 04 minutes 09 seconds </span><svg class="icon icon--play-arrow icon--white icon--16 post-icon__icon post-icon--play-arrow" viewBox="0 0 5 8" version="1.1" aria-hidden="true"><title>play-arrow</title><path fill="#FFF" fill-rule="evenodd" d="M.197 7.952A.39.39 0 0 1 0 7.61V.39C0 .247.076.114.197.048a.36.36 0 0 1 .384.018l5.25 3.61A.394.394 0 0 1 6 3.998a.394.394 0 0 1-.169.327l-5.25 3.61a.362.362 0 0 1-.384.016Z"></path></svg><span class="post-icon__text">04:09</span></div></div><div class="responsive-image"><img class="playlist-item-image" loading="lazy" src="https://cf-images.eu-west-1.prod.boltdns.net/v1/static/665003303001/e3318699-9505-4f86-b605-7552f4f836dd/ad320aec-bcb0-459e-9a81-d383788c919f/426x240/match/image.jpg?resize=730%2C410&amp;quality=80" srcset="https://cf-images.eu-west-1.prod.boltdns.net/v1/static/665003303001/e3318699-9505-4f86-b605-7552f4f836dd/ad320aec-bcb0-459e-9a81-d383788c919f/426x240/match/image.jpg?resize=270%2C152&amp;quality=80 270w, https://cf-images.eu-west-1.prod.boltdns.net/v1/static/665003303001/e3318699-9505-4f86-b605-7552f4f836dd/ad320aec-bcb0-459e-9a81-d383788c919f/426x240/match/image.jpg?resize=730%2C410&amp;quality=80 730w" sizes="(max-width: 270px) 270px, (max-width: 730px) 730px, 730px" alt="Lawyers for detained Gaza doctor accuse Israel of torture, severe abuses"></div></div><header><h3 class="playlist-item-title" title="Lawyers for detained Gaza doctor accuse Israel of torture, severe abuses"> Lawyers for detained Gaza doctor accuse Israel of torture, severe abuses</h3></header></article></li><li tabindex="3"><article class="playlist-item-container u-hidden--mobile"> <div class="playlist-item-image-container"><div class="post-icon-parent playlist-item-duration-container"><div class="post-icon__container post-icon--small playlist-item-duration-container"><span class="screen-reader-text">Video Duration 05 minutes 10 seconds </span><svg class="icon icon--play-arrow icon--white icon--16 post-icon__icon post-icon--play-arrow" viewBox="0 0 5 8" version="1.1" aria-hidden="true"><title>play-arrow</title><path fill="#FFF" fill-rule="evenodd" d="M.197 7.952A.39.39 0 0 1 0 7.61V.39C0 .247.076.114.197.048a.36.36 0 0 1 .384.018l5.25 3.61A.394.394 0 0 1 6 3.998a.394.394 0 0 1-.169.327l-5.25 3.61a.362.362 0 0 1-.384.016Z"></path></svg><span class="post-icon__text">05:10</span></div></div><div class="responsive-image"><img class="playlist-item-image" loading="lazy" src="https://cf-images.eu-west-1.prod.boltdns.net/v1/static/665003303001/c0d5661d-2e3e-4961-a9f9-77abc35e4821/35979ed6-72d7-48ef-aded-4333f9560307/426x240/match/image.jpg?resize=730%2C410&amp;quality=80" srcset="https://cf-images.eu-west-1.prod.boltdns.net/v1/static/665003303001/c0d5661d-2e3e-4961-a9f9-77abc35e4821/35979ed6-72d7-48ef-aded-4333f9560307/426x240/match/image.jpg?resize=270%2C152&amp;quality=80 270w, https://cf-images.eu-west-1.prod.boltdns.net/v1/static/665003303001/c0d5661d-2e3e-4961-a9f9-77abc35e4821/35979ed6-72d7-48ef-aded-4333f9560307/426x240/match/image.jpg?resize=730%2C410&amp;quality=80 730w" sizes="(max-width: 270px) 270px, (max-width: 730px) 730px, 730px" alt="'Gaza ceasefire must hold, we cannot go back to what we had': UN aid official"></div></div><header><h3 class="playlist-item-title" title="'Gaza ceasefire must hold, we cannot go back to what we had': UN aid official"> 'Gaza ceasefire must hold, we cannot go back to what we had': UN aid official</h3></header></article></li><li tabindex="4"><article class="playlist-item-container u-hidden--mobile"> <div class="playlist-item-image-container"><div class="post-icon-parent playlist-item-duration-container"><div class="post-icon__container post-icon--small playlist-item-duration-container"><span class="screen-reader-text">Video Duration 01 minutes 43 seconds </span><svg class="icon icon--play-arrow icon--white icon--16 post-icon__icon post-icon--play-arrow" viewBox="0 0 5 8" version="1.1" aria-hidden="true"><title>play-arrow</title><path fill="#FFF" fill-rule="evenodd" d="M.197 7.952A.39.39 0 0 1 0 7.61V.39C0 .247.076.114.197.048a.36.36 0 0 1 .384.018l5.25 3.61A.394.394 0 0 1 6 3.998a.394.394 0 0 1-.169.327l-5.25 3.61a.362.362 0 0 1-.384.016Z"></path></svg><span class="post-icon__text">01:43</span></div></div><div class="responsive-image"><img class="playlist-item-image" loading="lazy" src="https://cf-images.eu-west-1.prod.boltdns.net/v1/static/665003303001/2c30aa9e-56f6-4c54-9cd6-605f0fe54f68/a8550456-f5a7-41f6-9223-6aac45ace436/426x240/match/image.jpg?resize=730%2C410&amp;quality=80" srcset="https://cf-images.eu-west-1.prod.boltdns.net/v1/static/665003303001/2c30aa9e-56f6-4c54-9cd6-605f0fe54f68/a8550456-f5a7-41f6-9223-6aac45ace436/426x240/match/image.jpg?resize=270%2C152&amp;quality=80 270w, https://cf-images.eu-west-1.prod.boltdns.net/v1/static/665003303001/2c30aa9e-56f6-4c54-9cd6-605f0fe54f68/a8550456-f5a7-41f6-9223-6aac45ace436/426x240/match/image.jpg?resize=730%2C410&amp;quality=80 730w" sizes="(max-width: 270px) 270px, (max-width: 730px) 730px, 730px" alt="Gaza woman's struggle for shelter amid devastation and loss"></div></div><header><h3 class="playlist-item-title" title="Gaza woman's struggle for shelter amid devastation and loss"> Gaza woman's struggle for shelter amid devastation and loss</h3></header></article></li></ul><button aria-controls="playlist-container" class="playlist-show-more-button no-styles-button expand-button u-hidden--desktop"><span class="playlist-show-more-button__text">Show more videos</span><svg class="icon icon--caret-down icon--grey icon--8 " viewBox="0 0 20 20" version="1.1" aria-hidden="true"><path class="icon-main-color" d="M10 12.92l8.3-8.86L20 5.87l-8.3 8.86-1.7 1.83-1.7-1.81L0 5.87l1.7-1.81z"></path></svg></button></div>
+<p></p></div>
+<p>						</p>
+<h2 id="do-trans-women-have-an-advantage-over-women-in-sports">Do trans women have an advantage over women in sports?</h2>
+<p>The issue has been hotly debated for years. Studies have shown that transgender women, even after hormone treatment, still have an advantage in strength and speed over women. This is because suppressing testosterone alone may not be enough to compensate for the natural athletic advantage men have over women after undergoing male puberty, which also generally results in higher bone density, larger lung capacity and greater muscle mass.</p><div class="container--ads in-article-ads slot-3-placement"><div class="ads"><span class="ads__title"> Advertisement </span><div class="ads__slot"><div><div class="freestar-ads" id="div-gpt-ad-382582457559"></div></div></div></div></div>
+<p>However, a 2024 study commissioned by the International Olympic Committee found that transgender women may have lower performance in jumping, lung capacity and general cardiovascular fitness than other men.</p>
+<p>“Trans women can have disadvantages because their larger frames are now being powered by reduced muscle mass and reduced aerobic capacity, but that’s not as obvious as the advantages of simply being bigger,” Joanna Harper, a sports scientist who is transgender, told the BBC.</p>
+<p>“The question isn’t ‘Do trans women have advantages?’ – but instead, ‘Can trans women and women compete against one another in meaningful competition?’ Truthfully, the answer isn’t definitive yet,” she said.</p>
+<h2 id="which-cases-of-trans-women-participating-in-women-s-sports-have-caused-a-row">Which cases of trans women participating in women’s sports have caused a row?</h2>
+<p>Although relatively few transgender women have competed in women’s sports at elite levels, several high-profile cases have sparked public debate in recent years. One of the most notable was that of <a href="/news/2022/2/2/usa-swimming-unveils-new-rules-for-transgender-athletes">swimmer Lia Thomas</a>, who spent three years on the University of Pennsylvania’s men’s swimming team before transitioning and joining the women’s team, and going on to shatter multiple records.</p>
+<figure id="attachment_3492824" aria-describedby="caption-attachment-3492824" style="width:770px" class="wp-caption aligncenter"><img data-recalc-dims="1" loading="lazy" class="size-arc-image-770 wp-image-3492824" src="https://www.aljazeera.com/wp-content/uploads/2025/02/2022-03-19T015357Z_445662276_MT1USATODAY17926032_RTRMADP_3_NCAA-WOMENS-SWIMMING-SWIMMING-DIVING-CHAMPIONSHIP-1738846894.jpg?w=770&amp;resize=770%2C513&amp;quality=80" alt="Mar 18, 2022; Atlanta, Georgia, USA; Penn Quakers swimmer Lia Thomas holds a trophy after finishing fifth in the 200 free at the NCAA Swimming &amp; Diving Championships at Georgia Tech. Mandatory Credit: Brett Davis-USA TODAY Sports"><figcaption id="caption-attachment-3492824" class="wp-caption-text">Swimmer Lia Thomas holds a trophy at the NCAA Swimming &amp; Diving Championships on March 20, 2022 at Georgia Tech in Atlanta, Georgia, the US [Brett Davis/USA Today via Reuters]</figcaption></figure>
+<p>Another is Canadian cyclist Veronica Ivy, who in 2018 became the first transgender woman to win a world track cycling championship. Ivy criticised the sport’s governing authority for later imposing a ban on transgender women who transitioned after puberty from participating in women’s events, calling the policy “inhumane” and “disgusting”.</p><div class="container--ads in-article-ads"><div class="ads"><span class="ads__title"> Advertisement </span><div class="ads__slot"><div><div class="freestar-ads" id="div-gpt-ad-930017991174"></div></div></div></div></div>
+<p>Though not self-identifying as transgender, Algerian boxer Imane Khelif was at the centre of a gender row during the last Olympic games. Khelif, who was recorded as female at birth faced a flurry of online backlash, egged on by Trump and several right-wing French politicians, due to previously failing a “gender eligibility test” by a boxing federation. Khelif, who was deemed fully eligible for the Olympics and won a gold medal last year, later <a href="/news/2024/8/11/algerias-imane-khelif-files-harassment-case-after-gender">filed a lawsuit</a> against social media platform X for harassment.</p>
+<p>		</p>
+<div style="display:block;position:relative;min-width:0px;max-width:770px">
+<div class="video-player-facade-container"><div class="aj-video-player in-article-bc-video-player aj-parsed-component"><video-js data-video-id="6360057585112" class="video-js vjs-paused vjs-controls-enabled vjs-workinghover vjs-v8 vjs-user-active bc-player-6tKQRAx7lu_default bc-player-6tKQRAx7lu_default-index-1 vjs-mouse vjs-ad-controls vjs-ima3-html5 pause-controller vjs-player-info vjs-contextmenu-ui vjs-viewability vjs-errors vjs-plugins-ready vjs-quality-menu vjs-hide-controls vjs-layout-large" playsinline="true" id="vjs_video_1494" tabindex="-1" role="region" lang="en" translate="no" aria-label="Video Player"><video id="vjs_video_1494_html5_api" class="vjs-tech" preload="none" playsinline="playsinline" poster="https://cf-images.eu-west-1.prod.boltdns.net/v1/static/665003303001/0ae09911-215d-4c72-b553-f41e2e4c0e39/724616ed-cd9f-4302-9ae1-ed9a1f7586d4/1920x1080/match/image.jpg" src="blob:https://www.aljazeera.com/55e9f360-74c0-467b-925a-edd41b1e28b9"></video><div class="vjs-poster" aria-disabled="false"><picture class="vjs-poster" tabindex="-1"><img loading="lazy" alt="" src="https://cf-images.eu-west-1.prod.boltdns.net/v1/static/665003303001/0ae09911-215d-4c72-b553-f41e2e4c0e39/724616ed-cd9f-4302-9ae1-ed9a1f7586d4/1920x1080/match/image.jpg"></picture></div><div class="vjs-title-bar vjs-hidden"><div class="vjs-title-bar-title" id="vjs-title-bar-title-1581"></div><div class="vjs-title-bar-description" id="vjs-title-bar-description-1582"></div></div><div class="vjs-text-track-display" translate="yes" aria-live="off" aria-atomic="true"><div style="position: absolute; inset: 0px; margin: 1.5%;"></div></div><div class="vjs-loading-spinner" dir="ltr"><span class="vjs-control-text">Video Player is loading.</span></div><div class="vjs-ima3-ad-container"></div><button class="vjs-big-play-button" type="button" title="Play Video" aria-disabled="false"><span class="vjs-icon-placeholder" aria-hidden="true"></span><span class="vjs-control-text" aria-live="polite">Play Video</span></button><div class="vjs-control-bar" dir="ltr"><button class="vjs-play-control vjs-control vjs-button" type="button" title="Play" aria-disabled="false"><span class="vjs-icon-placeholder" aria-hidden="true"></span><span class="vjs-control-text" aria-live="polite">Play</span></button><button class="vjs-skip-backward-undefined vjs-control vjs-button vjs-hidden" type="button" title="Skip Backward" aria-disabled="false"><span class="vjs-icon-placeholder" aria-hidden="true"></span><span class="vjs-control-text" aria-live="polite">Skip Backward</span></button><button class="vjs-skip-forward-undefined vjs-control vjs-button vjs-hidden" type="button" title="Skip Forward" aria-disabled="false"><span class="vjs-icon-placeholder" aria-hidden="true"></span><span class="vjs-control-text" aria-live="polite">Skip Forward</span></button><div class="vjs-volume-panel vjs-control vjs-volume-panel-horizontal"><button class="vjs-mute-control vjs-control vjs-button vjs-vol-3" type="button" title="Mute" aria-disabled="false"><span class="vjs-icon-placeholder" aria-hidden="true"></span><span class="vjs-control-text" aria-live="polite">Mute</span></button><div class="vjs-volume-control vjs-control vjs-volume-horizontal"><div tabindex="0" class="vjs-volume-bar vjs-slider-bar vjs-slider vjs-slider-horizontal" role="slider" aria-valuenow="100" aria-valuemin="0" aria-valuemax="100" aria-label="Volume Level" aria-live="polite" aria-valuetext="100%"><div class="vjs-mouse-display"><div class="vjs-volume-tooltip" aria-hidden="true"></div></div><div class="vjs-volume-level" style="width: 100%;"><span class="vjs-control-text"></span></div></div></div></div><div class="vjs-current-time vjs-time-control vjs-control"><span class="vjs-control-text" role="presentation">Current Time&nbsp;</span><span class="vjs-current-time-display" role="presentation">0:00</span></div><div class="vjs-time-control vjs-time-divider" aria-hidden="true"><div><span>/</span></div></div><div class="vjs-duration vjs-time-control vjs-control"><span class="vjs-control-text" role="presentation">Duration&nbsp;</span><span class="vjs-duration-display" role="presentation">0:00</span></div><div class="vjs-progress-control vjs-control"><div tabindex="0" class="vjs-progress-holder vjs-slider vjs-slider-horizontal" role="slider" aria-valuenow="0.00" aria-valuemin="0" aria-valuemax="100" aria-label="Progress Bar" aria-valuetext="0:00 of 0:00"><div class="vjs-load-progress" style="width: 0%;"><span class="vjs-control-text"><span>Loaded</span>: <span class="vjs-control-text-loaded-percentage">0.00%</span></span><div data-start="0" data-end="0" style="left: 0%; width: 0%;"></div></div><div class="vjs-mouse-display"><div class="vjs-time-tooltip" aria-hidden="true"></div></div><div class="vjs-play-progress vjs-slider-bar" aria-hidden="true" style="width: 0%;"><div class="vjs-time-tooltip" aria-hidden="true" style="right: 0px;">0:00</div></div></div></div><div class="vjs-live-control vjs-control vjs-hidden"><div class="vjs-live-display" aria-live="off"><span class="vjs-control-text">Stream Type&nbsp;</span>LIVE</div></div><button class="vjs-seek-to-live-control vjs-control" type="button" title="Seek to live, currently behind live" aria-disabled="false"><span class="vjs-icon-placeholder" aria-hidden="true"></span><span class="vjs-control-text" aria-live="polite">Seek to live, currently behind live</span><span class="vjs-seek-to-live-text" aria-hidden="true">LIVE</span></button><div class="vjs-remaining-time vjs-time-control vjs-control"><span class="vjs-control-text" role="presentation">Remaining Time&nbsp;</span><span aria-hidden="true">-</span><span class="vjs-remaining-time-display" role="presentation">0:00</span></div><div class="vjs-custom-control-spacer vjs-spacer ">&nbsp;</div><div class="vjs-playback-rate vjs-menu-button vjs-menu-button-popup vjs-control vjs-button vjs-hidden"><div class="vjs-playback-rate-value" id="vjs-playback-rate-value-label-vjs_video_1494_component_1827">1x</div><button class="vjs-playback-rate vjs-menu-button vjs-menu-button-popup vjs-button" type="button" aria-disabled="false" title="Playback Rate" aria-haspopup="true" aria-expanded="false" aria-describedby="vjs-playback-rate-value-label-vjs_video_1494_component_1827"><span class="vjs-icon-placeholder" aria-hidden="true"></span><span class="vjs-control-text" aria-live="polite">Playback Rate</span></button><div class="vjs-menu"><ul class="vjs-menu-content"></ul></div></div><div class="vjs-chapters-button vjs-menu-button vjs-menu-button-popup vjs-control vjs-button vjs-hidden"><button class="vjs-chapters-button vjs-menu-button vjs-menu-button-popup vjs-button" type="button" aria-disabled="false" title="Chapters" aria-haspopup="true" aria-expanded="false"><span class="vjs-icon-placeholder" aria-hidden="true"></span><span class="vjs-control-text" aria-live="polite">Chapters</span></button><div class="vjs-menu"><ul class="vjs-menu-content"><li class="vjs-menu-title" tabindex="-1">Chapters</li></ul></div></div><div class="vjs-descriptions-button vjs-menu-button vjs-menu-button-popup vjs-control vjs-button vjs-hidden"><button class="vjs-descriptions-button vjs-menu-button vjs-menu-button-popup vjs-button" type="button" aria-disabled="false" title="Descriptions" aria-haspopup="true" aria-expanded="false"><span class="vjs-icon-placeholder" aria-hidden="true"></span><span class="vjs-control-text" aria-live="polite">Descriptions</span></button><div class="vjs-menu"><ul class="vjs-menu-content"><li class="vjs-menu-item vjs-selected" tabindex="-1" role="menuitemradio" aria-disabled="false" aria-checked="true"><span class="vjs-menu-item-text">descriptions off</span><span class="vjs-control-text" aria-live="polite">, selected</span></li></ul></div></div><div class="vjs-subs-caps-button vjs-menu-button vjs-menu-button-popup vjs-control vjs-button vjs-hidden"><button class="vjs-subs-caps-button vjs-menu-button vjs-menu-button-popup vjs-button" type="button" aria-disabled="false" title="Captions" aria-haspopup="true" aria-expanded="false"><span class="vjs-icon-placeholder" aria-hidden="true"></span><span class="vjs-control-text" aria-live="polite">Captions</span></button><div class="vjs-menu"><ul class="vjs-menu-content"><li class="vjs-menu-item vjs-texttrack-settings" tabindex="-1" role="menuitem" aria-disabled="false"><span class="vjs-menu-item-text">captions settings</span><span class="vjs-control-text" aria-live="polite">, opens captions settings dialog</span></li><li class="vjs-menu-item vjs-selected" tabindex="-1" role="menuitemradio" aria-disabled="false" aria-checked="true"><span class="vjs-menu-item-text">captions off</span><span class="vjs-control-text" aria-live="polite">, selected</span></li></ul></div></div><div class="vjs-quality-menu-wrapper vjs-menu-button vjs-menu-button-popup vjs-control vjs-button vjs-hidden" aria-label="Quality Levels"><button class="vjs-quality-menu-button vjs-menu-button vjs-menu-button-popup vjs-button" type="button" aria-disabled="false" aria-haspopup="true" aria-expanded="false" title="Quality Levels"><span class="vjs-icon-placeholder" aria-hidden="true"></span><span class="vjs-control-text" aria-live="polite">Quality Levels</span></button><div class="vjs-menu"><ul class="vjs-menu-content"></ul></div></div><div class="vjs-audio-button vjs-menu-button vjs-menu-button-popup vjs-control vjs-button vjs-hidden"><button class="vjs-audio-button vjs-menu-button vjs-menu-button-popup vjs-button" type="button" aria-disabled="false" title="Audio Track" aria-haspopup="true" aria-expanded="false"><span class="vjs-icon-placeholder" aria-hidden="true"></span><span class="vjs-control-text" aria-live="polite">Audio Track</span></button><div class="vjs-menu"><ul class="vjs-menu-content"></ul></div></div><button class="vjs-fullscreen-control vjs-control vjs-button" type="button" title="Fullscreen" aria-disabled="false"><span class="vjs-icon-placeholder" aria-hidden="true"></span><span class="vjs-control-text" aria-live="polite">Fullscreen</span></button></div><div class="vjs-error-display vjs-modal-dialog vjs-hidden " tabindex="-1" aria-describedby="vjs_video_1494_component_2028_description" aria-hidden="true" aria-label="Modal Window" role="dialog" aria-live="polite"><p class="vjs-modal-dialog-description vjs-control-text" id="vjs_video_1494_component_2028_description">This is a modal window.</p><div class="vjs-modal-dialog-content" role="document"></div></div><div class="vjs-modal-dialog vjs-hidden  vjs-text-track-settings" tabindex="-1" aria-describedby="vjs_video_1494_component_2034_description" aria-hidden="true" aria-label="Caption Settings Dialog" role="dialog" aria-live="polite"><p class="vjs-modal-dialog-description vjs-control-text" id="vjs_video_1494_component_2034_description">Beginning of dialog window. Escape will cancel and close the window.</p><div class="vjs-modal-dialog-content" role="document"><div class="vjs-track-settings-colors"><fieldset class="vjs-fg vjs-track-setting"><legend id="captions-text-legend-vjs_video_1494_component_2034">Text</legend><span class="vjs-text-color"><label id="captions-foreground-color-vjs_video_1494_component_2034" class="vjs-label" for="vjs_select_2061">Color</label><select id="vjs_select_2061" aria-labelledby="captions-text-legend-vjs_video_1494_component_2034 captions-foreground-color-vjs_video_1494_component_2034"><option id="captions-foreground-color-vjs_video_1494_component_2034-White" value="#FFF" aria-labelledby="captions-text-legend-vjs_video_1494_component_2034 captions-foreground-color-vjs_video_1494_component_2034 captions-foreground-color-vjs_video_1494_component_2034-White">White</option><option id="captions-foreground-color-vjs_video_1494_component_2034-Black" value="#000" aria-labelledby="captions-text-legend-vjs_video_1494_component_2034 captions-foreground-color-vjs_video_1494_component_2034 captions-foreground-color-vjs_video_1494_component_2034-Black">Black</option><option id="captions-foreground-color-vjs_video_1494_component_2034-Red" value="#F00" aria-labelledby="captions-text-legend-vjs_video_1494_component_2034 captions-foreground-color-vjs_video_1494_component_2034 captions-foreground-color-vjs_video_1494_component_2034-Red">Red</option><option id="captions-foreground-color-vjs_video_1494_component_2034-Green" value="#0F0" aria-labelledby="captions-text-legend-vjs_video_1494_component_2034 captions-foreground-color-vjs_video_1494_component_2034 captions-foreground-color-vjs_video_1494_component_2034-Green">Green</option><option id="captions-foreground-color-vjs_video_1494_component_2034-Blue" value="#00F" aria-labelledby="captions-text-legend-vjs_video_1494_component_2034 captions-foreground-color-vjs_video_1494_component_2034 captions-foreground-color-vjs_video_1494_component_2034-Blue">Blue</option><option id="captions-foreground-color-vjs_video_1494_component_2034-Yellow" value="#FF0" aria-labelledby="captions-text-legend-vjs_video_1494_component_2034 captions-foreground-color-vjs_video_1494_component_2034 captions-foreground-color-vjs_video_1494_component_2034-Yellow">Yellow</option><option id="captions-foreground-color-vjs_video_1494_component_2034-Magenta" value="#F0F" aria-labelledby="captions-text-legend-vjs_video_1494_component_2034 captions-foreground-color-vjs_video_1494_component_2034 captions-foreground-color-vjs_video_1494_component_2034-Magenta">Magenta</option><option id="captions-foreground-color-vjs_video_1494_component_2034-Cyan" value="#0FF" aria-labelledby="captions-text-legend-vjs_video_1494_component_2034 captions-foreground-color-vjs_video_1494_component_2034 captions-foreground-color-vjs_video_1494_component_2034-Cyan">Cyan</option></select></span><span class="vjs-text-opacity vjs-opacity"><label id="captions-foreground-opacity-vjs_video_1494_component_2034" class="vjs-label" for="vjs_select_2066">Opacity</label><select id="vjs_select_2066" aria-labelledby="captions-text-legend-vjs_video_1494_component_2034 captions-foreground-opacity-vjs_video_1494_component_2034"><option id="captions-foreground-opacity-vjs_video_1494_component_2034-Opaque" value="1" aria-labelledby="captions-text-legend-vjs_video_1494_component_2034 captions-foreground-opacity-vjs_video_1494_component_2034 captions-foreground-opacity-vjs_video_1494_component_2034-Opaque">Opaque</option><option id="captions-foreground-opacity-vjs_video_1494_component_2034-SemiTransparent" value="0.5" aria-labelledby="captions-text-legend-vjs_video_1494_component_2034 captions-foreground-opacity-vjs_video_1494_component_2034 captions-foreground-opacity-vjs_video_1494_component_2034-SemiTransparent">Semi-Transparent</option></select></span></fieldset><fieldset class="vjs-bg vjs-track-setting"><legend id="captions-background-vjs_video_1494_component_2034">Text Background</legend><span class="vjs-bg-color"><label id="captions-background-color-vjs_video_1494_component_2034" class="vjs-label" for="vjs_select_2076">Color</label><select id="vjs_select_2076" aria-labelledby="captions-background-vjs_video_1494_component_2034 captions-background-color-vjs_video_1494_component_2034"><option id="captions-background-color-vjs_video_1494_component_2034-Black" value="#000" aria-labelledby="captions-background-vjs_video_1494_component_2034 captions-background-color-vjs_video_1494_component_2034 captions-background-color-vjs_video_1494_component_2034-Black">Black</option><option id="captions-background-color-vjs_video_1494_component_2034-White" value="#FFF" aria-labelledby="captions-background-vjs_video_1494_component_2034 captions-background-color-vjs_video_1494_component_2034 captions-background-color-vjs_video_1494_component_2034-White">White</option><option id="captions-background-color-vjs_video_1494_component_2034-Red" value="#F00" aria-labelledby="captions-background-vjs_video_1494_component_2034 captions-background-color-vjs_video_1494_component_2034 captions-background-color-vjs_video_1494_component_2034-Red">Red</option><option id="captions-background-color-vjs_video_1494_component_2034-Green" value="#0F0" aria-labelledby="captions-background-vjs_video_1494_component_2034 captions-background-color-vjs_video_1494_component_2034 captions-background-color-vjs_video_1494_component_2034-Green">Green</option><option id="captions-background-color-vjs_video_1494_component_2034-Blue" value="#00F" aria-labelledby="captions-background-vjs_video_1494_component_2034 captions-background-color-vjs_video_1494_component_2034 captions-background-color-vjs_video_1494_component_2034-Blue">Blue</option><option id="captions-background-color-vjs_video_1494_component_2034-Yellow" value="#FF0" aria-labelledby="captions-background-vjs_video_1494_component_2034 captions-background-color-vjs_video_1494_component_2034 captions-background-color-vjs_video_1494_component_2034-Yellow">Yellow</option><option id="captions-background-color-vjs_video_1494_component_2034-Magenta" value="#F0F" aria-labelledby="captions-background-vjs_video_1494_component_2034 captions-background-color-vjs_video_1494_component_2034 captions-background-color-vjs_video_1494_component_2034-Magenta">Magenta</option><option id="captions-background-color-vjs_video_1494_component_2034-Cyan" value="#0FF" aria-labelledby="captions-background-vjs_video_1494_component_2034 captions-background-color-vjs_video_1494_component_2034 captions-background-color-vjs_video_1494_component_2034-Cyan">Cyan</option></select></span><span class="vjs-bg-opacity vjs-opacity"><label id="captions-background-opacity-vjs_video_1494_component_2034" class="vjs-label" for="vjs_select_2081">Opacity</label><select id="vjs_select_2081" aria-labelledby="captions-background-vjs_video_1494_component_2034 captions-background-opacity-vjs_video_1494_component_2034"><option id="captions-background-opacity-vjs_video_1494_component_2034-Opaque" value="1" aria-labelledby="captions-background-vjs_video_1494_component_2034 captions-background-opacity-vjs_video_1494_component_2034 captions-background-opacity-vjs_video_1494_component_2034-Opaque">Opaque</option><option id="captions-background-opacity-vjs_video_1494_component_2034-SemiTransparent" value="0.5" aria-labelledby="captions-background-vjs_video_1494_component_2034 captions-background-opacity-vjs_video_1494_component_2034 captions-background-opacity-vjs_video_1494_component_2034-SemiTransparent">Semi-Transparent</option><option id="captions-background-opacity-vjs_video_1494_component_2034-Transparent" value="0" aria-labelledby="captions-background-vjs_video_1494_component_2034 captions-background-opacity-vjs_video_1494_component_2034 captions-background-opacity-vjs_video_1494_component_2034-Transparent">Transparent</option></select></span></fieldset><fieldset class="vjs-window vjs-track-setting"><legend id="captions-window-vjs_video_1494_component_2034">Caption Area Background</legend><span class="vjs-window-color"><label id="captions-window-color-vjs_video_1494_component_2034" class="vjs-label" for="vjs_select_2091">Color</label><select id="vjs_select_2091" aria-labelledby="captions-window-vjs_video_1494_component_2034 captions-window-color-vjs_video_1494_component_2034"><option id="captions-window-color-vjs_video_1494_component_2034-Black" value="#000" aria-labelledby="captions-window-vjs_video_1494_component_2034 captions-window-color-vjs_video_1494_component_2034 captions-window-color-vjs_video_1494_component_2034-Black">Black</option><option id="captions-window-color-vjs_video_1494_component_2034-White" value="#FFF" aria-labelledby="captions-window-vjs_video_1494_component_2034 captions-window-color-vjs_video_1494_component_2034 captions-window-color-vjs_video_1494_component_2034-White">White</option><option id="captions-window-color-vjs_video_1494_component_2034-Red" value="#F00" aria-labelledby="captions-window-vjs_video_1494_component_2034 captions-window-color-vjs_video_1494_component_2034 captions-window-color-vjs_video_1494_component_2034-Red">Red</option><option id="captions-window-color-vjs_video_1494_component_2034-Green" value="#0F0" aria-labelledby="captions-window-vjs_video_1494_component_2034 captions-window-color-vjs_video_1494_component_2034 captions-window-color-vjs_video_1494_component_2034-Green">Green</option><option id="captions-window-color-vjs_video_1494_component_2034-Blue" value="#00F" aria-labelledby="captions-window-vjs_video_1494_component_2034 captions-window-color-vjs_video_1494_component_2034 captions-window-color-vjs_video_1494_component_2034-Blue">Blue</option><option id="captions-window-color-vjs_video_1494_component_2034-Yellow" value="#FF0" aria-labelledby="captions-window-vjs_video_1494_component_2034 captions-window-color-vjs_video_1494_component_2034 captions-window-color-vjs_video_1494_component_2034-Yellow">Yellow</option><option id="captions-window-color-vjs_video_1494_component_2034-Magenta" value="#F0F" aria-labelledby="captions-window-vjs_video_1494_component_2034 captions-window-color-vjs_video_1494_component_2034 captions-window-color-vjs_video_1494_component_2034-Magenta">Magenta</option><option id="captions-window-color-vjs_video_1494_component_2034-Cyan" value="#0FF" aria-labelledby="captions-window-vjs_video_1494_component_2034 captions-window-color-vjs_video_1494_component_2034 captions-window-color-vjs_video_1494_component_2034-Cyan">Cyan</option></select></span><span class="vjs-window-opacity vjs-opacity"><label id="captions-window-opacity-vjs_video_1494_component_2034" class="vjs-label" for="vjs_select_2096">Opacity</label><select id="vjs_select_2096" aria-labelledby="captions-window-vjs_video_1494_component_2034 captions-window-opacity-vjs_video_1494_component_2034"><option id="captions-window-opacity-vjs_video_1494_component_2034-Transparent" value="0" aria-labelledby="captions-window-vjs_video_1494_component_2034 captions-window-opacity-vjs_video_1494_component_2034 captions-window-opacity-vjs_video_1494_component_2034-Transparent">Transparent</option><option id="captions-window-opacity-vjs_video_1494_component_2034-SemiTransparent" value="0.5" aria-labelledby="captions-window-vjs_video_1494_component_2034 captions-window-opacity-vjs_video_1494_component_2034 captions-window-opacity-vjs_video_1494_component_2034-SemiTransparent">Semi-Transparent</option><option id="captions-window-opacity-vjs_video_1494_component_2034-Opaque" value="1" aria-labelledby="captions-window-vjs_video_1494_component_2034 captions-window-opacity-vjs_video_1494_component_2034 captions-window-opacity-vjs_video_1494_component_2034-Opaque">Opaque</option></select></span></fieldset></div><div class="vjs-track-settings-font"><fieldset class="vjs-font-percent vjs-track-setting"><legend id="captions-font-size-vjs_video_1494_component_2034">Font Size</legend><select id="vjs_select_2111" aria-labelledby="captions-font-size-vjs_video_1494_component_2034 captions-font-size-vjs_video_1494_component_2034"><option id="captions-font-size-vjs_video_1494_component_2034-50" value="0.50" aria-labelledby="captions-font-size-vjs_video_1494_component_2034 captions-font-size-vjs_video_1494_component_2034 captions-font-size-vjs_video_1494_component_2034-50">50%</option><option id="captions-font-size-vjs_video_1494_component_2034-75" value="0.75" aria-labelledby="captions-font-size-vjs_video_1494_component_2034 captions-font-size-vjs_video_1494_component_2034 captions-font-size-vjs_video_1494_component_2034-75">75%</option><option id="captions-font-size-vjs_video_1494_component_2034-100" value="1.00" aria-labelledby="captions-font-size-vjs_video_1494_component_2034 captions-font-size-vjs_video_1494_component_2034 captions-font-size-vjs_video_1494_component_2034-100">100%</option><option id="captions-font-size-vjs_video_1494_component_2034-125" value="1.25" aria-labelledby="captions-font-size-vjs_video_1494_component_2034 captions-font-size-vjs_video_1494_component_2034 captions-font-size-vjs_video_1494_component_2034-125">125%</option><option id="captions-font-size-vjs_video_1494_component_2034-150" value="1.50" aria-labelledby="captions-font-size-vjs_video_1494_component_2034 captions-font-size-vjs_video_1494_component_2034 captions-font-size-vjs_video_1494_component_2034-150">150%</option><option id="captions-font-size-vjs_video_1494_component_2034-175" value="1.75" aria-labelledby="captions-font-size-vjs_video_1494_component_2034 captions-font-size-vjs_video_1494_component_2034 captions-font-size-vjs_video_1494_component_2034-175">175%</option><option id="captions-font-size-vjs_video_1494_component_2034-200" value="2.00" aria-labelledby="captions-font-size-vjs_video_1494_component_2034 captions-font-size-vjs_video_1494_component_2034 captions-font-size-vjs_video_1494_component_2034-200">200%</option><option id="captions-font-size-vjs_video_1494_component_2034-300" value="3.00" aria-labelledby="captions-font-size-vjs_video_1494_component_2034 captions-font-size-vjs_video_1494_component_2034 captions-font-size-vjs_video_1494_component_2034-300">300%</option><option id="captions-font-size-vjs_video_1494_component_2034-400" value="4.00" aria-labelledby="captions-font-size-vjs_video_1494_component_2034 captions-font-size-vjs_video_1494_component_2034 captions-font-size-vjs_video_1494_component_2034-400">400%</option></select></fieldset><fieldset class="vjs-edge-style vjs-track-setting"><legend id="captions-background-vjs_video_1494_component_2034">Text Edge Style</legend><select id="vjs_select_2121" aria-labelledby="captions-background-vjs_video_1494_component_2034 vjs_video_1494_component_2034"><option id="vjs_video_1494_component_2034-None" value="none" aria-labelledby="captions-background-vjs_video_1494_component_2034 vjs_video_1494_component_2034 vjs_video_1494_component_2034-None">None</option><option id="vjs_video_1494_component_2034-Raised" value="raised" aria-labelledby="captions-background-vjs_video_1494_component_2034 vjs_video_1494_component_2034 vjs_video_1494_component_2034-Raised">Raised</option><option id="vjs_video_1494_component_2034-Depressed" value="depressed" aria-labelledby="captions-background-vjs_video_1494_component_2034 vjs_video_1494_component_2034 vjs_video_1494_component_2034-Depressed">Depressed</option><option id="vjs_video_1494_component_2034-Uniform" value="uniform" aria-labelledby="captions-background-vjs_video_1494_component_2034 vjs_video_1494_component_2034 vjs_video_1494_component_2034-Uniform">Uniform</option><option id="vjs_video_1494_component_2034-Dropshadow" value="dropshadow" aria-labelledby="captions-background-vjs_video_1494_component_2034 vjs_video_1494_component_2034 vjs_video_1494_component_2034-Dropshadow">Drop shadow</option></select></fieldset><fieldset class="vjs-font-family vjs-track-setting"><legend id="captions-font-family-vjs_video_1494_component_2034">Font Family</legend><select id="vjs_select_2131" aria-labelledby="captions-font-family-vjs_video_1494_component_2034 captions-font-family-vjs_video_1494_component_2034"><option id="captions-font-family-vjs_video_1494_component_2034-ProportionalSansSerif" value="proportionalSansSerif" aria-labelledby="captions-font-family-vjs_video_1494_component_2034 captions-font-family-vjs_video_1494_component_2034 captions-font-family-vjs_video_1494_component_2034-ProportionalSansSerif">Proportional Sans-Serif</option><option id="captions-font-family-vjs_video_1494_component_2034-MonospaceSansSerif" value="monospaceSansSerif" aria-labelledby="captions-font-family-vjs_video_1494_component_2034 captions-font-family-vjs_video_1494_component_2034 captions-font-family-vjs_video_1494_component_2034-MonospaceSansSerif">Monospace Sans-Serif</option><option id="captions-font-family-vjs_video_1494_component_2034-ProportionalSerif" value="proportionalSerif" aria-labelledby="captions-font-family-vjs_video_1494_component_2034 captions-font-family-vjs_video_1494_component_2034 captions-font-family-vjs_video_1494_component_2034-ProportionalSerif">Proportional Serif</option><option id="captions-font-family-vjs_video_1494_component_2034-MonospaceSerif" value="monospaceSerif" aria-labelledby="captions-font-family-vjs_video_1494_component_2034 captions-font-family-vjs_video_1494_component_2034 captions-font-family-vjs_video_1494_component_2034-MonospaceSerif">Monospace Serif</option><option id="captions-font-family-vjs_video_1494_component_2034-Casual" value="casual" aria-labelledby="captions-font-family-vjs_video_1494_component_2034 captions-font-family-vjs_video_1494_component_2034 captions-font-family-vjs_video_1494_component_2034-Casual">Casual</option><option id="captions-font-family-vjs_video_1494_component_2034-Script" value="script" aria-labelledby="captions-font-family-vjs_video_1494_component_2034 captions-font-family-vjs_video_1494_component_2034 captions-font-family-vjs_video_1494_component_2034-Script">Script</option><option id="captions-font-family-vjs_video_1494_component_2034-SmallCaps" value="small-caps" aria-labelledby="captions-font-family-vjs_video_1494_component_2034 captions-font-family-vjs_video_1494_component_2034 captions-font-family-vjs_video_1494_component_2034-SmallCaps">Small Caps</option></select></fieldset></div><div class="vjs-track-settings-controls"><button class="vjs-default-button" type="button" title="restore all settings to the default values" aria-disabled="false">Reset</button><button class="vjs-done-button" type="button" title="restore all settings to the default values" aria-disabled="false">Done</button></div></div><button class="vjs-close-button vjs-control vjs-button" type="button" title="Close Modal Dialog" aria-disabled="false"><span class="vjs-icon-placeholder" aria-hidden="true"></span><span class="vjs-control-text" aria-live="polite">Close Modal Dialog</span></button><p class="vjs-control-text">End of dialog window.</p></div><div class="vjs-player-info-modal vjs-modal-dialog vjs-hidden " tabindex="-1" aria-describedby="vjs_video_1494_component_2573_description" aria-hidden="true" aria-label="Player Information Dialog" role="dialog" aria-live="polite"><button class="vjs-close-button vjs-control vjs-button" type="button" title="Close Modal Dialog" aria-disabled="false"><span class="vjs-icon-placeholder" aria-hidden="true"></span><span class="vjs-control-text" aria-live="polite">Close Modal Dialog</span></button><p class="vjs-modal-dialog-description vjs-control-text" id="vjs_video_1494_component_2573_description">This is a modal window. This modal can be closed by pressing the Escape key or activating the close button.</p><div class="vjs-modal-dialog-content" role="document"></div></div></video-js></div><div class="post-icon-parent"><div class="post-icon__container post-icon--large"><span class="screen-reader-text">Video Duration 1 minutes 29 seconds </span><svg class="icon icon--play-arrow icon--white icon--16 post-icon__icon post-icon--play-arrow" viewBox="0 0 5 8" version="1.1" aria-hidden="true"><title>play-arrow</title><path fill="#FFF" fill-rule="evenodd" d="M.197 7.952A.39.39 0 0 1 0 7.61V.39C0 .247.076.114.197.048a.36.36 0 0 1 .384.018l5.25 3.61A.394.394 0 0 1 6 3.998a.394.394 0 0 1-.169.327l-5.25 3.61a.362.362 0 0 1-.384.016Z"></path></svg><span class="post-icon__text">1:29</span></div></div></div>
+<p></p></div>
+<p>						</p>
+<h2 id="what-do-major-sports-bodies-say-about-this-issue">What do major sports bodies say about this issue?</h2>
+<p>The International Olympic Committee revised its policies last year to give individual sports the authority to set participation criteria. At least 10 Olympic sports, including swimming, cycling and boxing, introduced restrictions for transgender athletes for the 2024 games.</p>
+<p>The US’s NCAA, for its part, has sport-specific testosterone limits for transgender women. The association has now said it will take steps to align its policy with Trump’s new directive, “subject to further guidance from the administration”.</p>
+<h2 id="what-do-women-s-sports-figures-say">What do women’s sports figures say?</h2>
+<p>Their views are divided. Some argue such a ban is necessary to maintain fairness in women’s sports, while others contend it unjustly discriminates against a minority community.</p>
+<p>Former British Olympian Sharron Davies, a swimmer who campaigns for women’s sports, claimed that “second-rate male athletes are self-identifying their way onto women’s podiums” and ruining grassroots sport in a foreword to a report by Policy Exchange, a UK conservative think tank, in 2024. Davies is also calling for the United Kingdom’s government to ban biological males from female amateur competitions as well as professional ones.</p><div class="container--ads in-article-ads"><div class="ads"><span class="ads__title"> Advertisement </span><div class="ads__slot"><div><div class="freestar-ads" id="div-gpt-ad-224923040210"></div></div></div></div></div>
+<p>Riley Gaines, a former college swimmer who is now an advocate for women’s sports, was one of those who attended Trump’s signing ceremony on Wednesday and said she welcomes the ban. She wrote on X: “Things could’ve been so different. Gender insanity was the final straw that brought a lot of moderates to the side of common sense.”</p>
+<div class="twitter-tweet twitter-tweet-rendered" style="display: flex; max-width: 550px; width: 100%; margin-top: 10px; margin-bottom: 10px;"><iframe id="twitter-widget-0" scrolling="no" frameborder="0" allowtransparency="true" allowfullscreen="true" class="" title="X Post" src="https://platform.twitter.com/embed/Tweet.html?dnt=false&amp;embedId=twitter-widget-0&amp;features=eyJ0ZndfdGltZWxpbmVfbGlzdCI6eyJidWNrZXQiOltdLCJ2ZXJzaW9uIjpudWxsfSwidGZ3X2ZvbGxvd2VyX2NvdW50X3N1bnNldCI6eyJidWNrZXQiOnRydWUsInZlcnNpb24iOm51bGx9LCJ0ZndfdHdlZXRfZWRpdF9iYWNrZW5kIjp7ImJ1Y2tldCI6Im9uIiwidmVyc2lvbiI6bnVsbH0sInRmd19yZWZzcmNfc2Vzc2lvbiI6eyJidWNrZXQiOiJvbiIsInZlcnNpb24iOm51bGx9LCJ0ZndfZm9zbnJfc29mdF9pbnRlcnZlbnRpb25zX2VuYWJsZWQiOnsiYnVja2V0Ijoib24iLCJ2ZXJzaW9uIjpudWxsfSwidGZ3X21peGVkX21lZGlhXzE1ODk3Ijp7ImJ1Y2tldCI6InRyZWF0bWVudCIsInZlcnNpb24iOm51bGx9LCJ0ZndfZXhwZXJpbWVudHNfY29va2llX2V4cGlyYXRpb24iOnsiYnVja2V0IjoxMjA5NjAwLCJ2ZXJzaW9uIjpudWxsfSwidGZ3X3Nob3dfYmlyZHdhdGNoX3Bpdm90c19lbmFibGVkIjp7ImJ1Y2tldCI6Im9uIiwidmVyc2lvbiI6bnVsbH0sInRmd19kdXBsaWNhdGVfc2NyaWJlc190b19zZXR0aW5ncyI6eyJidWNrZXQiOiJvbiIsInZlcnNpb24iOm51bGx9LCJ0ZndfdXNlX3Byb2ZpbGVfaW1hZ2Vfc2hhcGVfZW5hYmxlZCI6eyJidWNrZXQiOiJvbiIsInZlcnNpb24iOm51bGx9LCJ0ZndfdmlkZW9faGxzX2R5bmFtaWNfbWFuaWZlc3RzXzE1MDgyIjp7ImJ1Y2tldCI6InRydWVfYml0cmF0ZSIsInZlcnNpb24iOm51bGx9LCJ0ZndfbGVnYWN5X3RpbWVsaW5lX3N1bnNldCI6eyJidWNrZXQiOnRydWUsInZlcnNpb24iOm51bGx9LCJ0ZndfdHdlZXRfZWRpdF9mcm9udGVuZCI6eyJidWNrZXQiOiJvbiIsInZlcnNpb24iOm51bGx9fQ%3D%3D&amp;frame=false&amp;hideCard=false&amp;hideThread=false&amp;id=1887003666504098252&amp;lang=en&amp;origin=https%3A%2F%2Fwww.aljazeera.com%2Fnews%2F2025%2F2%2F7%2Fwhats-behind-trumps-ban-on-transgender-women-in-us-womens-sports&amp;sessionId=b6a848b670bdfa4ddded6396bedbb5c7b0750a4c&amp;theme=light&amp;widgetsVersion=2615f7e52b7e0%3A1702314776716&amp;width=550px" style="position: static; visibility: visible; width: 550px; height: 898px; display: block; flex-grow: 1;" data-tweet-id="1887003666504098252"></iframe></div>
+<p><script async="" src="https://platform.twitter.com/widgets.js"></script></p>
+<p>Fatima Goss Graves, president and CEO of the National Women’s Law Center, however, spoke out against the ban, saying it only served to alienate transgender women.</p>
+<p>“Contrary to what the president wants you to believe, trans students do not pose threats to sports, schools or this country, and they deserve the same opportunities as their peers to learn, play and grow up in safe environments,” she said.</p>
+<h2 id="what-do-lgbtq-and-other-rights-activists-say">What do LGBTQ and other rights activists say?</h2>
+<p>They have largely condemned the ban.</p>
+<p>GLAAD, an LGBTQ advocacy group, accused Trump’s administration of disingenuously using the protection of women as an excuse to erode transgender rights.</p>
+<p>“Anti-LGBTQ politicians with a record of abusing and silencing women and stripping their health care have zero credibility in any conversation about protecting women and girls,” the group said in a statement.</p><div class="container--ads in-article-ads"><div class="ads"><span class="ads__title"> Advertisement </span><div class="ads__slot"><div><div class="freestar-ads" id="div-gpt-ad-240353618448"></div></div></div></div></div>
+<p>Athlete Ally, another pro-LGBTQ organisation, said it was saddened that trans youth would “no longer be able to know the joy of playing sports as their full and authentic selves”.</p>
+<p>“We’ve known this day was likely to occur for a long time, as this administration continues to pursue simple solutions to complex issues, often resulting in animus towards the most marginalised communities in our country,” the group said in a statement.</p>
+<p>		</p>
+<div style="display:block;position:relative;min-width:0px;max-width:770px">
+<div class="video-player-facade-container"><div class="aj-video-player in-article-bc-video-player aj-parsed-component"><video-js data-video-id="6308208335112" class="video-js vjs-paused vjs-controls-enabled vjs-workinghover vjs-v8 vjs-user-active bc-player-6tKQRAx7lu_default bc-player-6tKQRAx7lu_default-index-2 vjs-mouse vjs-ad-controls vjs-ima3-html5 vjs-plugins-ready pause-controller vjs-player-info vjs-contextmenu-ui vjs-viewability vjs-errors vjs-quality-menu vjs-hide-controls vjs-layout-large" playsinline="true" id="vjs_video_2952" tabindex="-1" role="region" lang="en" translate="no" aria-label="Video Player"><video id="vjs_video_2952_html5_api" class="vjs-tech" preload="none" playsinline="playsinline" poster="https://cf-images.eu-west-1.prod.boltdns.net/v1/static/665003303001/ffdf0f1d-d408-44a1-a939-12e156b1487f/53f80d1f-91f2-4d80-bec0-3f5811f19eb0/1920x1080/match/image.jpg" src="blob:https://www.aljazeera.com/e12b1b26-af0c-4698-bcca-04c4a22f90c8"></video><div class="vjs-poster" aria-disabled="false"><picture class="vjs-poster" tabindex="-1"><img loading="lazy" alt="" src="https://cf-images.eu-west-1.prod.boltdns.net/v1/static/665003303001/ffdf0f1d-d408-44a1-a939-12e156b1487f/53f80d1f-91f2-4d80-bec0-3f5811f19eb0/1920x1080/match/image.jpg"></picture></div><div class="vjs-title-bar vjs-hidden"><div class="vjs-title-bar-title" id="vjs-title-bar-title-3039"></div><div class="vjs-title-bar-description" id="vjs-title-bar-description-3040"></div></div><div class="vjs-text-track-display" translate="yes" aria-live="off" aria-atomic="true"><div style="position: absolute; inset: 0px; margin: 1.5%;"></div></div><div class="vjs-loading-spinner" dir="ltr"><span class="vjs-control-text">Video Player is loading.</span></div><div class="vjs-ima3-ad-container"></div><button class="vjs-big-play-button" type="button" title="Play Video" aria-disabled="false"><span class="vjs-icon-placeholder" aria-hidden="true"></span><span class="vjs-control-text" aria-live="polite">Play Video</span></button><div class="vjs-control-bar" dir="ltr"><button class="vjs-play-control vjs-control vjs-button" type="button" title="Play" aria-disabled="false"><span class="vjs-icon-placeholder" aria-hidden="true"></span><span class="vjs-control-text" aria-live="polite">Play</span></button><button class="vjs-skip-backward-undefined vjs-control vjs-button vjs-hidden" type="button" title="Skip Backward" aria-disabled="false"><span class="vjs-icon-placeholder" aria-hidden="true"></span><span class="vjs-control-text" aria-live="polite">Skip Backward</span></button><button class="vjs-skip-forward-undefined vjs-control vjs-button vjs-hidden" type="button" title="Skip Forward" aria-disabled="false"><span class="vjs-icon-placeholder" aria-hidden="true"></span><span class="vjs-control-text" aria-live="polite">Skip Forward</span></button><div class="vjs-volume-panel vjs-control vjs-volume-panel-horizontal"><button class="vjs-mute-control vjs-control vjs-button vjs-vol-3" type="button" title="Mute" aria-disabled="false"><span class="vjs-icon-placeholder" aria-hidden="true"></span><span class="vjs-control-text" aria-live="polite">Mute</span></button><div class="vjs-volume-control vjs-control vjs-volume-horizontal"><div tabindex="0" class="vjs-volume-bar vjs-slider-bar vjs-slider vjs-slider-horizontal" role="slider" aria-valuenow="100" aria-valuemin="0" aria-valuemax="100" aria-label="Volume Level" aria-live="polite" aria-valuetext="100%"><div class="vjs-mouse-display"><div class="vjs-volume-tooltip" aria-hidden="true"></div></div><div class="vjs-volume-level" style="width: 100%;"><span class="vjs-control-text"></span></div></div></div></div><div class="vjs-current-time vjs-time-control vjs-control"><span class="vjs-control-text" role="presentation">Current Time&nbsp;</span><span class="vjs-current-time-display" role="presentation">0:00</span></div><div class="vjs-time-control vjs-time-divider" aria-hidden="true"><div><span>/</span></div></div><div class="vjs-duration vjs-time-control vjs-control"><span class="vjs-control-text" role="presentation">Duration&nbsp;</span><span class="vjs-duration-display" role="presentation">0:00</span></div><div class="vjs-progress-control vjs-control"><div tabindex="0" class="vjs-progress-holder vjs-slider vjs-slider-horizontal" role="slider" aria-valuenow="0.00" aria-valuemin="0" aria-valuemax="100" aria-label="Progress Bar" aria-valuetext="0:00 of 0:00"><div class="vjs-load-progress" style="width: 0%;"><span class="vjs-control-text"><span>Loaded</span>: <span class="vjs-control-text-loaded-percentage">0.00%</span></span><div data-start="0" data-end="0" style="left: 0%; width: 0%;"></div></div><div class="vjs-mouse-display"><div class="vjs-time-tooltip" aria-hidden="true"></div></div><div class="vjs-play-progress vjs-slider-bar" aria-hidden="true" style="width: 0%;"><div class="vjs-time-tooltip" aria-hidden="true" style="right: 0px;">0:00</div></div></div></div><div class="vjs-live-control vjs-control vjs-hidden"><div class="vjs-live-display" aria-live="off"><span class="vjs-control-text">Stream Type&nbsp;</span>LIVE</div></div><button class="vjs-seek-to-live-control vjs-control" type="button" title="Seek to live, currently behind live" aria-disabled="false"><span class="vjs-icon-placeholder" aria-hidden="true"></span><span class="vjs-control-text" aria-live="polite">Seek to live, currently behind live</span><span class="vjs-seek-to-live-text" aria-hidden="true">LIVE</span></button><div class="vjs-remaining-time vjs-time-control vjs-control"><span class="vjs-control-text" role="presentation">Remaining Time&nbsp;</span><span aria-hidden="true">-</span><span class="vjs-remaining-time-display" role="presentation">0:00</span></div><div class="vjs-custom-control-spacer vjs-spacer ">&nbsp;</div><div class="vjs-playback-rate vjs-menu-button vjs-menu-button-popup vjs-control vjs-button vjs-hidden"><div class="vjs-playback-rate-value" id="vjs-playback-rate-value-label-vjs_video_2952_component_3285">1x</div><button class="vjs-playback-rate vjs-menu-button vjs-menu-button-popup vjs-button" type="button" aria-disabled="false" title="Playback Rate" aria-haspopup="true" aria-expanded="false" aria-describedby="vjs-playback-rate-value-label-vjs_video_2952_component_3285"><span class="vjs-icon-placeholder" aria-hidden="true"></span><span class="vjs-control-text" aria-live="polite">Playback Rate</span></button><div class="vjs-menu"><ul class="vjs-menu-content"></ul></div></div><div class="vjs-chapters-button vjs-menu-button vjs-menu-button-popup vjs-control vjs-button vjs-hidden"><button class="vjs-chapters-button vjs-menu-button vjs-menu-button-popup vjs-button" type="button" aria-disabled="false" title="Chapters" aria-haspopup="true" aria-expanded="false"><span class="vjs-icon-placeholder" aria-hidden="true"></span><span class="vjs-control-text" aria-live="polite">Chapters</span></button><div class="vjs-menu"><ul class="vjs-menu-content"><li class="vjs-menu-title" tabindex="-1">Chapters</li></ul></div></div><div class="vjs-descriptions-button vjs-menu-button vjs-menu-button-popup vjs-control vjs-button vjs-hidden"><button class="vjs-descriptions-button vjs-menu-button vjs-menu-button-popup vjs-button" type="button" aria-disabled="false" title="Descriptions" aria-haspopup="true" aria-expanded="false"><span class="vjs-icon-placeholder" aria-hidden="true"></span><span class="vjs-control-text" aria-live="polite">Descriptions</span></button><div class="vjs-menu"><ul class="vjs-menu-content"><li class="vjs-menu-item vjs-selected" tabindex="-1" role="menuitemradio" aria-disabled="false" aria-checked="true"><span class="vjs-menu-item-text">descriptions off</span><span class="vjs-control-text" aria-live="polite">, selected</span></li></ul></div></div><div class="vjs-subs-caps-button vjs-menu-button vjs-menu-button-popup vjs-control vjs-button vjs-hidden"><button class="vjs-subs-caps-button vjs-menu-button vjs-menu-button-popup vjs-button" type="button" aria-disabled="false" title="Captions" aria-haspopup="true" aria-expanded="false"><span class="vjs-icon-placeholder" aria-hidden="true"></span><span class="vjs-control-text" aria-live="polite">Captions</span></button><div class="vjs-menu"><ul class="vjs-menu-content"><li class="vjs-menu-item vjs-texttrack-settings" tabindex="-1" role="menuitem" aria-disabled="false"><span class="vjs-menu-item-text">captions settings</span><span class="vjs-control-text" aria-live="polite">, opens captions settings dialog</span></li><li class="vjs-menu-item vjs-selected" tabindex="-1" role="menuitemradio" aria-disabled="false" aria-checked="true"><span class="vjs-menu-item-text">captions off</span><span class="vjs-control-text" aria-live="polite">, selected</span></li></ul></div></div><div class="vjs-quality-menu-wrapper vjs-menu-button vjs-menu-button-popup vjs-control vjs-button vjs-hidden" aria-label="Quality Levels"><button class="vjs-quality-menu-button vjs-menu-button vjs-menu-button-popup vjs-button" type="button" aria-disabled="false" aria-haspopup="true" aria-expanded="false" title="Quality Levels"><span class="vjs-icon-placeholder" aria-hidden="true"></span><span class="vjs-control-text" aria-live="polite">Quality Levels</span></button><div class="vjs-menu"><ul class="vjs-menu-content"></ul></div></div><div class="vjs-audio-button vjs-menu-button vjs-menu-button-popup vjs-control vjs-button vjs-hidden"><button class="vjs-audio-button vjs-menu-button vjs-menu-button-popup vjs-button" type="button" aria-disabled="false" title="Audio Track" aria-haspopup="true" aria-expanded="false"><span class="vjs-icon-placeholder" aria-hidden="true"></span><span class="vjs-control-text" aria-live="polite">Audio Track</span></button><div class="vjs-menu"><ul class="vjs-menu-content"></ul></div></div><button class="vjs-fullscreen-control vjs-control vjs-button" type="button" title="Fullscreen" aria-disabled="false"><span class="vjs-icon-placeholder" aria-hidden="true"></span><span class="vjs-control-text" aria-live="polite">Fullscreen</span></button></div><div class="vjs-error-display vjs-modal-dialog vjs-hidden " tabindex="-1" aria-describedby="vjs_video_2952_component_3486_description" aria-hidden="true" aria-label="Modal Window" role="dialog" aria-live="polite"><p class="vjs-modal-dialog-description vjs-control-text" id="vjs_video_2952_component_3486_description">This is a modal window.</p><div class="vjs-modal-dialog-content" role="document"></div></div><div class="vjs-modal-dialog vjs-hidden  vjs-text-track-settings" tabindex="-1" aria-describedby="vjs_video_2952_component_3492_description" aria-hidden="true" aria-label="Caption Settings Dialog" role="dialog" aria-live="polite"><p class="vjs-modal-dialog-description vjs-control-text" id="vjs_video_2952_component_3492_description">Beginning of dialog window. Escape will cancel and close the window.</p><div class="vjs-modal-dialog-content" role="document"><div class="vjs-track-settings-colors"><fieldset class="vjs-fg vjs-track-setting"><legend id="captions-text-legend-vjs_video_2952_component_3492">Text</legend><span class="vjs-text-color"><label id="captions-foreground-color-vjs_video_2952_component_3492" class="vjs-label" for="vjs_select_3519">Color</label><select id="vjs_select_3519" aria-labelledby="captions-text-legend-vjs_video_2952_component_3492 captions-foreground-color-vjs_video_2952_component_3492"><option id="captions-foreground-color-vjs_video_2952_component_3492-White" value="#FFF" aria-labelledby="captions-text-legend-vjs_video_2952_component_3492 captions-foreground-color-vjs_video_2952_component_3492 captions-foreground-color-vjs_video_2952_component_3492-White">White</option><option id="captions-foreground-color-vjs_video_2952_component_3492-Black" value="#000" aria-labelledby="captions-text-legend-vjs_video_2952_component_3492 captions-foreground-color-vjs_video_2952_component_3492 captions-foreground-color-vjs_video_2952_component_3492-Black">Black</option><option id="captions-foreground-color-vjs_video_2952_component_3492-Red" value="#F00" aria-labelledby="captions-text-legend-vjs_video_2952_component_3492 captions-foreground-color-vjs_video_2952_component_3492 captions-foreground-color-vjs_video_2952_component_3492-Red">Red</option><option id="captions-foreground-color-vjs_video_2952_component_3492-Green" value="#0F0" aria-labelledby="captions-text-legend-vjs_video_2952_component_3492 captions-foreground-color-vjs_video_2952_component_3492 captions-foreground-color-vjs_video_2952_component_3492-Green">Green</option><option id="captions-foreground-color-vjs_video_2952_component_3492-Blue" value="#00F" aria-labelledby="captions-text-legend-vjs_video_2952_component_3492 captions-foreground-color-vjs_video_2952_component_3492 captions-foreground-color-vjs_video_2952_component_3492-Blue">Blue</option><option id="captions-foreground-color-vjs_video_2952_component_3492-Yellow" value="#FF0" aria-labelledby="captions-text-legend-vjs_video_2952_component_3492 captions-foreground-color-vjs_video_2952_component_3492 captions-foreground-color-vjs_video_2952_component_3492-Yellow">Yellow</option><option id="captions-foreground-color-vjs_video_2952_component_3492-Magenta" value="#F0F" aria-labelledby="captions-text-legend-vjs_video_2952_component_3492 captions-foreground-color-vjs_video_2952_component_3492 captions-foreground-color-vjs_video_2952_component_3492-Magenta">Magenta</option><option id="captions-foreground-color-vjs_video_2952_component_3492-Cyan" value="#0FF" aria-labelledby="captions-text-legend-vjs_video_2952_component_3492 captions-foreground-color-vjs_video_2952_component_3492 captions-foreground-color-vjs_video_2952_component_3492-Cyan">Cyan</option></select></span><span class="vjs-text-opacity vjs-opacity"><label id="captions-foreground-opacity-vjs_video_2952_component_3492" class="vjs-label" for="vjs_select_3524">Opacity</label><select id="vjs_select_3524" aria-labelledby="captions-text-legend-vjs_video_2952_component_3492 captions-foreground-opacity-vjs_video_2952_component_3492"><option id="captions-foreground-opacity-vjs_video_2952_component_3492-Opaque" value="1" aria-labelledby="captions-text-legend-vjs_video_2952_component_3492 captions-foreground-opacity-vjs_video_2952_component_3492 captions-foreground-opacity-vjs_video_2952_component_3492-Opaque">Opaque</option><option id="captions-foreground-opacity-vjs_video_2952_component_3492-SemiTransparent" value="0.5" aria-labelledby="captions-text-legend-vjs_video_2952_component_3492 captions-foreground-opacity-vjs_video_2952_component_3492 captions-foreground-opacity-vjs_video_2952_component_3492-SemiTransparent">Semi-Transparent</option></select></span></fieldset><fieldset class="vjs-bg vjs-track-setting"><legend id="captions-background-vjs_video_2952_component_3492">Text Background</legend><span class="vjs-bg-color"><label id="captions-background-color-vjs_video_2952_component_3492" class="vjs-label" for="vjs_select_3534">Color</label><select id="vjs_select_3534" aria-labelledby="captions-background-vjs_video_2952_component_3492 captions-background-color-vjs_video_2952_component_3492"><option id="captions-background-color-vjs_video_2952_component_3492-Black" value="#000" aria-labelledby="captions-background-vjs_video_2952_component_3492 captions-background-color-vjs_video_2952_component_3492 captions-background-color-vjs_video_2952_component_3492-Black">Black</option><option id="captions-background-color-vjs_video_2952_component_3492-White" value="#FFF" aria-labelledby="captions-background-vjs_video_2952_component_3492 captions-background-color-vjs_video_2952_component_3492 captions-background-color-vjs_video_2952_component_3492-White">White</option><option id="captions-background-color-vjs_video_2952_component_3492-Red" value="#F00" aria-labelledby="captions-background-vjs_video_2952_component_3492 captions-background-color-vjs_video_2952_component_3492 captions-background-color-vjs_video_2952_component_3492-Red">Red</option><option id="captions-background-color-vjs_video_2952_component_3492-Green" value="#0F0" aria-labelledby="captions-background-vjs_video_2952_component_3492 captions-background-color-vjs_video_2952_component_3492 captions-background-color-vjs_video_2952_component_3492-Green">Green</option><option id="captions-background-color-vjs_video_2952_component_3492-Blue" value="#00F" aria-labelledby="captions-background-vjs_video_2952_component_3492 captions-background-color-vjs_video_2952_component_3492 captions-background-color-vjs_video_2952_component_3492-Blue">Blue</option><option id="captions-background-color-vjs_video_2952_component_3492-Yellow" value="#FF0" aria-labelledby="captions-background-vjs_video_2952_component_3492 captions-background-color-vjs_video_2952_component_3492 captions-background-color-vjs_video_2952_component_3492-Yellow">Yellow</option><option id="captions-background-color-vjs_video_2952_component_3492-Magenta" value="#F0F" aria-labelledby="captions-background-vjs_video_2952_component_3492 captions-background-color-vjs_video_2952_component_3492 captions-background-color-vjs_video_2952_component_3492-Magenta">Magenta</option><option id="captions-background-color-vjs_video_2952_component_3492-Cyan" value="#0FF" aria-labelledby="captions-background-vjs_video_2952_component_3492 captions-background-color-vjs_video_2952_component_3492 captions-background-color-vjs_video_2952_component_3492-Cyan">Cyan</option></select></span><span class="vjs-bg-opacity vjs-opacity"><label id="captions-background-opacity-vjs_video_2952_component_3492" class="vjs-label" for="vjs_select_3539">Opacity</label><select id="vjs_select_3539" aria-labelledby="captions-background-vjs_video_2952_component_3492 captions-background-opacity-vjs_video_2952_component_3492"><option id="captions-background-opacity-vjs_video_2952_component_3492-Opaque" value="1" aria-labelledby="captions-background-vjs_video_2952_component_3492 captions-background-opacity-vjs_video_2952_component_3492 captions-background-opacity-vjs_video_2952_component_3492-Opaque">Opaque</option><option id="captions-background-opacity-vjs_video_2952_component_3492-SemiTransparent" value="0.5" aria-labelledby="captions-background-vjs_video_2952_component_3492 captions-background-opacity-vjs_video_2952_component_3492 captions-background-opacity-vjs_video_2952_component_3492-SemiTransparent">Semi-Transparent</option><option id="captions-background-opacity-vjs_video_2952_component_3492-Transparent" value="0" aria-labelledby="captions-background-vjs_video_2952_component_3492 captions-background-opacity-vjs_video_2952_component_3492 captions-background-opacity-vjs_video_2952_component_3492-Transparent">Transparent</option></select></span></fieldset><fieldset class="vjs-window vjs-track-setting"><legend id="captions-window-vjs_video_2952_component_3492">Caption Area Background</legend><span class="vjs-window-color"><label id="captions-window-color-vjs_video_2952_component_3492" class="vjs-label" for="vjs_select_3549">Color</label><select id="vjs_select_3549" aria-labelledby="captions-window-vjs_video_2952_component_3492 captions-window-color-vjs_video_2952_component_3492"><option id="captions-window-color-vjs_video_2952_component_3492-Black" value="#000" aria-labelledby="captions-window-vjs_video_2952_component_3492 captions-window-color-vjs_video_2952_component_3492 captions-window-color-vjs_video_2952_component_3492-Black">Black</option><option id="captions-window-color-vjs_video_2952_component_3492-White" value="#FFF" aria-labelledby="captions-window-vjs_video_2952_component_3492 captions-window-color-vjs_video_2952_component_3492 captions-window-color-vjs_video_2952_component_3492-White">White</option><option id="captions-window-color-vjs_video_2952_component_3492-Red" value="#F00" aria-labelledby="captions-window-vjs_video_2952_component_3492 captions-window-color-vjs_video_2952_component_3492 captions-window-color-vjs_video_2952_component_3492-Red">Red</option><option id="captions-window-color-vjs_video_2952_component_3492-Green" value="#0F0" aria-labelledby="captions-window-vjs_video_2952_component_3492 captions-window-color-vjs_video_2952_component_3492 captions-window-color-vjs_video_2952_component_3492-Green">Green</option><option id="captions-window-color-vjs_video_2952_component_3492-Blue" value="#00F" aria-labelledby="captions-window-vjs_video_2952_component_3492 captions-window-color-vjs_video_2952_component_3492 captions-window-color-vjs_video_2952_component_3492-Blue">Blue</option><option id="captions-window-color-vjs_video_2952_component_3492-Yellow" value="#FF0" aria-labelledby="captions-window-vjs_video_2952_component_3492 captions-window-color-vjs_video_2952_component_3492 captions-window-color-vjs_video_2952_component_3492-Yellow">Yellow</option><option id="captions-window-color-vjs_video_2952_component_3492-Magenta" value="#F0F" aria-labelledby="captions-window-vjs_video_2952_component_3492 captions-window-color-vjs_video_2952_component_3492 captions-window-color-vjs_video_2952_component_3492-Magenta">Magenta</option><option id="captions-window-color-vjs_video_2952_component_3492-Cyan" value="#0FF" aria-labelledby="captions-window-vjs_video_2952_component_3492 captions-window-color-vjs_video_2952_component_3492 captions-window-color-vjs_video_2952_component_3492-Cyan">Cyan</option></select></span><span class="vjs-window-opacity vjs-opacity"><label id="captions-window-opacity-vjs_video_2952_component_3492" class="vjs-label" for="vjs_select_3554">Opacity</label><select id="vjs_select_3554" aria-labelledby="captions-window-vjs_video_2952_component_3492 captions-window-opacity-vjs_video_2952_component_3492"><option id="captions-window-opacity-vjs_video_2952_component_3492-Transparent" value="0" aria-labelledby="captions-window-vjs_video_2952_component_3492 captions-window-opacity-vjs_video_2952_component_3492 captions-window-opacity-vjs_video_2952_component_3492-Transparent">Transparent</option><option id="captions-window-opacity-vjs_video_2952_component_3492-SemiTransparent" value="0.5" aria-labelledby="captions-window-vjs_video_2952_component_3492 captions-window-opacity-vjs_video_2952_component_3492 captions-window-opacity-vjs_video_2952_component_3492-SemiTransparent">Semi-Transparent</option><option id="captions-window-opacity-vjs_video_2952_component_3492-Opaque" value="1" aria-labelledby="captions-window-vjs_video_2952_component_3492 captions-window-opacity-vjs_video_2952_component_3492 captions-window-opacity-vjs_video_2952_component_3492-Opaque">Opaque</option></select></span></fieldset></div><div class="vjs-track-settings-font"><fieldset class="vjs-font-percent vjs-track-setting"><legend id="captions-font-size-vjs_video_2952_component_3492">Font Size</legend><select id="vjs_select_3569" aria-labelledby="captions-font-size-vjs_video_2952_component_3492 captions-font-size-vjs_video_2952_component_3492"><option id="captions-font-size-vjs_video_2952_component_3492-50" value="0.50" aria-labelledby="captions-font-size-vjs_video_2952_component_3492 captions-font-size-vjs_video_2952_component_3492 captions-font-size-vjs_video_2952_component_3492-50">50%</option><option id="captions-font-size-vjs_video_2952_component_3492-75" value="0.75" aria-labelledby="captions-font-size-vjs_video_2952_component_3492 captions-font-size-vjs_video_2952_component_3492 captions-font-size-vjs_video_2952_component_3492-75">75%</option><option id="captions-font-size-vjs_video_2952_component_3492-100" value="1.00" aria-labelledby="captions-font-size-vjs_video_2952_component_3492 captions-font-size-vjs_video_2952_component_3492 captions-font-size-vjs_video_2952_component_3492-100">100%</option><option id="captions-font-size-vjs_video_2952_component_3492-125" value="1.25" aria-labelledby="captions-font-size-vjs_video_2952_component_3492 captions-font-size-vjs_video_2952_component_3492 captions-font-size-vjs_video_2952_component_3492-125">125%</option><option id="captions-font-size-vjs_video_2952_component_3492-150" value="1.50" aria-labelledby="captions-font-size-vjs_video_2952_component_3492 captions-font-size-vjs_video_2952_component_3492 captions-font-size-vjs_video_2952_component_3492-150">150%</option><option id="captions-font-size-vjs_video_2952_component_3492-175" value="1.75" aria-labelledby="captions-font-size-vjs_video_2952_component_3492 captions-font-size-vjs_video_2952_component_3492 captions-font-size-vjs_video_2952_component_3492-175">175%</option><option id="captions-font-size-vjs_video_2952_component_3492-200" value="2.00" aria-labelledby="captions-font-size-vjs_video_2952_component_3492 captions-font-size-vjs_video_2952_component_3492 captions-font-size-vjs_video_2952_component_3492-200">200%</option><option id="captions-font-size-vjs_video_2952_component_3492-300" value="3.00" aria-labelledby="captions-font-size-vjs_video_2952_component_3492 captions-font-size-vjs_video_2952_component_3492 captions-font-size-vjs_video_2952_component_3492-300">300%</option><option id="captions-font-size-vjs_video_2952_component_3492-400" value="4.00" aria-labelledby="captions-font-size-vjs_video_2952_component_3492 captions-font-size-vjs_video_2952_component_3492 captions-font-size-vjs_video_2952_component_3492-400">400%</option></select></fieldset><fieldset class="vjs-edge-style vjs-track-setting"><legend id="captions-background-vjs_video_2952_component_3492">Text Edge Style</legend><select id="vjs_select_3579" aria-labelledby="captions-background-vjs_video_2952_component_3492 vjs_video_2952_component_3492"><option id="vjs_video_2952_component_3492-None" value="none" aria-labelledby="captions-background-vjs_video_2952_component_3492 vjs_video_2952_component_3492 vjs_video_2952_component_3492-None">None</option><option id="vjs_video_2952_component_3492-Raised" value="raised" aria-labelledby="captions-background-vjs_video_2952_component_3492 vjs_video_2952_component_3492 vjs_video_2952_component_3492-Raised">Raised</option><option id="vjs_video_2952_component_3492-Depressed" value="depressed" aria-labelledby="captions-background-vjs_video_2952_component_3492 vjs_video_2952_component_3492 vjs_video_2952_component_3492-Depressed">Depressed</option><option id="vjs_video_2952_component_3492-Uniform" value="uniform" aria-labelledby="captions-background-vjs_video_2952_component_3492 vjs_video_2952_component_3492 vjs_video_2952_component_3492-Uniform">Uniform</option><option id="vjs_video_2952_component_3492-Dropshadow" value="dropshadow" aria-labelledby="captions-background-vjs_video_2952_component_3492 vjs_video_2952_component_3492 vjs_video_2952_component_3492-Dropshadow">Drop shadow</option></select></fieldset><fieldset class="vjs-font-family vjs-track-setting"><legend id="captions-font-family-vjs_video_2952_component_3492">Font Family</legend><select id="vjs_select_3589" aria-labelledby="captions-font-family-vjs_video_2952_component_3492 captions-font-family-vjs_video_2952_component_3492"><option id="captions-font-family-vjs_video_2952_component_3492-ProportionalSansSerif" value="proportionalSansSerif" aria-labelledby="captions-font-family-vjs_video_2952_component_3492 captions-font-family-vjs_video_2952_component_3492 captions-font-family-vjs_video_2952_component_3492-ProportionalSansSerif">Proportional Sans-Serif</option><option id="captions-font-family-vjs_video_2952_component_3492-MonospaceSansSerif" value="monospaceSansSerif" aria-labelledby="captions-font-family-vjs_video_2952_component_3492 captions-font-family-vjs_video_2952_component_3492 captions-font-family-vjs_video_2952_component_3492-MonospaceSansSerif">Monospace Sans-Serif</option><option id="captions-font-family-vjs_video_2952_component_3492-ProportionalSerif" value="proportionalSerif" aria-labelledby="captions-font-family-vjs_video_2952_component_3492 captions-font-family-vjs_video_2952_component_3492 captions-font-family-vjs_video_2952_component_3492-ProportionalSerif">Proportional Serif</option><option id="captions-font-family-vjs_video_2952_component_3492-MonospaceSerif" value="monospaceSerif" aria-labelledby="captions-font-family-vjs_video_2952_component_3492 captions-font-family-vjs_video_2952_component_3492 captions-font-family-vjs_video_2952_component_3492-MonospaceSerif">Monospace Serif</option><option id="captions-font-family-vjs_video_2952_component_3492-Casual" value="casual" aria-labelledby="captions-font-family-vjs_video_2952_component_3492 captions-font-family-vjs_video_2952_component_3492 captions-font-family-vjs_video_2952_component_3492-Casual">Casual</option><option id="captions-font-family-vjs_video_2952_component_3492-Script" value="script" aria-labelledby="captions-font-family-vjs_video_2952_component_3492 captions-font-family-vjs_video_2952_component_3492 captions-font-family-vjs_video_2952_component_3492-Script">Script</option><option id="captions-font-family-vjs_video_2952_component_3492-SmallCaps" value="small-caps" aria-labelledby="captions-font-family-vjs_video_2952_component_3492 captions-font-family-vjs_video_2952_component_3492 captions-font-family-vjs_video_2952_component_3492-SmallCaps">Small Caps</option></select></fieldset></div><div class="vjs-track-settings-controls"><button class="vjs-default-button" type="button" title="restore all settings to the default values" aria-disabled="false">Reset</button><button class="vjs-done-button" type="button" title="restore all settings to the default values" aria-disabled="false">Done</button></div></div><button class="vjs-close-button vjs-control vjs-button" type="button" title="Close Modal Dialog" aria-disabled="false"><span class="vjs-icon-placeholder" aria-hidden="true"></span><span class="vjs-control-text" aria-live="polite">Close Modal Dialog</span></button><p class="vjs-control-text">End of dialog window.</p></div><div class="vjs-player-info-modal vjs-modal-dialog vjs-hidden " tabindex="-1" aria-describedby="vjs_video_2952_component_4045_description" aria-hidden="true" aria-label="Player Information Dialog" role="dialog" aria-live="polite"><button class="vjs-close-button vjs-control vjs-button" type="button" title="Close Modal Dialog" aria-disabled="false"><span class="vjs-icon-placeholder" aria-hidden="true"></span><span class="vjs-control-text" aria-live="polite">Close Modal Dialog</span></button><p class="vjs-modal-dialog-description vjs-control-text" id="vjs_video_2952_component_4045_description">This is a modal window. This modal can be closed by pressing the Escape key or activating the close button.</p><div class="vjs-modal-dialog-content" role="document"></div></div></video-js></div><div class="post-icon-parent"><div class="post-icon__container post-icon--large"><span class="screen-reader-text">Video Duration 2 minutes 07 seconds </span><svg class="icon icon--play-arrow icon--white icon--16 post-icon__icon post-icon--play-arrow" viewBox="0 0 5 8" version="1.1" aria-hidden="true"><title>play-arrow</title><path fill="#FFF" fill-rule="evenodd" d="M.197 7.952A.39.39 0 0 1 0 7.61V.39C0 .247.076.114.197.048a.36.36 0 0 1 .384.018l5.25 3.61A.394.394 0 0 1 6 3.998a.394.394 0 0 1-.169.327l-5.25 3.61a.362.362 0 0 1-.384.016Z"></path></svg><span class="post-icon__text">2:07</span></div></div></div>
+<p></p></div>
+<p>						</p>
+</div>
+
+remove all other- js, css, and html styling - just store pure text in "content" field in database. Clear that filed before storing from existing content. 
+Please ask if something is not clear, do not assume. 
+
+# ################# 
+I want to make sure I fully understand your requirements before proceeding. Here are a few questions:
+
+1. **Script Structure & Logic:**  
+   Should the new script for the **pt_aljazeera** schema follow the exact same structure, logging, error handling (including retries, status updates, and sleep intervals), and database update logic as the existing **pt_abc** script—except that it will target the **pt_aljazeera** schema and use the updated content extraction?
+
+Yes.
+
+2. **Target Element & Extraction:**  
+   For the article pages, you mentioned that we need to extract text from the  
+   ```html
+   <div class="wysiwyg wysiwyg--all-content" aria-live="polite" aria-atomic="true">
+   ```  
+   element.  
+   - Should we simply use BeautifulSoup’s `get_text()` on that element to obtain the “pure text” (thus stripping out any JS, CSS, or HTML styling)?  YES.
+   - In cases where that element isn’t found, do you want to handle the error the same way as in the pt_abc script (for example, marking the status with an error code like "NO_DIV" or a similar designation)? YES.
+
+3. **Clearing the Content Field:**  
+   When you say “Clear that field before storing from existing content,” do you mean that for each article we should explicitly set the **content** field to an empty string (or null) before writing the newly extracted text? YES. Is this intended to ensure that any old or partial data is removed prior to updating? YES.
+
+4. **Additional Customizations:**  
+   Are there any other differences in behavior or processing that you would like for the pt_aljazeera version compared to the pt_abc version, or is it solely the change in schema and the new target extraction element? No, its solely the change in schema and the new target extraction element.
 
-import sqlalchemy as sa
-from sqlalchemy import CheckConstraint, Index, UniqueConstraint, PrimaryKeyConstraint
-from sqlalchemy.dialects.postgresql import UUID, ARRAY, JSONB, TIMESTAMP, TSVECTOR
-from sqlalchemy.ext.declarative import declarative_base
-
-Base = declarative_base()
-
-# ────────────────────────────────────────────── Public Schema ──────────────────────────────────────────────
-
-class NewsPortal(Base):
-    __tablename__ = 'news_portals'
-    __table_args__ = (
-        Index('idx_portal_status', 'active_status'),
-        Index('idx_portal_prefix', 'portal_prefix'),
-        {'schema': 'public'}
-    )
-
-    portal_id = sa.Column(UUID(as_uuid=True), primary_key=True,
-                          server_default=sa.text("gen_random_uuid()"))
-    portal_prefix = sa.Column(sa.String(50), nullable=False, unique=True)
-    name = sa.Column(sa.String(255), nullable=False)
-    base_url = sa.Column(sa.Text, nullable=False)
-    rss_url = sa.Column(sa.Text)
-    scraping_enabled = sa.Column(sa.Boolean, server_default=sa.text("true"))
-    portal_language = sa.Column(sa.String(50))
-    timezone = sa.Column(sa.String(50), server_default=sa.text("'UTC'"))
-    active_status = sa.Column(sa.Boolean, server_default=sa.text("true"))
-    scraping_frequency_minutes = sa.Column(sa.Integer, server_default=sa.text("60"))
-    last_scraped_at = sa.Column(TIMESTAMP(timezone=True))
-
-
-# ───────────────────────────────────── Dynamic Portal Models (Categories & Articles) ─────────────────────────────
-
-def create_portal_category_model(schema: str):
-    return type(
-        f'Category_{schema}',
-        (Base,),
-        {
-            '__tablename__': 'categories',
-            '__table_args__': (
-                UniqueConstraint('slug', 'portal_id', name=f'uq_{schema}_categories_slug_portal_id'),
-                Index(f'idx_{schema}_category_path', 'path', postgresql_using='btree'),
-                Index(f'idx_{schema}_category_portal', 'portal_id'),
-                {'schema': schema}
-            ),
-            'category_id': sa.Column(UUID(as_uuid=True), primary_key=True, server_default=sa.text("gen_random_uuid()")),
-            'name': sa.Column(sa.String(255), nullable=False),
-            'slug': sa.Column(sa.String(255), nullable=False),
-            'portal_id': sa.Column(UUID(as_uuid=True), nullable=False),
-            'path': sa.Column(sa.Text, nullable=False),
-            'level': sa.Column(sa.Integer, nullable=False),
-            'description': sa.Column(sa.Text),
-            'link': sa.Column(sa.Text),
-            'atom_link': sa.Column(sa.Text),
-            'is_active': sa.Column(sa.Boolean, server_default=sa.text("true"))
-        }
-    )
-
-def create_portal_article_model(schema: str):
-    return type(
-        f'Article_{schema}',
-        (Base,),
-        {
-            '__tablename__': 'articles',
-           '__table_args__': (
-                Index(f'idx_{schema}_articles_pub_date', 'pub_date'),
-                Index(f'idx_{schema}_articles_category', 'category_id'),
-                sa.ForeignKeyConstraint(
-                    ['category_id'], 
-                    [f'{schema}.categories.category_id'],
-                    name=f'fk_{schema}_article_category'
-                ),
-                {'schema': schema}
-            ),
-            'article_id': sa.Column(UUID(as_uuid=True), primary_key=True, server_default=sa.text("gen_random_uuid()")),
-            'title': sa.Column(sa.Text, nullable=False),
-            'url': sa.Column(sa.Text, nullable=False),
-            'guid': sa.Column(sa.Text, unique=True),
-            'description': sa.Column(sa.Text),
-            'content': sa.Column(sa.Text),
-            'author': sa.Column(ARRAY(sa.Text)),
-            'pub_date': sa.Column(TIMESTAMP(timezone=True)),            
-            'category_id': sa.Column(UUID(as_uuid=True), nullable=False),            
-            'keywords': sa.Column(ARRAY(sa.Text)),
-            'reading_time_minutes': sa.Column(sa.Integer),
-            'language_code': sa.Column(sa.String(10)),
-            'image_url': sa.Column(sa.Text),
-            'sentiment_score': sa.Column(sa.Float, CheckConstraint('sentiment_score BETWEEN -1 AND 1')),
-            'share_count': sa.Column(sa.Integer, server_default=sa.text("0")),
-            'view_count': sa.Column(sa.Integer, server_default=sa.text("0")),
-            'comment_count': sa.Column(sa.Integer, server_default=sa.text("0"))
-        }
-    )
-    
-# ────────────────────────────────────────────── Dynamic Portal Model (Article Status) ───────────────────────────────────────────────
-
-def create_portal_article_status_model(schema: str):
-    return type(
-        f'ArticleStatus_{schema}',
-        (Base,),
-        {
-            '__tablename__': 'article_status',
-            '__table_args__': (
-                Index(f'idx_{schema}_article_status_url', 'url'),
-                {'schema': schema}
-            ),
-            # Primary key (UUID for consistency with your other models)
-            'status_id': sa.Column(UUID(as_uuid=True), primary_key=True, server_default=sa.text("gen_random_uuid()")),
-            # Article URL to be tracked; uniqueness ensures that you don’t re‑fetch the same URL
-            'url': sa.Column(sa.Text, nullable=False, unique=True),
-            # Timestamp when the HTML was successfully fetched
-            'fetched_at': sa.Column(TIMESTAMP(timezone=True), nullable=False),
-            # Optionally, record when the article has been parsed.
-            # If this remains NULL then the article’s content is not yet processed.
-            'parsed_at': sa.Column(TIMESTAMP(timezone=True)),
-            # New field to track publication date, similar to the articles table.
-            'pub_date': sa.Column(TIMESTAMP(timezone=True))
-        }
-    )
-
-
-
-# ────────────────────────────────────────────── Events Schema ───────────────────────────────────────────────
-
-class Event(Base):
-    __tablename__ = 'events'
-    __table_args__ = (
-        Index('idx_events_temporal', 'start_time', 'end_time'),
-        Index('idx_events_status', 'status'),
-        Index('idx_events_type', 'event_type'),
-        {'schema': 'events'}
-    )
-
-    event_id = sa.Column(UUID(as_uuid=True), primary_key=True,
-                         server_default=sa.text("gen_random_uuid()"))
-    title = sa.Column(sa.Text, nullable=False)
-    description = sa.Column(sa.Text)
-    start_time = sa.Column(TIMESTAMP(timezone=True), nullable=False)
-    end_time = sa.Column(TIMESTAMP(timezone=True))
-    event_type = sa.Column(sa.String(50), nullable=False)
-    importance_level = sa.Column(sa.Integer, CheckConstraint('importance_level BETWEEN 1 AND 5'))
-    geographic_scope = sa.Column(sa.String(50))
-    tags = sa.Column(ARRAY(sa.Text))
-    sentiment_score = sa.Column(sa.Float, CheckConstraint('sentiment_score BETWEEN -1 AND 1'))
-    status = sa.Column(sa.String(50), nullable=False, server_default=sa.text("'active'"))
-    parent_event_id = sa.Column(UUID(as_uuid=True),
-                                sa.ForeignKey('events.events.event_id', ondelete='CASCADE'))
-
-
-class EventArticle(Base):
-    __tablename__ = 'event_articles'
-    __table_args__ = {'schema': 'events'}
-
-    event_id = sa.Column(UUID(as_uuid=True),
-                         sa.ForeignKey('events.events.event_id', ondelete='CASCADE'),
-                         primary_key=True)
-    article_id = sa.Column(UUID(as_uuid=True), primary_key=True,
-                           server_default=sa.text("gen_random_uuid()"))
-    portal_id = sa.Column(UUID(as_uuid=True),
-                          sa.ForeignKey('public.news_portals.portal_id', ondelete='CASCADE'),
-                          primary_key=True)
-    similarity_score = sa.Column(sa.Float, CheckConstraint('similarity_score BETWEEN 0 AND 1'))
-    context_summary = sa.Column(sa.Text)
-
-
-class TimelineEntry(Base):
-    __tablename__ = 'timeline_entries'
-    __table_args__ = (
-        PrimaryKeyConstraint('entry_id', 'entry_timestamp'),
-        Index('idx_timeline_event', 'event_id'),
-        {'schema': 'events'}
-    )
-
-    entry_id = sa.Column(UUID(as_uuid=True),
-                         server_default=sa.text("gen_random_uuid()"))
-    event_id = sa.Column(UUID(as_uuid=True),
-                         sa.ForeignKey('events.events.event_id', ondelete='CASCADE'))
-    article_id = sa.Column(UUID(as_uuid=True), nullable=False)
-    portal_id = sa.Column(UUID(as_uuid=True),
-                          sa.ForeignKey('public.news_portals.portal_id', ondelete='CASCADE'))
-    entry_timestamp = sa.Column(TIMESTAMP(timezone=True), nullable=False)
-    entry_type = sa.Column(sa.String(50), nullable=False)
-    summary = sa.Column(sa.Text, nullable=False)
-    impact_level = sa.Column(sa.Integer, CheckConstraint('impact_level BETWEEN 1 AND 5'))
-
-
-# ────────────────────────────────────────────── Comments Schema ───────────────────────────────────────────────
-
-class Comment(Base):
-    __tablename__ = 'comments'
-    __table_args__ = (
-        Index('idx_comments_article', 'article_id', 'portal_id'),
-        Index('idx_comments_hierarchy', 'parent_comment_id', 'root_comment_id'),
-        Index('idx_comments_path', 'thread_path', postgresql_using='btree'),  
-        Index('idx_comments_temporal', 'posted_at'),
-        Index('idx_comments_author', 'author_id'),
-        {'schema': 'comments'}
-    )
-
-    # Assuming “comment_id” is the primary key.
-    comment_id = sa.Column(sa.Text, primary_key=True)
-    article_id = sa.Column(UUID(as_uuid=True), nullable=False)
-    portal_id = sa.Column(UUID(as_uuid=True),
-                          sa.ForeignKey('public.news_portals.portal_id', ondelete='CASCADE'))
-    content = sa.Column(sa.Text, nullable=False)
-    content_html = sa.Column(sa.Text)
-    author_id = sa.Column(sa.Text)
-    author_name = sa.Column(sa.Text)
-    parent_comment_id = sa.Column(sa.Text,
-                                  sa.ForeignKey('comments.comments.comment_id', ondelete='CASCADE'))
-    root_comment_id = sa.Column(sa.Text)
-    reply_level = sa.Column(sa.Integer, server_default=sa.text("0"))
-    thread_path = sa.Column(sa.Text)  # Stored as ltree in the DB.
-    likes_count = sa.Column(sa.Integer, server_default=sa.text("0"))
-    replies_count = sa.Column(sa.Integer, server_default=sa.text("0"))
-    sentiment_score = sa.Column(sa.Float, CheckConstraint('sentiment_score BETWEEN -1 AND 1'))
-    is_spam = sa.Column(sa.Boolean, server_default=sa.text("false"))
-    posted_at = sa.Column(TIMESTAMP(timezone=True), nullable=False)
-
-
-class ArticleCommentStats(Base):
-    __tablename__ = 'article_comment_stats'
-    __table_args__ = {'schema': 'comments'}
-
-    article_id = sa.Column(UUID(as_uuid=True), primary_key=True)
-    portal_id = sa.Column(UUID(as_uuid=True),
-                          sa.ForeignKey('public.news_portals.portal_id', ondelete='CASCADE'),
-                          primary_key=True)
-    total_comments_count = sa.Column(sa.Integer, server_default=sa.text("0"))
-    top_level_comments_count = sa.Column(sa.Integer, server_default=sa.text("0"))
-    reply_comments_count = sa.Column(sa.Integer, server_default=sa.text("0"))
-    total_likes_count = sa.Column(sa.Integer, server_default=sa.text("0"))
-    overall_sentiment_score = sa.Column(sa.Float, CheckConstraint('overall_sentiment_score BETWEEN -1 AND 1'))
-    last_comment_at = sa.Column(TIMESTAMP(timezone=True))
-
-
-# ────────────────────────────────────────────── Topics Schema ───────────────────────────────────────────────
-
-class TopicCategory(Base):
-    __tablename__ = 'topic_categories'
-    __table_args__ = {'schema': 'topics'}
-
-    category_id = sa.Column(UUID(as_uuid=True), primary_key=True,
-                            server_default=sa.text("gen_random_uuid()"))
-    name = sa.Column(sa.String(255), nullable=False)
-    slug = sa.Column(sa.String(255), nullable=False, unique=True)
-    description = sa.Column(sa.Text)
-    display_order = sa.Column(sa.Integer)
-    status = sa.Column(sa.String(50), nullable=False, server_default=sa.text("'active'"))
-
-
-class Topic(Base):
-    __tablename__ = 'topics'
-    __table_args__ = (
-        UniqueConstraint('slug', 'path', name='uq_topics_slug_path'),
-        CheckConstraint(
-            "((parent_topic_id IS NULL AND level = 1) OR (parent_topic_id IS NOT NULL AND level > 1))",
-            name="valid_hierarchy"
-        ),
-        {'schema': 'topics'}
-    )
-
-    topic_id = sa.Column(sa.Integer, primary_key=True, autoincrement=True)
-    category_id = sa.Column(UUID(as_uuid=True),
-                            sa.ForeignKey('topics.topic_categories.category_id', ondelete='CASCADE'),
-                            server_default=sa.text("gen_random_uuid()"))
-    name = sa.Column(sa.String(255), nullable=False)
-    slug = sa.Column(sa.String(255), nullable=False)
-    description = sa.Column(sa.Text)
-    parent_topic_id = sa.Column(sa.Integer,
-                                sa.ForeignKey('topics.topics.topic_id'))
-    path = sa.Column(sa.Text, nullable=False)  # ltree type stored as TEXT.
-    level = sa.Column(sa.Integer, nullable=False)
-    keywords = sa.Column(ARRAY(sa.Text))
-    importance_score = sa.Column(sa.Float, CheckConstraint('importance_score BETWEEN 0 AND 1'))
-    article_count = sa.Column(sa.Integer, server_default=sa.text("0"))
-    status = sa.Column(sa.String(50), nullable=False, server_default=sa.text("'active'"))
-
-
-class TopicContent(Base):
-    __tablename__ = 'topic_content'
-    __table_args__ = (
-        UniqueConstraint('topic_id', 'content_type', 'content_id', name='uq_topic_content'),
-        Index('idx_topic_content_type', 'content_type'),
-        Index('idx_topic_content_relevance', 'relevance_score'),
-        {'schema': 'topics'}
-    )
-
-    topic_id = sa.Column(sa.Integer,
-                         sa.ForeignKey('topics.topics.topic_id', ondelete='CASCADE'),
-                         primary_key=True)
-    content_type = sa.Column(
-        sa.String(50),
-        nullable=False,
-        info={'check': "content_type IN ('article', 'event', 'comment')"}
-    )
-    content_id = sa.Column(sa.Text, nullable=False, primary_key=True)
-    portal_id = sa.Column(UUID(as_uuid=True),
-                          sa.ForeignKey('public.news_portals.portal_id', ondelete='CASCADE'))
-    relevance_score = sa.Column(sa.Float, CheckConstraint('relevance_score BETWEEN 0 AND 1'))
-
-
-# ────────────────────────────────────────────── Analysis Schema ───────────────────────────────────────────────
-
-class SentimentLexicon(Base):
-    __tablename__ = 'sentiment_lexicon'
-    __table_args__ = (
-        UniqueConstraint('word', name='uq_sentiment_lexicon_word'),
-        Index('idx_lexicon_word', 'word'),
-        Index('idx_lexicon_language', 'language_code'),
-        Index('idx_lexicon_score', 'base_score'),
-        {'schema': 'analysis'}
-    )
-
-    word_id = sa.Column(sa.Integer, primary_key=True, autoincrement=True)
-    word = sa.Column(sa.String(255), nullable=False)
-    language_code = sa.Column(sa.String(10), nullable=False, server_default=sa.text("'en'"))
-    base_score = sa.Column(sa.Float, CheckConstraint('base_score BETWEEN -1 AND 1'), nullable=False)
-
-
-
-class ContentAnalysis(Base):
-    __tablename__ = 'content_analysis'
-    __table_args__ = (
-        UniqueConstraint('source_type', 'source_id', name='uq_content_analysis_source'),
-        Index('idx_content_source', 'source_type', 'source_id'),
-        Index('idx_content_sentiment', 'overall_sentiment_score'),
-        Index('idx_content_temporal', 'analyzed_at'),
-        {'schema': 'analysis'}
-    )
-
-    content_id = sa.Column(sa.Integer, primary_key=True, autoincrement=True)
-    source_type = sa.Column(
-        sa.String(50),
-        nullable=False,
-        info={'check': "source_type IN ('article', 'comment', 'title', 'summary')"}
-    )
-    source_id = sa.Column(sa.Text, nullable=False)
-    portal_id = sa.Column(UUID(as_uuid=True),
-                          sa.ForeignKey('public.news_portals.portal_id', ondelete='CASCADE'))
-    content_length = sa.Column(sa.Integer)
-    language_code = sa.Column(sa.String(10))
-    readability_score = sa.Column(sa.Float)
-    overall_sentiment_score = sa.Column(sa.Float, CheckConstraint('overall_sentiment_score BETWEEN -1 AND 1'))
-    extracted_keywords = sa.Column(ARRAY(sa.Text))
-    main_topics = sa.Column(ARRAY(sa.Text))
-    named_entities = sa.Column(JSONB)
-    analyzed_at = sa.Column(TIMESTAMP(timezone=True), server_default=sa.text("CURRENT_TIMESTAMP"))
-
-
-class ContentStatistics(Base):
-    __tablename__ = 'content_statistics'
-    __table_args__ = (
-        UniqueConstraint('source_type', 'source_id', 'time_bucket', name='uq_content_statistics'),
-        Index('idx_stats_temporal', 'time_bucket'),
-        Index('idx_stats_source', 'source_type', 'source_id'),
-        {'schema': 'analysis'}
-    )
-
-    stat_id = sa.Column(sa.Integer, primary_key=True, autoincrement=True)
-    source_type = sa.Column(sa.String(50), nullable=False)
-    source_id = sa.Column(sa.Text, nullable=False)
-    time_bucket = sa.Column(TIMESTAMP(timezone=True), nullable=False)
-    word_count = sa.Column(sa.Integer)
-    view_count = sa.Column(sa.Integer)
-    completion_rate = sa.Column(sa.Float)
-    keyword_density = sa.Column(JSONB)
-
-
-# ────────────────────────────────────────────── Social Schema ───────────────────────────────────────────────
-
-class Platform(Base):
-    __tablename__ = 'platforms'
-    __table_args__ = {'schema': 'social'}
-
-    platform_id = sa.Column(sa.Integer, primary_key=True, autoincrement=True)
-    name = sa.Column(sa.String(50), nullable=False, unique=True)
-    enabled = sa.Column(sa.Boolean, server_default=sa.text("true"))
-    api_version = sa.Column(sa.String(50))
-    rate_limits = sa.Column(JSONB)
-    auth_config = sa.Column(JSONB)
-
-
-class Post(Base):
-    __tablename__ = 'posts'
-    __table_args__ = (
-        Index('idx_posts_article', 'article_id', 'portal_id'),
-        Index('idx_posts_platform', 'platform_id', 'posted_at'),
-        Index('idx_posts_temporal', 'posted_at'),
-        Index('idx_posts_author', 'author_platform_id'),
-        {'schema': 'social'}
-    )
-
-    post_id = sa.Column(sa.Text, primary_key=True)
-    platform_id = sa.Column(sa.Integer,
-                            sa.ForeignKey('social.platforms.platform_id', ondelete='CASCADE'))
-    article_id = sa.Column(UUID(as_uuid=True), nullable=False)
-    portal_id = sa.Column(UUID(as_uuid=True),
-                          sa.ForeignKey('public.news_portals.portal_id', ondelete='CASCADE'))
-    content = sa.Column(sa.Text, nullable=False)
-    content_type = sa.Column(
-        sa.String(50),
-        info={'check': "content_type IN ('text', 'image', 'video', 'link', 'mixed')"}
-    )
-    language_code = sa.Column(sa.String(10))
-    urls = sa.Column(ARRAY(sa.Text))
-    author_platform_id = sa.Column(sa.Text)
-    author_username = sa.Column(sa.Text)
-    likes_count = sa.Column(sa.Integer, server_default=sa.text("0"))
-    shares_count = sa.Column(sa.Integer, server_default=sa.text("0"))
-    replies_count = sa.Column(sa.Integer, server_default=sa.text("0"))
-    sentiment_score = sa.Column(sa.Float, CheckConstraint('sentiment_score BETWEEN -1 AND 1'))
-    posted_at = sa.Column(TIMESTAMP(timezone=True), nullable=False)
-
-
-class ArticleSocialMetrics(Base):
-    __tablename__ = 'article_social_metrics'
-    __table_args__ = (
-        PrimaryKeyConstraint('article_id', 'portal_id', 'platform_id'),
-        Index('idx_metrics_temporal', 'last_activity_at'),
-        {'schema': 'social'}
-    )
-
-    article_id = sa.Column(UUID(as_uuid=True), nullable=False)
-    portal_id = sa.Column(UUID(as_uuid=True),
-                          sa.ForeignKey('public.news_portals.portal_id', ondelete='CASCADE'),
-                          nullable=False)
-    platform_id = sa.Column(sa.Integer,
-                            sa.ForeignKey('social.platforms.platform_id', ondelete='CASCADE'),
-                            nullable=False)
-    total_posts_count = sa.Column(sa.Integer, server_default=sa.text("0"))
-    total_likes_count = sa.Column(sa.Integer, server_default=sa.text("0"))
-    total_shares_count = sa.Column(sa.Integer, server_default=sa.text("0"))
-    total_replies_count = sa.Column(sa.Integer, server_default=sa.text("0"))
-    overall_sentiment_score = sa.Column(sa.Float, CheckConstraint('overall_sentiment_score BETWEEN -1 AND 1'))
-    first_posted_at = sa.Column(TIMESTAMP(timezone=True))
-    last_activity_at = sa.Column(TIMESTAMP(timezone=True))
-
-
-# ────────────────────────────────────────────── Entities Schema ───────────────────────────────────────────────
-
-class Entity(Base):
-    __tablename__ = 'entities'
-    __table_args__ = (
-        UniqueConstraint('normalized_name', 'entity_type', name='uq_entities_normalized_name_type'),
-        Index('idx_entities_type', 'entity_type'),
-        Index('idx_entities_status', 'status'),
-        Index('idx_entities_normalized_name', 'normalized_name'),
-        Index('idx_entities_temporal', 'last_seen_at'),
-                {'schema': 'entities'}
-    )
-
-    entity_id = sa.Column(sa.Integer, primary_key=True, autoincrement=True)
-    name = sa.Column(sa.String(255), nullable=False)
-    normalized_name = sa.Column(sa.String(255), nullable=False)
-    entity_type = sa.Column(
-        sa.String(50),
-        nullable=False,
-        info={'check': "entity_type IN ('person', 'organization', 'location', 'product', 'event', 'concept')"}
-    )
-    status = sa.Column(
-        sa.String(50),
-        nullable=False,
-        server_default=sa.text("'active'"),
-        info={'check': "status IN ('active', 'inactive', 'merged', 'archived')"}
-    )
-    description = sa.Column(sa.Text)
-    aliases = sa.Column(ARRAY(sa.Text))
-    importance_score = sa.Column(sa.Float, CheckConstraint('importance_score BETWEEN 0 AND 1'))
-    sentiment_score = sa.Column(sa.Float, CheckConstraint('sentiment_score BETWEEN -1 AND 1'))
-    mention_count = sa.Column(sa.Integer, server_default=sa.text("0"))
-    first_seen_at = sa.Column(TIMESTAMP(timezone=True))
-    last_seen_at = sa.Column(TIMESTAMP(timezone=True))
-    search_vector = sa.Column(TSVECTOR)
-
-
-class EntityRelationship(Base):
-    __tablename__ = 'entity_relationships'
-    __table_args__ = (
-        PrimaryKeyConstraint('source_entity_id', 'target_entity_id', 'relationship_type'),
-        CheckConstraint('source_entity_id <> target_entity_id', name='chk_no_self_relationship'),
-        Index('idx_entity_relationships_type', 'relationship_type'),
-        {'schema': 'entities'}
-    )
-
-    source_entity_id = sa.Column(sa.Integer,
-                                 sa.ForeignKey('entities.entities.entity_id', ondelete='CASCADE'),
-                                 nullable=False)
-    target_entity_id = sa.Column(sa.Integer,
-                                 sa.ForeignKey('entities.entities.entity_id', ondelete='CASCADE'),
-                                 nullable=False)
-    relationship_type = sa.Column(
-        sa.String(50),
-        nullable=False,
-        info={'check': "relationship_type IN ('parent_of', 'child_of', 'related_to', 'member_of', 'located_in')"}
-    )
-    strength = sa.Column(sa.Float, CheckConstraint('strength BETWEEN 0 AND 1'))
-
-
-class EntityMention(Base):
-    __tablename__ = 'entity_mentions'
-    __table_args__ = (
-        UniqueConstraint('entity_id', 'content_type', 'content_id', name='uq_entity_mentions'),
-        Index('idx_entity_mentions_content', 'content_type', 'content_id'),
-        {'schema': 'entities'}
-    )
-
-    mention_id = sa.Column(sa.Integer, primary_key=True, autoincrement=True)
-    entity_id = sa.Column(sa.Integer,
-                          sa.ForeignKey('entities.entities.entity_id', ondelete='CASCADE'),
-                          nullable=False)
-    content_type = sa.Column(
-        sa.String(50),
-        nullable=False,
-        info={'check': "content_type IN ('article', 'comment')"}
-    )
-    content_id = sa.Column(sa.Text, nullable=False)
-    portal_id = sa.Column(UUID(as_uuid=True),
-                          sa.ForeignKey('public.news_portals.portal_id', ondelete='CASCADE'))
-    context_snippet = sa.Column(sa.Text)
-    sentiment_score = sa.Column(sa.Float, CheckConstraint('sentiment_score BETWEEN -1 AND 1'))
-
-
-# ────────────────────────────────────────────── Engine Setup Example ─────────────────────────────────────────────
-
-if __name__ == '__main__':
-    # Example: create an engine and create all tables (if needed)
-    engine = sa.create_engine("postgresql+psycopg2://user:password@localhost:5432/your_database")
-    
-    Base.metadata.create_all(engine)
-
-    # Example: instantiate dynamic models for a given portal schema (e.g. "portal1")
-    Portal1Category = create_portal_category_model("portal1")
-    Portal1Article = create_portal_article_model("portal1")
-    # Now you can use Portal1Category and Portal1Article as normal ORM classes.
-
-#### Rules for processing
-
-Now I  need new script, which uses similar elements like above script (db connection, same model etc..) that will overwrite current content of "content" field in table pt_abc.articles and replace it with content fetched from HTML page which should be fetched from "link" field. 
-
-# Procedure on how to define what links should be fetched
-
-Compar that list with what is already fetched and parsed  which is stored in status table for each schema - those urls should be skipped:
-
-CREATE TABLE IF NOT EXISTS pt_abc.article_status
-(
-    status_id uuid NOT NULL DEFAULT gen_random_uuid(),
-    url text COLLATE pg_catalog."default" NOT NULL,
-    fetched_at timestamp with time zone NOT NULL,
-    parsed_at timestamp with time zone,
-    pub_date timestamp with time zone,
-    CONSTRAINT article_status_pkey PRIMARY KEY (status_id),
-    CONSTRAINT article_status_url_key UNIQUE (url)
-)
-
-
-And this is articles table:
--- Table: pt_abc.articles
-
--- DROP TABLE IF EXISTS pt_abc.articles;
-
-CREATE TABLE IF NOT EXISTS pt_abc.articles
-(
-    article_id uuid NOT NULL DEFAULT gen_random_uuid(),
-    title text COLLATE pg_catalog."default" NOT NULL,
-    url text COLLATE pg_catalog."default" NOT NULL,
-    guid text COLLATE pg_catalog."default",
-    description text COLLATE pg_catalog."default",
-    content text COLLATE pg_catalog."default",
-    author text[] COLLATE pg_catalog."default",
-    pub_date timestamp with time zone,
-    category_id uuid NOT NULL,
-    keywords text[] COLLATE pg_catalog."default",
-    reading_time_minutes integer,
-    language_code character varying(10) COLLATE pg_catalog."default",
-    image_url text COLLATE pg_catalog."default",
-    sentiment_score double precision,
-    share_count integer DEFAULT 0,
-    view_count integer DEFAULT 0,
-    comment_count integer DEFAULT 0,
-    CONSTRAINT articles_pkey PRIMARY KEY (article_id),
-    CONSTRAINT articles_guid_key UNIQUE (guid),
-    CONSTRAINT fk_pt_abc_article_category FOREIGN KEY (category_id)
-        REFERENCES pt_abc.categories (category_id) MATCH SIMPLE
-        ON UPDATE NO ACTION
-        ON DELETE NO ACTION,
-    CONSTRAINT articles_sentiment_score_check CHECK (sentiment_score >= '-1'::integer::double precision AND sentiment_score <= 1::double precision)
-)
-
-So, Script needs to select urls in 
-SELECT url, pub_date FROM pt_abc.articles;
-And than from
-SELECT status_id, url, pub_date, fetched_at, parsed_at FROM pt_abc.article_status;
-
-If url and pub_date is same in both tables and fetched_at and parsed_at exist - do nothing.
-If url and pub_date is same in both table but fetched_at does not exits or parsed_at does not exists -  fetch and parse table again (add url in list for parsing).
-If url exists but pub_date is different -  fetch and parse table again (add url in list for parsing).
-Initially article_status is empty. Generally - if there is no record for link in article_status that means that link needs to be fetched. 
-
-
-for each url that needs to be fetched and parsed; open url page, find content which is in:
-
-<div class="xvlfx ZRifP TKoO eaKKC EcdEg bOdfO qXhdi NFNeu UyHES " data-testid="prism-article-body"><p class="EkqkG IGXmU nlgHS yuUao MvWXB TjIXL aGjvy ebVHC "><span class="oyrPY qlwaB AGxeB  ">NEW ORLEANS -- </span>As a student, <a class="zZygg UbGlr iFzkS qdXbA WCDhQ DbOXS tqUtK GpWVU iJYzE " data-testid="prism-linkbase" href="https://apnews.com/hub/donald-trump">Donald Trump</a> played high school football. As a business baron, he <a class="zZygg UbGlr iFzkS qdXbA WCDhQ DbOXS tqUtK GpWVU iJYzE " data-testid="prism-linkbase" href="https://apnews.com/events-united-states-presidential-election-dbbed546a30048798c3377c66cd50f4f">owned a team</a> in an upstart rival to the NFL and then sued the established league. As president, he <a class="zZygg UbGlr iFzkS qdXbA WCDhQ DbOXS tqUtK GpWVU iJYzE " data-testid="prism-linkbase" href="https://apnews.com/article/7e3fcc1d5c2446098652affae9e6322a">denigrated pros</a> who took a knee during the national anthem as part of a social justice movement.</p><p class="EkqkG IGXmU nlgHS yuUao lqtkC TjIXL aGjvy ">He added to that complicated history with the sport on Sunday by becoming the <a class="zZygg UbGlr iFzkS qdXbA WCDhQ DbOXS tqUtK GpWVU iJYzE " data-testid="prism-linkbase" href="https://apnews.com/article/trump-attends-super-bowl-ae879e4f0a905b103e9059245f2887e2">first president in office to attend a Super Bowl.</a></p><p class="EkqkG IGXmU nlgHS yuUao lqtkC TjIXL aGjvy ">After flying from Florida to New Orleans, the Republican president met with participants in the honorary coin toss after he arrived at the Superdome, including relatives of victims of a deadly <a class="zZygg UbGlr iFzkS qdXbA WCDhQ DbOXS tqUtK GpWVU iJYzE " data-testid="prism-linkbase" href="https://apnews.com/article/new-orleans-car-bourbon-street-63a1b43d615af365cb8ba6f5f0583eca">New Year’s Day terrorist attack</a> in the historic French Quarter, members of the police department and emergency personnel.</p><p class="EkqkG IGXmU nlgHS yuUao lqtkC TjIXL aGjvy ">Trump’s appearance at the Caesars Superdome to see the two-time defending champion Kansas City Chiefs take on the Philadelphia Eagles follows the NFL’s decision to <a class="zZygg UbGlr iFzkS qdXbA WCDhQ DbOXS tqUtK GpWVU iJYzE " data-testid="prism-linkbase" href="https://apnews.com/article/super-bowl-end-zone-message-2cd0272f27fd1836ddd016eb2ff297f2">remove the “End Racism” slogans</a> that have been stenciled on the end zones since 2021. </p><p class="EkqkG IGXmU nlgHS yuUao lqtkC TjIXL aGjvy ">Trump recently ordered the cancellation of programs that encourage <a class="zZygg UbGlr iFzkS qdXbA WCDhQ DbOXS tqUtK GpWVU iJYzE " data-testid="prism-linkbase" href="https://apnews.com/article/trump-dei-executive-order-diversity-inclusion-f67ea86032986084dd71c5aa0c6b8d1d">diversity, equity and inclusion</a> across the federal government and some critics see the league's decision as a response to the Republican president's action. But NFL Commissioner Roger Goodell said the league's <a class="zZygg UbGlr iFzkS qdXbA WCDhQ DbOXS tqUtK GpWVU iJYzE " data-testid="prism-linkbase" href="https://apnews.com/article/super-bowl-goodell-dei-bfd90306b728a28fdef43fabfb882e75">diversity policies</a> are not in conflict with the Trump administration’s efforts to end the federal government's DEI programs.</p><div class="oLzSq QrHMO GbsKS pvsTF EhJPu vPlOC zNYgW OsTsW AMhAA daRVX ISNQ sKyCY eRftA acPPc ebfE nFwaT MCnQE mEeeY SmBjI xegrY VvTxJ iulOd NIuqO zzscu lzDCc aHUBM hbvnu OjMNy eQqcx SVqKB GQmdz jaoD iShaE ONJdw vrZxD OnRTz gbbfF roDbV kRoBe oMlSS gfNzt oJhud eXZcf zhVlX "><div data-testid="prism-ad-wrapper" style="transition: min-height 0.3s linear 1s; min-height: 0px;" data-ad-placeholder="true"><div data-box-type="fitt-adbox-fitt-article-inline-outstream" data-testid="prism-ad"><div class="Ad fitt-article-inline-outstream  ad-slot  " data-slot-type="fitt-article-inline-outstream" data-slot-kvps="pos=fitt-article-inline-outstream-1"></div></div></div></div><p class="EkqkG IGXmU nlgHS yuUao lqtkC TjIXL aGjvy ">Trump, who attended the Super Bowl in 1992, thinks the Chiefs will win, with Kansas City quarterback Patrick Mahomes the difference-maker.</p><p class="EkqkG IGXmU nlgHS yuUao lqtkC TjIXL aGjvy ">“I guess you have to say that when a quarterback wins as much as he’s won, I have to go with Kansas City,” Trump said in a taped interview with Fox News Channel's Bret Baier that aired during the pregame show. Trump said Mahomes “really knows how to win. He’s a great, great quarterback.”</p><p class="EkqkG IGXmU nlgHS yuUao lqtkC TjIXL aGjvy ">The president played football as a student at the New York Military Academy. As a New York businessman in the early 1980s, he <a class="zZygg UbGlr iFzkS qdXbA WCDhQ DbOXS tqUtK GpWVU iJYzE " data-testid="prism-linkbase" href="https://apnews.com/events-united-states-presidential-election-dbbed546a30048798c3377c66cd50f4f">owned the New Jersey Generals</a> of the United States Football League. Trump had sued to force a merger of the USFL and the NFL. The USFL eventually folded. </p><p class="EkqkG IGXmU nlgHS yuUao lqtkC TjIXL aGjvy ">Friction existed between Trump and the NFL during his first term as president.</p><p class="EkqkG IGXmU nlgHS yuUao lqtkC TjIXL aGjvy "><a class="zZygg UbGlr iFzkS qdXbA WCDhQ DbOXS tqUtK GpWVU iJYzE " data-testid="prism-linkbase" href="https://apnews.com/article/7e3fcc1d5c2446098652affae9e6322a">Trump took issue with players kneeling</a> during the national anthem to protest social or racial injustice. That movement began in 2016 with then-San Francisco 49ers quarterback Colin Kaepernick taking a knee during “The Star-Spangled Banner” during an exhibition game in Denver.</p><div class="oLzSq QrHMO GbsKS pvsTF EhJPu vPlOC zNYgW OsTsW AMhAA daRVX ISNQ sKyCY eRftA acPPc ebfE nFwaT MCnQE mEeeY SmBjI xegrY VvTxJ iulOd NIuqO zzscu lzDCc aHUBM hbvnu OjMNy eQqcx SVqKB GQmdz jaoD iShaE ONJdw vrZxD OnRTz gbbfF roDbV kRoBe oMlSS gfNzt oJhud eXZcf zhVlX "><div data-testid="prism-ad-wrapper" style="min-height:250px;transition:min-height 0.3s linear 0s" data-ad-placeholder="true"><div data-box-type="fitt-adbox-fitt-article-inline-box" data-testid="prism-ad"><div class="Ad fitt-article-inline-box  ad-slot  " data-slot-type="fitt-article-inline-box" data-slot-kvps="pos=fitt-article-inline-box"></div></div></div></div><p class="EkqkG IGXmU nlgHS yuUao lqtkC TjIXL aGjvy ">Trump, through social media and other public comments, insisted that players stand for the national anthem and he called on team owners to fire anyone who took a knee. </p><p class="EkqkG IGXmU nlgHS yuUao lqtkC TjIXL aGjvy ">“Wouldn’t you love to see one of these NFL owners, when somebody disrespects our flag, you’d say, ’Get that son of a bitch off the field right now. Out! He’s fired,'” Trump said to loud applause at a rally in Hunstville, Alabama, in 2017. </p><p class="EkqkG IGXmU nlgHS yuUao lqtkC TjIXL aGjvy ">Trump watched Sunday's game from a suite after flying in with a group of some of his closest Republican allies in Congress, including Sens. Lindsey Graham and Tim Scott of South Carolina. House Speaker Mike Johnson, R-La., had said he'd also be in the suite with the president. Trump saluted when the national anthem was sung. Mahomes' family stopped by to visit with him. </p><p class="EkqkG IGXmU nlgHS yuUao lqtkC TjIXL aGjvy ">His interest in sports extends beyond football. Trump is an avid golfer who owns multiple golf courses and has hosted tournaments. He sponsored boxing matches at his former casinos in Atlantic City, New Jersey, and <a class="zZygg UbGlr iFzkS qdXbA WCDhQ DbOXS tqUtK GpWVU iJYzE " data-testid="prism-linkbase" href="https://apnews.com/article/trump-ufc-match-new-york-8d5bfbccd32c1115cf2f6b54b8c58a0e">attended a UFC match</a> at Madison Square Garden weeks after winning a second term. </p><p class="EkqkG IGXmU nlgHS yuUao lqtkC TjIXL aGjvy ">Trump played golf with Tiger Woods on Sunday in Florida, the White House said.</p><div class="oLzSq QrHMO GbsKS pvsTF EhJPu vPlOC zNYgW OsTsW AMhAA daRVX ISNQ sKyCY eRftA acPPc ebfE nFwaT MCnQE mEeeY SmBjI xegrY VvTxJ iulOd NIuqO zzscu lzDCc aHUBM hbvnu OjMNy eQqcx SVqKB GQmdz jaoD iShaE ONJdw vrZxD OnRTz gbbfF roDbV kRoBe oMlSS gfNzt oJhud eXZcf zhVlX "><div data-testid="prism-ad-wrapper" style="transition: min-height 0.3s linear 1s; min-height: 0px;" data-ad-placeholder="true"><div data-box-type="fitt-adbox-fitt-article-inline-outstream" data-testid="prism-ad"><div class="Ad fitt-article-inline-outstream  ad-slot  " data-slot-type="fitt-article-inline-outstream" data-slot-kvps="pos=fitt-article-inline-outstream-2"></div></div></div></div><p class="EkqkG IGXmU nlgHS yuUao lqtkC TjIXL aGjvy ">Some NFL team owners have donated to his campaigns and Trump maintains friendships with Herschel Walker and Doug Flutie, who played for the Generals. <a class="zZygg UbGlr iFzkS qdXbA WCDhQ DbOXS tqUtK GpWVU iJYzE " data-testid="prism-linkbase" href="https://apnews.com/article/sports-college-football-georgia-senate-elections-herschel-walker-068e1edc1dbf75638a75c35bdc54eb33">Trump endorsed Walker's unsuccessful bid</a> as the Republican candidate for a U.S. Senate seat from Georgia in 2022, and has tapped him to become <a class="zZygg UbGlr iFzkS qdXbA WCDhQ DbOXS tqUtK GpWVU iJYzE " data-testid="prism-linkbase" href="https://apnews.com/article/herschel-walker-donald-trump-bahamas-92937a9d0b5409b0c91a22082e80d6a2">ambassador to the Bahamas</a>. </p><p class="EkqkG IGXmU nlgHS yuUao lqtkC TjIXL aGjvy ">Trump signed an order last week that is intended to <a class="zZygg UbGlr iFzkS qdXbA WCDhQ DbOXS tqUtK GpWVU iJYzE " data-testid="prism-linkbase" href="https://apnews.com/article/donald-trump-transgender-athletes-3606411fc12efffec95a893351624e1b">block transgender women and girls from competing in women's sports</a> by targeting federal funding for schools that fail to comply.</p><p class="EkqkG IGXmU nlgHS yuUao lqtkC TjIXL aGjvy ">In a statement before the game, Trump said the coaches, players and staff for the Chiefs and Eagles “represent the hopes and dreams of our Nation’s young athletes as we restore safety and fairness in sports and equal opportunities among their teams.”</p><p class="EkqkG IGXmU nlgHS yuUao lqtkC TjIXL aGjvy ">Alvin Tillery, a politics professor and diversity expert at Northwestern University, said in an interview that the NFL's decision to remove “End Racism” slogans was “shameful” given that the league “makes tens of billions of dollars largely on the bodies of Black men.” </p><p class="EkqkG IGXmU nlgHS yuUao lqtkC TjIXL aGjvy ">He said the NFL should explain who it was aiming to please. The NFL said it was stenciling “Choose Love” in one of the end zones for the Super Bowl to encourage the country after a series of tragedies so far this year, including a New Year's Day truck attack in the host city of New Orleans that killed 14 people and injured dozens more. </p><div class="oLzSq QrHMO GbsKS pvsTF EhJPu vPlOC zNYgW OsTsW AMhAA daRVX ISNQ sKyCY eRftA acPPc ebfE nFwaT MCnQE mEeeY SmBjI xegrY VvTxJ iulOd NIuqO zzscu lzDCc aHUBM hbvnu OjMNy eQqcx SVqKB GQmdz jaoD iShaE ONJdw vrZxD OnRTz gbbfF roDbV kRoBe oMlSS gfNzt oJhud eXZcf zhVlX "><div data-testid="prism-ad-wrapper" style="transition: min-height 0.3s linear 1s; min-height: 0px;" data-ad-placeholder="true"><div data-box-type="fitt-adbox-fitt-article-inline-outstream" data-testid="prism-ad"><div class="Ad fitt-article-inline-outstream  ad-slot  " data-slot-type="fitt-article-inline-outstream" data-slot-kvps="pos=fitt-article-inline-outstream-3"></div></div></div></div><p class="EkqkG IGXmU nlgHS yuUao lqtkC eTIW sUzSN ">Tillery wasn't convinced. “I think they removed it because Trump's coming," he said.</p></div>
-
-take out just text , remove all other html, css and js code. 
-
-use that text to replace what is currenlty in "content" field:
-SELECT content FROM pt_abc.articles
-If you have any questions ask- do not assume.
-
-Make sure you add some normal random time sleep between attempts to get HTML of the url. 
-maybe 4-7 seconds. 
-
-In case something is not clear you need to ask, do not assume. 
-
-================================================================0
-I’d like to clarify a few points before I produce the final script:
-
-Updating the Status Table:
-
-When a URL needs to be fetched (because there’s no matching record in article_status or the existing record has a different pub_date or is missing either fetched_at or parsed_at), should the script update or insert a record in the pt_abc.article_status table with the new fetch details (for example, setting fetched_at and parsed_at to the current timestamp)?
-Yes, but fetched_at is added when HTML is fetched, parsed_at is added when article is succesfully written to database table. 
-If so, should the script update the pub_date in that table as well?
-Yes
-
-
-Handling Missing Records:
-
-If an article’s URL from pt_abc.articles is not found in pt_abc.article_status, should the script treat it as “not yet fetched and parsed” and then proceed to fetch, update the article’s content, and also insert a new status record?
-No, just skip it, but this should not happen. 
-You should report on the end with print statements:
-"Number of articles: feched, parsed, updated, articles without url..
-In general put print statements everywhere so I know what is going on. 
-
-
-Content Extraction:
-
-The target HTML container is identified by
-html
-Kopiraj
-<div class="xvlfx ZRifP TKoO eaKKC EcdEg bOdfO qXhdi NFNeu UyHES " data-testid="prism-article-body">
-Is it safe to assume that this data-testid attribute is always present and unique on the page?
-Should we simply extract all the text (using something like BeautifulSoup’s .get_text() with appropriate separators) and update the article’s content field with that text?
-Yes I guess that should be fine. 
-data-testid="prism-article-body" - this is unique value for data-testid that holds articles content, otherwise data-testid is showing elsewhere too.
-
-Error Handling and Retries:
-
-In case a URL fetch fails (e.g. due to network issues or a non-200 response), should the script log the error and skip that article, or would you like to have a retry mechanism?
-We should have retry mechanism but check error - if its 403 forbidded on 404 not existing or 5xx than there is no point in retrying but reporting on them. Skip to next url. 
-If more than 3 consecutive URLs show 403 than abort and report on this. 
-
-Sleep Timing:
-
-You mentioned “normal random time sleep between attempts to get HTML of the url, maybe 4-7 seconds.” Should the sleep occur between each URL fetch attempt (i.e. after processing one article, wait 4–7 seconds before the next), or only when an error occurs?
-After each error and each sucessfull fecth too. 
-
-
-
-# ### database context - you need to use database handling like previous script
-# db_context.py
-from contextlib import contextmanager
-from typing import Optional, Dict, Any, Generator
-import sqlalchemy as sa
-from sqlalchemy.engine import Engine, Connection
-from sqlalchemy.orm import sessionmaker, Session
-from sqlalchemy.pool import QueuePool
-from db_scripts.db_utils import load_db_config
-
-class DatabaseContext:
-    _instances: Dict[str, 'DatabaseContext'] = {}
-    
-    def __init__(self, env: str = 'dev'):
-        """Initialize database context with environment-specific configuration"""
-        self.env = env
-        self._engine: Optional[Engine] = None
-        self._session_factory: Optional[sessionmaker] = None
-        self._setup_engine()
-    
-    @classmethod
-    def get_instance(cls, env: str = 'dev') -> 'DatabaseContext':
-        """Get or create a DatabaseContext instance for the specified environment"""
-        if env not in cls._instances:
-            cls._instances[env] = cls(env)
-        return cls._instances[env]
-    
-    def _setup_engine(self) -> None:
-        """Set up SQLAlchemy engine with proper pooling configuration"""
-        db_config = load_db_config()
-        if not db_config or self.env not in db_config:
-            raise ValueError(f"No database configuration found for environment: {self.env}")
-        
-        params = db_config[self.env]
-        shared_config = db_config.get('shared', {})
-        
-        # Construct connection URL
-        url = f"postgresql://{params['user']}:{params['password']}@{params['host']}:{params['port']}/{params['name']}"
-        
-        # Configure pooling
-        pool_config = params.get('pool', {})
-        pooling_args = {
-            'poolclass': QueuePool,
-            'pool_size': pool_config.get('max_connections', 10),
-            'max_overflow': 5,
-            'pool_timeout': 30,
-            'pool_recycle': pool_config.get('idle_timeout', 300),
-            'pool_pre_ping': True,
-        }
-        
-        # Configure connection arguments
-        connect_args = {
-            'application_name': shared_config.get('application_name', 'news_aggregator'),
-            'connect_timeout': shared_config.get('connect_timeout', 10),
-            'options': f"-c statement_timeout={shared_config.get('statement_timeout', 30000)}",
-        }
-        
-        if shared_config.get('ssl_mode'):
-            connect_args['sslmode'] = shared_config['ssl_mode']
-        
-        self._engine = sa.create_engine(
-            url,
-            **pooling_args,
-            connect_args=connect_args,
-            echo=False  # Set to True for SQL query logging
-        )
-        
-        self._session_factory = sessionmaker(
-            bind=self._engine,
-            expire_on_commit=False
-        )
-    
-    @property
-    def engine(self) -> Engine:
-        """Get SQLAlchemy engine instance"""
-        if not self._engine:
-            self._setup_engine()
-        return self._engine
-    
-    def get_connection_string(self) -> str:
-        """Get database connection string for SQLAlchemy"""
-        db_config = load_db_config()
-        if not db_config or self.env not in db_config:
-            raise ValueError(f"No database configuration found for environment: {self.env}")
-        
-        params = db_config[self.env]
-        return f"postgresql://{params['user']}:{params['password']}@{params['host']}:{params['port']}/{params['name']}"
-    
-    @contextmanager
-    def session(self) -> Generator[Session, None, None]:
-        """Get a database session context manager
-        
-        Returns:
-            Generator[Session, None, None]: A context manager that yields a SQLAlchemy Session
-        """
-        if not self._session_factory:
-            self._setup_engine()
-            
-        session = self._session_factory()
-        try:
-            yield session
-            session.commit()
-        except Exception:
-            session.rollback()
-            raise
-        finally:
-            session.close()
-    
-    @contextmanager
-    def connection(self) -> Generator[Connection, None, None]:
-        """Get a raw connection context manager
-        
-        Returns:
-            Generator[Connection, None, None]: A context manager that yields a SQLAlchemy Connection
-        """
-        with self.engine.connect() as conn:
-            try:
-                yield conn
-                conn.commit()
-            except Exception:
-                conn.rollback()
-                raise
-    
-    def dispose(self) -> None:
-        """Dispose of the engine and all connections"""
-        if self._engine:
-            self._engine.dispose()
-            self._engine = None
-            self._session_factory = None
-    
-    def __enter__(self) -> 'DatabaseContext':
-        return self
-    
-    def __exit__(self, exc_type: Optional[type], exc_val: Optional[Exception], exc_tb: Optional[Any]) -> None:
-        self.dispose()

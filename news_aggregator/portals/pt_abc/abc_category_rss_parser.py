@@ -250,7 +250,6 @@ def main():
     """
     # Print registered tables for debugging.
     from db_scripts.models.models import Base
-    print("Registered tables in metadata:", Base.metadata.tables.keys())
     
     argparser = argparse.ArgumentParser(description="ABC News RSS Categories Parser")
     argparser.add_argument(

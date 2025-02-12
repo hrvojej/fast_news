@@ -1,38 +1,36 @@
 #!/usr/bin/env python3
 """
-ABC Article Content Updater
----------------------------
-This script compares the URLs and publication dates in the pt_abc.articles table
-with the corresponding records in pt_abc.article_status. For each article where:
-  - There is no record in article_status (i.e. initially the table is empty), or
-  - The URL exists in both tables but the pub_date is different, or
-  - The URL exists and pub_date is the same but one or both of fetched_at/parsed_at are missing,
+Al Jazeera Article Content Updater
+-----------------------------------
+This script compares the URLs and publication dates in the pt_aljazeera.articles table
+with the corresponding records in pt_aljazeera.article_status. For each article where:
+  - There is no record in article_status, or
+  - The pub_date is different, or
+  - Fetched/parsed timestamps are missing,
   
 the script will:
-  1. Fetch the article’s HTML (waiting a random 4–7 seconds after every fetch attempt).
-  2. Extract the plain text from the <div> identified by data-testid="prism-article-body".
-  3. Update the article’s "content" field in pt_abc.articles.
-  4. Update the status record:
-       - If a status record already exists, update its fetched_at, parsed_at, pub_date,
-         status, and status_type.
-       - If no status record exists, insert a new one with these details.
-       
+  1. Fetch the article’s HTML (waiting a random few seconds between fetches).
+  2. Attempt to extract the pure text from the target content element:
+       - First, it tries the <div> element with class "wysiwyg wysiwyg--all-content"
+         (with aria-live="polite" and aria-atomic="true").
+       - If that element is not found, it will try to find the <p> element with class
+         "article__subhead u-inline".
+     In either case, BeautifulSoup’s get_text() is used to obtain the pure text.
+  3. Clear the article’s "content" field before updating it with the new text.
+  4. Update the status record accordingly.
+  
 Error handling includes:
-  - Retries (up to 3 attempts) for connection errors (network errors).
-  - Immediate exit for repeated 403 responses (after 3 consecutive 403s).
-  - Reporting of distinct errors in a summary at the end.
+  - Retries (up to 3 attempts) for connection errors.
+  - Immediate exit for repeated 403 responses.
+  - Logging of distinct errors in a summary at the end.
   
 For successful fetch and parsing:
     status = 1, status_type = "OK"
 For errors:
-    status = 0, and status_type is set to one of:
-      - "NO_DIV" for missing content div,
-      - "HTTP403", "HTTP404", "HTTP5xx", or "HTTP_ERR" for HTTP errors,
-      - "NET" for network errors.
-      
-In the case of network errors the parsed_at field is left NULL so that the URL is picked
-up for a retry.
-      
+    status = 0, with a status_type such as "NO_DIV", "HTTP403", etc.
+    
+For network errors, parsed_at is left NULL to force a retry.
+    
 The script logs detailed progress and summary statistics at the end.
 """
 
@@ -47,12 +45,12 @@ import requests
 from bs4 import BeautifulSoup
 from sqlalchemy import text
 
-# Add package root to path
+# Add package root to path if needed
 current_dir = os.path.dirname(os.path.abspath(__file__))
 package_root = os.path.abspath(os.path.join(current_dir, "../../"))
 if package_root not in sys.path:
     sys.path.insert(0, package_root)
-    
+
 # Import the logging configuration function.
 from logging_config import setup_script_logging
 
@@ -60,6 +58,7 @@ from logging_config import setup_script_logging
 logger = setup_script_logging(__file__)
 logger.info("Script started.")
 
+# Import the dynamic models generator and database context.
 from db_scripts.models.models import (
     create_portal_category_model,
     create_portal_article_model,
@@ -68,27 +67,27 @@ from db_scripts.models.models import (
 
 from db_scripts.db_context import DatabaseContext
 
-# Create the dynamic models for the pt_abc schema.
-ABCCategory = create_portal_category_model("pt_abc")
-ABCArticle = create_portal_article_model("pt_abc")
-ABCArticleStatus = create_portal_article_status_model("pt_abc")
+# Create the dynamic models for the pt_aljazeera schema.
+ALJCategory = create_portal_category_model("pt_aljazeera")
+ALJArticle = create_portal_article_model("pt_aljazeera")
+ALJArticleStatus = create_portal_article_status_model("pt_aljazeera")
 
 
 class ArticleContentUpdater:
     def __init__(self, env: str = 'dev'):
         self.env = env
         self.db_context = DatabaseContext.get_instance(env)
-        self.ABCArticle = ABCArticle
-        self.ABCArticleStatus = ABCArticleStatus
+        self.Article = ALJArticle
+        self.ArticleStatus = ALJArticleStatus
         self.consecutive_403_count = 0
-        self.error_counts = {}  # To record counts for each error type.
+        self.error_counts = {}
         self.counters = {
-            "total": 0,               # Total articles processed from the articles table
-            "up_to_date": 0,          # Articles skipped because they are already up-to-date
-            "to_update": 0,           # Articles marked for update (or needing a new status record)
-            "fetched": 0,             # Articles for which HTML was fetched and parsed
-            "updated": 0,             # Articles successfully updated in the DB
-            "failed": 0               # Articles that failed during update
+            "total": 0,
+            "up_to_date": 0,
+            "to_update": 0,
+            "fetched": 0,
+            "updated": 0,
+            "failed": 0
         }
 
     def random_sleep(self):
@@ -97,18 +96,6 @@ class ArticleContentUpdater:
         time.sleep(sleep_time)
 
     def fetch_html(self, url: str):
-        """
-        Attempts to fetch the HTML content for the given URL.
-        Uses up to 3 attempts for connection errors.
-        If the HTTP response status code is 403, 404 or >=500, no retries are attempted.
-        After each attempt (successful or error), a random sleep is performed.
-        If more than 3 consecutive 403 responses occur, the script aborts.
-        
-        Returns:
-            A tuple: (html_content or None, error_type or None)
-            - On success: (content, None)
-            - On error: (None, error_type)
-        """
         max_attempts = 3
         attempt = 0
         last_error_type = None
@@ -116,74 +103,55 @@ class ArticleContentUpdater:
             try:
                 logger.info(f"Fetching URL: {url} (Attempt {attempt + 1})")
                 response = requests.get(url, timeout=10)
-                self.random_sleep()  # Sleep after every attempt
+                self.random_sleep()
 
                 if response.status_code == 200:
-                    self.consecutive_403_count = 0  # Reset on success
+                    self.consecutive_403_count = 0
                     return response.content, None
                 elif response.status_code == 403:
                     self.consecutive_403_count += 1
-                    logger.error(f"Received 403 for {url}. Consecutive 403 count: {self.consecutive_403_count}")
+                    logger.error(f"Received 403 for {url}. Count: {self.consecutive_403_count}")
                     last_error_type = "HTTP403"
                     if self.consecutive_403_count >= 3:
                         raise Exception("Aborting: 3 consecutive 403 errors encountered.")
                     return None, "HTTP403"
                 elif response.status_code == 404:
-                    logger.error(f"Received 404 for {url}. Skipping this URL.")
+                    logger.error(f"Received 404 for {url}.")
                     return None, "HTTP404"
                 elif response.status_code >= 500:
-                    logger.error(f"Server error {response.status_code} for {url}. Skipping this URL.")
+                    logger.error(f"Server error {response.status_code} for {url}.")
                     return None, "HTTP5xx"
                 else:
-                    logger.error(f"Unexpected status code {response.status_code} for {url}. Skipping.")
+                    logger.error(f"Unexpected status {response.status_code} for {url}.")
                     return None, "HTTP_ERR"
-
             except Exception as e:
                 attempt += 1
                 last_error_type = "NET"
                 logger.error(f"Error fetching {url}: {e}. Attempt {attempt} of {max_attempts}.")
                 self.random_sleep()
-
-        # All attempts failed: return network error.
         return None, last_error_type if last_error_type else "NET"
 
     def update_article_content(self, article_info: dict) -> bool:
-        """
-        For a given article (specified by article_id, url, pub_date, and possibly a status_id),
-        fetch the HTML, extract the article text, update the article content, and update or create
-        the status record.
-        
-        In every case (success or error) the status record is updated with:
-          - status: True (1) if successful, False (0) if an error occurred.
-          - status_type: "OK" on success or a specific error type.
-          
-        For network errors, parsed_at is left as NULL so that the article is retried.
-        
-        Returns True if the update was successful, False otherwise.
-        """
         url = article_info["url"]
         article_id = article_info["article_id"]
         pub_date = article_info["pub_date"]
-        status_id = article_info.get("status_id")  # May be None if no status record exists
+        status_id = article_info.get("status_id")
 
-        logger.info(f"Processing article with URL: {url}")
+        logger.info(f"Processing article: {url}")
 
-        # Attempt to fetch the HTML.
         html_content, fetch_error = self.fetch_html(url)
         fetched_time = datetime.now(timezone.utc)
 
-        # If no HTML content was fetched, update status record with the error.
         if html_content is None:
-            error_type = fetch_error if fetch_error else "UNKNOWN_FETCH"
-            # For network errors leave parsed_at as None so that the URL is retried.
+            error_type = fetch_error or "UNKNOWN_FETCH"
             parsed_time = None if error_type == "NET" else datetime.now(timezone.utc)
             self.error_counts[error_type] = self.error_counts.get(error_type, 0) + 1
-            logger.info(f"Failed to fetch content for article {url} with error {error_type}. Skipping update.")
+            logger.error(f"Failed to fetch content for {url}: {error_type}")
             try:
                 with self.db_context.session() as session:
                     if status_id:
-                        status_obj = session.query(self.ABCArticleStatus).filter(
-                            self.ABCArticleStatus.status_id == status_id
+                        status_obj = session.query(self.ArticleStatus).filter(
+                            self.ArticleStatus.status_id == status_id
                         ).first()
                         if status_obj:
                             status_obj.fetched_at = fetched_time
@@ -191,9 +159,8 @@ class ArticleContentUpdater:
                             status_obj.pub_date = pub_date
                             status_obj.status = False
                             status_obj.status_type = error_type
-                            logger.info(f"Status record {status_id} updated with error {error_type}.")
                     else:
-                        new_status = self.ABCArticleStatus(
+                        new_status = self.ArticleStatus(
                             url=url,
                             fetched_at=fetched_time,
                             parsed_at=parsed_time,
@@ -202,25 +169,33 @@ class ArticleContentUpdater:
                             status_type=error_type
                         )
                         session.add(new_status)
-                        logger.info(f"New status record created for article {url} with error {error_type}.")
             except Exception as e:
-                logger.error(f"Error updating status record for article {url} with error {error_type}: {e}")
+                logger.error(f"Error updating status for {url}: {e}")
             self.counters["failed"] += 1
             return False
 
-        # Parse the HTML and extract text from the target div.
+        # Parse the HTML and extract content.
         soup = BeautifulSoup(html_content, 'html.parser')
-        article_div = soup.find('div', {'data-testid': 'prism-article-body'})
-        if not article_div:
+        # First attempt: look for the primary div element.
+        content_div = soup.find('div', {
+            "class": "wysiwyg wysiwyg--all-content",
+            "aria-live": "polite",
+            "aria-atomic": "true"
+        })
+        if not content_div:
+            logger.info(f"Primary content div not found for {url}. Attempting fallback extraction from <p class='article__subhead u-inline'>")
+            # Fallback: try to find the <p> element with the given class.
+            content_div = soup.find('p', {"class": "article__subhead u-inline"})
+        if not content_div:
             error_type = "NO_DIV"
             self.error_counts[error_type] = self.error_counts.get(error_type, 0) + 1
-            logger.error(f"Could not find the target content div for article {url}. Skipping update.")
+            logger.error(f"Target content element not found for {url} even after fallback.")
             parsed_time = datetime.now(timezone.utc)
             try:
                 with self.db_context.session() as session:
                     if status_id:
-                        status_obj = session.query(self.ABCArticleStatus).filter(
-                            self.ABCArticleStatus.status_id == status_id
+                        status_obj = session.query(self.ArticleStatus).filter(
+                            self.ArticleStatus.status_id == status_id
                         ).first()
                         if status_obj:
                             status_obj.fetched_at = fetched_time
@@ -228,9 +203,8 @@ class ArticleContentUpdater:
                             status_obj.pub_date = pub_date
                             status_obj.status = False
                             status_obj.status_type = error_type
-                            logger.info(f"Status record {status_id} updated with error {error_type}.")
                     else:
-                        new_status = self.ABCArticleStatus(
+                        new_status = self.ArticleStatus(
                             url=url,
                             fetched_at=fetched_time,
                             parsed_at=parsed_time,
@@ -239,24 +213,22 @@ class ArticleContentUpdater:
                             status_type=error_type
                         )
                         session.add(new_status)
-                        logger.info(f"New status record created for article {url} with error {error_type}.")
             except Exception as e:
-                logger.error(f"Error updating status record for article {url} with error {error_type}: {e}")
+                logger.error(f"Error updating status for {url}: {e}")
             self.counters["failed"] += 1
             return False
 
-        new_content = article_div.get_text(separator="\n").strip()
+        new_content = content_div.get_text(separator="\n").strip()
         if not new_content:
-            # In case the extracted content is empty, record an error.
             error_type = "EMPTY_CONTENT"
             self.error_counts[error_type] = self.error_counts.get(error_type, 0) + 1
-            logger.info(f"Extracted content is empty for article {url}. Skipping update.")
+            logger.error(f"Extracted content is empty for {url}.")
             parsed_time = datetime.now(timezone.utc)
             try:
                 with self.db_context.session() as session:
                     if status_id:
-                        status_obj = session.query(self.ABCArticleStatus).filter(
-                            self.ABCArticleStatus.status_id == status_id
+                        status_obj = session.query(self.ArticleStatus).filter(
+                            self.ArticleStatus.status_id == status_id
                         ).first()
                         if status_obj:
                             status_obj.fetched_at = fetched_time
@@ -264,9 +236,8 @@ class ArticleContentUpdater:
                             status_obj.pub_date = pub_date
                             status_obj.status = False
                             status_obj.status_type = error_type
-                            logger.info(f"Status record {status_id} updated with error {error_type}.")
                     else:
-                        new_status = self.ABCArticleStatus(
+                        new_status = self.ArticleStatus(
                             url=url,
                             fetched_at=fetched_time,
                             parsed_at=parsed_time,
@@ -275,32 +246,31 @@ class ArticleContentUpdater:
                             status_type=error_type
                         )
                         session.add(new_status)
-                        logger.info(f"New status record created for article {url} with error {error_type}.")
             except Exception as e:
-                logger.error(f"Error updating status record for article {url} with error {error_type}: {e}")
+                logger.error(f"Error updating status for {url}: {e}")
             self.counters["failed"] += 1
             return False
 
-        # If we reach here, the article content was fetched and parsed successfully.
+        # Update the article: first clear the content field, then store the new content.
         try:
             with self.db_context.session() as session:
-                # Update the article’s content.
-                article_obj = session.query(self.ABCArticle).filter(
-                    self.ABCArticle.article_id == article_id
+                article_obj = session.query(self.Article).filter(
+                    self.Article.article_id == article_id
                 ).first()
                 if article_obj:
+                    article_obj.content = ""  # Clear the field
                     article_obj.content = new_content
-                    logger.info(f"Article {url} content updated.")
+                    logger.info(f"Article content updated for {url}.")
                 else:
-                    logger.info(f"Article {url} not found in the articles table during update.")
+                    logger.error(f"Article {url} not found in the articles table.")
                     self.counters["failed"] += 1
                     return False
 
-                # Update or insert the corresponding status record with success.
+                # Update or create the status record with a success status.
                 parsed_time = datetime.now(timezone.utc)
                 if status_id:
-                    status_obj = session.query(self.ABCArticleStatus).filter(
-                        self.ABCArticleStatus.status_id == status_id
+                    status_obj = session.query(self.ArticleStatus).filter(
+                        self.ArticleStatus.status_id == status_id
                     ).first()
                     if status_obj:
                         status_obj.fetched_at = fetched_time
@@ -308,13 +278,13 @@ class ArticleContentUpdater:
                         status_obj.pub_date = pub_date
                         status_obj.status = True
                         status_obj.status_type = "OK"
-                        logger.info(f"Status record {status_id} updated with success status.")
+                        logger.info(f"Status record {status_id} updated as OK.")
                     else:
-                        logger.info(f"Status record {status_id} not found during update. This should not happen.")
+                        logger.error(f"Status record {status_id} not found for {url}.")
                         self.counters["failed"] += 1
                         return False
                 else:
-                    new_status = self.ABCArticleStatus(
+                    new_status = self.ArticleStatus(
                         url=url,
                         fetched_at=fetched_time,
                         parsed_at=parsed_time,
@@ -323,52 +293,43 @@ class ArticleContentUpdater:
                         status_type="OK"
                     )
                     session.add(new_status)
-                    logger.info(f"New status record created for article {url} with success status.")
+                    logger.info(f"New status record created for {url} with OK status.")
             self.counters["updated"] += 1
             return True
-
         except Exception as e:
             logger.error(f"Error updating article {url}: {e}")
             self.counters["failed"] += 1
             return False
 
     def run(self):
-        logger.info("Starting Article Content Updater for pt_abc.")
+        logger.info("Starting Article Content Updater for pt_aljazeera.")
 
         articles_to_update = []
         with self.db_context.session() as session:
-            # Get all articles from pt_abc.articles.
+            # Retrieve all articles from pt_aljazeera.articles.
             articles = session.execute(
-                text("SELECT article_id, url, pub_date FROM pt_abc.articles")
+                text("SELECT article_id, url, pub_date FROM pt_aljazeera.articles")
             ).fetchall()
-            logger.info(f"Total articles in articles table: {len(articles)}")
-
-            # Get all status records from pt_abc.article_status.
+            logger.info(f"Total articles: {len(articles)}")
+            
+            # Retrieve status records from pt_aljazeera.article_status.
             status_records = session.execute(
-                text("SELECT status_id, url, pub_date, fetched_at, parsed_at, status_type FROM pt_abc.article_status")
+                text("SELECT status_id, url, pub_date, fetched_at, parsed_at, status_type FROM pt_aljazeera.article_status")
             ).fetchall()
-            logger.info(f"Total records in article_status table: {len(status_records)}")
+            logger.info(f"Total status records: {len(status_records)}")
 
-            # Build a dictionary keyed by URL.
+            # Build a lookup dictionary for status records keyed by URL.
             status_dict = {record.url: record for record in status_records}
 
             for article in articles:
                 self.counters["total"] += 1
-
-                # If the article has no URL, skip it.
                 if not article.url:
                     logger.info(f"Article {article.article_id} has no URL. Skipping.")
                     continue
 
-                status_record = status_dict.get(article.url)  # May be None
-
-                # Determine whether the article needs to be fetched:
-                # 1. No status record exists (new article – needs fetching).
-                # 2. The pub_date is different.
-                # 3. Fetched_at or parsed_at is missing.
-                #    (Note: for network errors, parsed_at is left NULL to force a retry.)
+                status_record = status_dict.get(article.url)
                 if status_record is None:
-                    logger.info(f"Article {article.article_id} with URL {article.url} has no status record. Marking for update (new status record will be created).")
+                    logger.info(f"Article {article.article_id} with URL {article.url} has no status record. Marking for update.")
                     articles_to_update.append({
                         "article_id": article.article_id,
                         "url": article.url,
@@ -376,11 +337,10 @@ class ArticleContentUpdater:
                         "status_id": None
                     })
                 else:
-                    # If the pub_date differs or if either timestamp is missing, then mark for update.
                     if (article.pub_date != status_record.pub_date or
                         status_record.fetched_at is None or
                         status_record.parsed_at is None):
-                        logger.info(f"Article {article.article_id} requires update (pub_date or fetch status differs).")
+                        logger.info(f"Article {article.article_id} requires update.")
                         articles_to_update.append({
                             "article_id": article.article_id,
                             "url": article.url,
@@ -391,32 +351,29 @@ class ArticleContentUpdater:
                         self.counters["up_to_date"] += 1
 
         self.counters["to_update"] = len(articles_to_update)
-        logger.info(f"Total articles marked for update: {len(articles_to_update)}")
+        logger.info(f"Articles marked for update: {len(articles_to_update)}")
 
-        # Process each article that needs to be updated.
         for idx, art in enumerate(articles_to_update, start=1):
-            logger.info(f"\nArticle {idx}/{len(articles_to_update)}")
+            logger.info(f"Updating article {idx} of {len(articles_to_update)}")
             success = self.update_article_content(art)
             if success:
                 self.counters["fetched"] += 1
             self.random_sleep()
 
-        # Log summary statistics.
         logger.info("\nUpdate Summary:")
-        logger.info(f"  Total articles processed:         {self.counters['total']}")
-        logger.info(f"  Articles up-to-date (skipped):      {self.counters['up_to_date']}")
-        logger.info(f"  Articles marked for update:         {self.counters['to_update']}")
+        logger.info(f"  Total articles processed: {self.counters['total']}")
+        logger.info(f"  Articles up-to-date (skipped): {self.counters['up_to_date']}")
+        logger.info(f"  Articles marked for update: {self.counters['to_update']}")
         logger.info(f"  Articles where content was fetched: {self.counters['fetched']}")
-        logger.info(f"  Articles successfully updated:      {self.counters['updated']}")
-        logger.info(f"  Articles failed to update:          {self.counters['failed']}")
+        logger.info(f"  Articles successfully updated: {self.counters['updated']}")
+        logger.info(f"  Articles failed to update: {self.counters['failed']}")
 
-        # Log error counts by type.
         logger.info("Error Summary:")
         for err_type, count in self.error_counts.items():
             logger.info(f"  {err_type}: {count}")
 
 def main():
-    argparser = argparse.ArgumentParser(description="ABC Article Content Updater")
+    argparser = argparse.ArgumentParser(description="Al Jazeera Article Content Updater")
     argparser.add_argument(
         '--env',
         choices=['dev', 'prod'],
@@ -430,7 +387,7 @@ def main():
         updater.run()
         logger.info("Article content update completed successfully.")
     except Exception as e:
-        logger.info(f"Script execution failed: {e}")
+        logger.error(f"Script execution failed: {e}")
         raise
 
 if __name__ == "__main__":

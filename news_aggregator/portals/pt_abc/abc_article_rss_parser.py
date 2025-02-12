@@ -1,11 +1,15 @@
+#!/usr/bin/env python
 """
 ABC RSS Articles Parser
 Fetches and stores ABC RSS feed articles using SQLAlchemy ORM.
+
+Timestamps are normalized to UTC for both storage and comparison, ensuring that 
+updates occur only when there is an actual change in the absolute publication time.
 """
 
 import sys
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Dict, List
 from uuid import UUID
 import requests
@@ -92,7 +96,6 @@ class KeywordExtractor:
 
 class ABCRSSArticlesParser:
     """Parser for ABC RSS feed articles."""
-
     def __init__(self, portal_id: UUID, env: str = 'dev', article_model=None):
         self.portal_id = portal_id
         self.env = env
@@ -125,13 +128,14 @@ class ABCRSSArticlesParser:
         # In this case, we use description as a fallback for content
         content = description
 
-        # Process pubDate: if not present, leave as None (do not insert current timestamp)
+        # Process pubDate: if not present, leave as None
         pub_date_tag = item.find('pubDate')
         pub_date = None
         if pub_date_tag:
             pub_date_str = pub_date_tag.text.strip()
             try:
-                pub_date = datetime.strptime(pub_date_str, '%a, %d %b %Y %H:%M:%S %z')
+                # Convert parsed date to UTC for consistent storage
+                pub_date = datetime.strptime(pub_date_str, '%a, %d %b %Y %H:%M:%S %z').astimezone(timezone.utc)
             except Exception as e:
                 print(f"Error parsing pubDate '{pub_date_str}': {e}")
                 pub_date = None
@@ -209,7 +213,7 @@ class ABCRSSArticlesParser:
             print(f"Found {len(categories)} categories.")
 
             for category_id, atom_link in categories:
-                print(f"\nProcessing category: {category_id} with feed URL: {atom_link}")
+                print(f"\nProcessing category: {atom_link}")
                 try:
                     response = requests.get(atom_link, timeout=10)
                     response.raise_for_status()
@@ -221,8 +225,6 @@ class ABCRSSArticlesParser:
                     print(f"Found {total_articles} articles in feed {atom_link}.")
 
                     for article_index, item in enumerate(items, start=1):
-                        # Print progress message for current article.
-                        print(f"Article {article_index}/{total_articles}")
                         article_data = self.parse_article(item, category_id)
                         # Check for duplicate based on guid
                         existing = session.query(self.ABCArticle).filter(
@@ -235,8 +237,15 @@ class ABCRSSArticlesParser:
                             new_articles_count += 1
                             print(f"Added new article: {article_data['title']}")
                         else:
-                            # If needed, update the existing record (e.g., if pub_date has changed)
-                            if existing.pub_date != article_data['pub_date']:
+                            # Normalize both datetime objects to UTC before comparing.
+                            update_needed = False
+                            if existing.pub_date and article_data['pub_date']:
+                                if existing.pub_date.astimezone(timezone.utc) != article_data['pub_date'].astimezone(timezone.utc):
+                                    update_needed = True
+                            elif existing.pub_date != article_data['pub_date']:
+                                update_needed = True
+
+                            if update_needed:
                                 old_pub_date = existing.pub_date
                                 new_pub_date = article_data['pub_date']
                                 for key, value in article_data.items():
@@ -298,7 +307,6 @@ def main():
     except Exception as e:
         print(f"Script execution failed: {e}")
         raise
-
 
 if __name__ == "__main__":
     main()
