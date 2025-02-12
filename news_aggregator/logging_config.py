@@ -15,10 +15,11 @@ def setup_script_logging(script_file, log_level=logging.DEBUG, max_bytes=50 * 10
     Returns:
         Logger object configured with a file handler and console handler.
     """
-    # Use os.getcwd() to get the directory where the script is executed.
-    # If you prefer the log file to be stored next to the script file, use:
-    #   log_dir = os.path.dirname(os.path.abspath(script_file))
-    log_dir = os.getcwd()
+    # Define the log directory path relative to the current working directory.
+    log_dir = os.path.join(os.getcwd(), "news_dagster-etl", "news_aggregator", "log")
+    
+    # Ensure that the log directory exists.
+    os.makedirs(log_dir, exist_ok=True)
     
     # Use the script's base name to create a unique log file name.
     script_name = os.path.splitext(os.path.basename(script_file))[0]
