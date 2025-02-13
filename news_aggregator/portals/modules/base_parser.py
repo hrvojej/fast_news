@@ -1,0 +1,164 @@
+from abc import ABC, abstractmethod
+import requests
+from bs4 import BeautifulSoup
+from db_scripts.db_context import DatabaseContext
+from portals.modules.logging_config import setup_script_logging
+
+# Configure logger using the shared logging configuration.
+logger = setup_script_logging(__file__)
+
+class BaseRSSParser(ABC):
+    """
+    Base class for RSS parsers.
+    Encapsulates shared functionality:
+      - Fetching feeds
+      - Parsing XML with BeautifulSoup
+      - Managing database sessions
+      - Handling errors and logging
+      - Upserting items into the database
+    """
+    def __init__(self, portal_id, env='dev'):
+        """
+        :param portal_id: Unique identifier for the portal.
+        :param env: Environment ('dev' or 'prod').
+        """
+        self.portal_id = portal_id
+        self.env = env
+        self.db_context = DatabaseContext.get_instance(env)
+        # Subclasses must set this to their specific SQLAlchemy model.
+        self.model = None
+
+    def fetch_feed(self, url):
+        """
+        Fetches the RSS feed from a given URL and returns a BeautifulSoup object.
+        :param url: The URL of the RSS feed.
+        :return: BeautifulSoup object of the parsed XML.
+        """
+        try:
+            response = requests.get(url, timeout=10)
+            response.raise_for_status()
+            soup = BeautifulSoup(response.content, 'xml')
+            logger.info(f"Successfully fetched feed from {url}.")
+            return soup
+        except Exception as e:
+            logger.error(f"Error fetching feed from {url}: {e}")
+            raise
+
+    def get_session(self):
+        """
+        Returns a database session from the DatabaseContext.
+        Note: Subclasses can also use context managers (e.g. "with self.db_context.session() as session:")
+        """
+        return self.db_context.session().__enter__()
+
+    def process_feed(self, feed_url, category_id):
+        new_articles_count = 0
+        updated_articles_count = 0
+        updated_articles_details = []
+        try:
+            soup = self.fetch_feed(feed_url)
+            items = soup.find_all('item')
+            logger.info(f"Found {len(items)} items in feed {feed_url}.")
+            with self.db_context.session() as session:
+                for item in items:
+                    item_data = self.parse_item(item, category_id)
+                    result, detail = self.upsert_item(item_data, session)
+                    if result == 'new':
+                        new_articles_count += 1
+                    elif result == 'updated':
+                        updated_articles_count += 1
+                        updated_articles_details.append(detail)  # detail: (title, old_date, new_date)
+                session.commit()
+                logger.info(f"Successfully processed feed: {feed_url}")
+        except Exception as e:
+            logger.error(f"Error in process_feed for {feed_url}: {e}")
+            raise
+        return new_articles_count, updated_articles_count, updated_articles_details
+
+
+    def process_multiple_feeds(self, feeds):
+        """
+        Processes multiple feeds.
+        :param feeds: List of tuples (feed_url, category_id)
+        """
+        for feed_url, category_id in feeds:
+            try:
+                self.process_feed(feed_url, category_id)
+            except Exception as e:
+                logger.error(f"Error processing feed {feed_url}: {e}")
+
+    @abstractmethod
+    def parse_item(self, item, category_id):
+        """
+        Abstract method to parse a single RSS feed item.
+        Subclasses must implement this to extract the necessary fields.
+        :param item: A BeautifulSoup element corresponding to an <item>.
+        :param category_id: Category identifier associated with the item.
+        :return: Dictionary of parsed item data.
+        """
+        pass
+
+    def upsert_item(self, item_data, session):
+        try:
+            if self.model is None:
+                raise Exception("Model not set in parser. Ensure self.model is defined in the subclass.")
+            existing = session.query(self.model).filter(self.model.guid == item_data.get('guid')).first()
+            if not existing:
+                new_item = self.model(**item_data)
+                session.add(new_item)
+                logger.info(f"Added new item: {item_data.get('title')}")
+                return 'new', None
+            else:
+                if self.is_update_needed(existing, item_data):
+                    old_pub_date = existing.pub_date
+                    for key, value in item_data.items():
+                        setattr(existing, key, value)
+                    logger.info(f"Updated item: {item_data.get('title')}")
+                    return 'updated', (item_data.get('title'), old_pub_date, item_data.get('pub_date'))
+        except Exception as e:
+            logger.error(f"Error upserting item with guid {item_data.get('guid')}: {e}")
+            raise
+        return 'unchanged', None
+
+    def is_update_needed(self, existing, new_data):
+        """
+        Compares an existing record with new data to decide if an update is required.
+        For example, by checking if the publication date has changed.
+        :param existing: Existing database record.
+        :param new_data: Dictionary with new data.
+        :return: Boolean indicating whether an update is necessary.
+        """
+        if existing.pub_date and new_data.get('pub_date'):
+            return existing.pub_date != new_data.get('pub_date')
+        return existing.pub_date != new_data.get('pub_date')
+    
+    
+    def run_feeds(self, feeds):
+        total_new = 0
+        total_updated = 0
+        total_updated_details = []
+        for category_id, feed_url in feeds:
+            try:
+                new_count, updated_count, updated_details = self.process_feed(feed_url, category_id)
+                total_new += new_count
+                total_updated += updated_count
+                total_updated_details.extend(updated_details)
+            except Exception as e:
+                logger.error(f"Error processing feed for category {category_id} at {feed_url}: {e}")
+        print("\nFinal Report:")
+        print(f"Newly added articles: {total_new}")
+        print(f"Updated articles: {total_updated}")
+        if total_updated_details:
+            print("\nDetails of updated articles:")
+            for title, old_date, new_date in total_updated_details:
+                print(f" - Article '{title}': pub_date in DB: {old_date}, pub_date online: {new_date}")
+        print("All articles processed and committed successfully.")
+
+
+    @abstractmethod
+    def run(self):
+        """
+        Abstract main method that should be implemented by child classes.
+        Typically, this method will call process_feed() (or process_multiple_feeds()) for each feed.
+        """
+        raise NotImplementedError("Subclasses must implement the run() method.")

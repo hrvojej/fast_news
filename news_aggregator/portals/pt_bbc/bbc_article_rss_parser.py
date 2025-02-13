@@ -1,29 +1,57 @@
+#!/usr/bin/env python
+"""
+BBC RSS Articles Parser
+Fetches and stores BBC RSS feed articles using SQLAlchemy ORM.
+Timestamps are normalized to UTC for consistent storage and comparison,
+and updates occur only when there's an actual change in publication time.
+"""
+
 import sys
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import List, Dict
 from uuid import UUID
 import requests
 from bs4 import BeautifulSoup
 import argparse
 from sqlalchemy import text
+
+# New imports for keyword extraction:
 from sentence_transformers import SentenceTransformer
 from sklearn.metrics.pairwise import cosine_similarity
 from nltk.corpus import stopwords
 import nltk
 
+# Add package root to path
 current_dir = os.path.dirname(os.path.abspath(__file__))
 package_root = os.path.abspath(os.path.join(current_dir, "../../"))
 if package_root not in sys.path:
     sys.path.insert(0, package_root)
-    
-from db_scripts.models.models import create_portal_category_model
-BBCCategory = create_portal_category_model("pt_bbc")
 
-from db_scripts.models.models import create_portal_article_model
+# Import dynamic model factory functions for categories and articles
+from db_scripts.models.models import create_portal_category_model, create_portal_article_model
+BBCCategory = create_portal_category_model("pt_bbc")
 BBCArticle = create_portal_article_model("pt_bbc")
 
+
+def fetch_portal_id_by_prefix(portal_prefix: str, env: str = 'dev') -> UUID:
+    """Fetches the portal_id from the news_portals table."""
+    from db_scripts.db_context import DatabaseContext
+    db_context = DatabaseContext.get_instance(env)
+    with db_context.session() as session:
+        result = session.execute(
+            text("SELECT portal_id FROM public.news_portals WHERE portal_prefix = :prefix"),
+            {'prefix': portal_prefix}
+        ).fetchone()
+        if result:
+            return result[0]
+        raise Exception(f"Portal with prefix '{portal_prefix}' not found.")
+
+
 class KeywordExtractor:
+    """
+    Uses a SentenceTransformer model to extract keywords from text.
+    """
     def __init__(self):
         self.model = SentenceTransformer('all-MiniLM-L6-v2')
         try:
@@ -60,21 +88,9 @@ class KeywordExtractor:
                 break
         return keywords
 
-def fetch_portal_id_by_prefix(portal_prefix: str, env: str = 'dev') -> UUID:
-    """Fetches the portal_id from news_portals table."""
-    from db_scripts.db_context import DatabaseContext
-    db_context = DatabaseContext.get_instance(env)
-    with db_context.session() as session:
-        result = session.execute(
-            text("SELECT portal_id FROM public.news_portals WHERE portal_prefix = :prefix"),
-            {'prefix': portal_prefix}
-        ).fetchone()
-        if result:
-            return result[0]
-        raise Exception(f"Portal with prefix '{portal_prefix}' not found.")
 
 class BBCRSSArticlesParser:
-    """Parser for BBC RSS feed articles"""
+    """Parser for BBC RSS feed articles."""
     
     def __init__(self, portal_id: UUID, env: str = 'dev', article_model=None):
         self.portal_id = portal_id
@@ -83,7 +99,7 @@ class BBCRSSArticlesParser:
         self.keyword_extractor = KeywordExtractor()
 
     def get_session(self):
-        """Get database session from DatabaseContext."""
+        """Obtain a database session from the DatabaseContext."""
         from db_scripts.db_context import DatabaseContext
         db_context = DatabaseContext.get_instance(self.env)
         return db_context.session().__enter__()
@@ -98,20 +114,33 @@ class BBCRSSArticlesParser:
         # Optional fields
         description = item.find('description').text.strip() if item.find('description') else None
         content = description
+        
+        # Process pubDate with UTC normalization
+        pub_date = None
         pub_date_str = item.find('pubDate').text.strip() if item.find('pubDate') else None
-        pub_date = datetime.strptime(pub_date_str, '%a, %d %b %Y %H:%M:%S GMT') if pub_date_str else datetime.utcnow()
+        if pub_date_str:
+            try:
+                # Parse using BBC's date format and normalize to UTC
+                pub_date = datetime.strptime(pub_date_str, '%a, %d %b %Y %H:%M:%S GMT').replace(tzinfo=timezone.utc)
+            except Exception as e:
+                print(f"Error parsing pubDate '{pub_date_str}': {e}")
+                pub_date = None
+        else:
+            pub_date = datetime.utcnow().replace(tzinfo=timezone.utc)
         
         keywords = self.keyword_extractor.extract_keywords(title) if title else []
         
+        # BBC-specific extraction for image URL remains unchanged
         image_url = None
         thumbnail = item.find('media:thumbnail')
         if thumbnail:
             image_url = thumbnail.get('url')
-
+        
+        # Calculate reading time (estimate: 200 words per minute)
         text_content = f"{title} {description or ''}"
         word_count = len(text_content.split())
-        reading_time = max(1, round(word_count / 200))
-
+        reading_time = max(1, round(word_count / 200)) if word_count > 0 else 1
+        
         return {
             # Required fields
             'title': title,
@@ -135,9 +164,15 @@ class BBCRSSArticlesParser:
         }
 
     def fetch_and_store_articles(self):
-        """Fetch and store articles from all RSS feeds."""
-        print("Starting fetch_and_store_articles...")
+        """Fetch and store articles from all BBC RSS feeds."""
+        print("Starting fetch_and_store_articles for BBC...")
         session = self.get_session()
+
+        # Counters and details for reporting.
+        new_articles_count = 0
+        updated_articles_count = 0
+        updated_articles_details = []  # list of tuples (article title, old pub_date, new pub_date)
+
         print("Executing categories query...")
         try:
             categories = session.execute(
@@ -150,13 +185,16 @@ class BBCRSSArticlesParser:
             print(f"Found {len(categories)} categories")
 
             for category_id, atom_link in categories:
-                print("Processing category:", category_id)
+                print(f"\nProcessing category: {atom_link}")
                 try:
                     response = requests.get(atom_link, timeout=10)
                     response.raise_for_status()
                     soup = BeautifulSoup(response.content, 'xml')
                     
-                    for item in soup.find_all('item'):
+                    items = soup.find_all('item')
+                    print(f"Found {len(items)} articles in feed {atom_link}.")
+                    
+                    for item in items:
                         article_data = self.parse_article(item, category_id)
                         existing = session.query(self.BBCArticle).filter(
                             self.BBCArticle.guid == article_data['guid']
@@ -165,18 +203,44 @@ class BBCRSSArticlesParser:
                         if not existing:
                             article = self.BBCArticle(**article_data)
                             session.add(article)
-                        elif existing.pub_date != article_data['pub_date']:
-                            for key, value in article_data.items():
-                                setattr(existing, key, value)
-
-                        print(f"Processing article: {article_data['title']}")
+                            new_articles_count += 1
+                            print(f"Added new article: {article_data['title']}")
+                        else:
+                            # Check if update is needed based on pub_date change
+                            update_needed = False
+                            if existing.pub_date and article_data['pub_date']:
+                                if existing.pub_date.astimezone(timezone.utc) != article_data['pub_date'].astimezone(timezone.utc):
+                                    update_needed = True
+                            elif existing.pub_date != article_data['pub_date']:
+                                update_needed = True
+                            
+                            if update_needed:
+                                old_pub_date = existing.pub_date
+                                new_pub_date = article_data['pub_date']
+                                for key, value in article_data.items():
+                                    setattr(existing, key, value)
+                                updated_articles_count += 1
+                                updated_articles_details.append(
+                                    (article_data['title'], old_pub_date, new_pub_date)
+                                )
+                                print(f"Updated article: {article_data['title']}")
                     
                     session.commit()
+                    print(f"Finished processing feed: {atom_link}")
                     
                 except Exception as e:
                     print(f"Error processing feed {atom_link}: {e}")
                     session.rollback()
                     continue
+
+            # Final reporting
+            print("\nFinal Report:")
+            print(f"Newly added articles: {new_articles_count}")
+            print(f"Updated articles: {updated_articles_count}")
+            if updated_articles_details:
+                print("\nDetails of updated articles:")
+                for title, old_date, new_date in updated_articles_details:
+                    print(f" - Article '{title}': pub_date in DB: {old_date}, pub_date online: {new_date}")
 
         except Exception as e:
             print(f"Error in fetch_and_store_articles: {e}")
@@ -189,10 +253,11 @@ class BBCRSSArticlesParser:
         """Main method to fetch and store BBC articles."""
         try:
             self.fetch_and_store_articles()
-            print("Article processing completed successfully")
+            print("BBC article processing completed successfully.")
         except Exception as e:
-            print(f"Error processing articles: {e}")
+            print(f"Error processing BBC articles: {e}")
             raise
+
 
 def main():
     """Script entry point."""

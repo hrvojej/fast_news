@@ -2,19 +2,16 @@
 """
 ABC News RSS Categories Parser
 Fetches and stores ABC News RSS feed categories using SQLAlchemy ORM.
+Refactored in a similar style as abc_article_rss_parser.
 """
 
+import argparse
 import sys
 import os
-import argparse
 import requests
 import re
 from bs4 import BeautifulSoup
-from typing import List, Dict
 from uuid import UUID
-import sqlalchemy as sa
-from sqlalchemy.orm import sessionmaker
-from sqlalchemy import text
 
 # Add the package root (e.g., news_aggregator) to sys.path if needed.
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -22,65 +19,36 @@ package_root = os.path.abspath(os.path.join(current_dir, "../../"))
 if package_root not in sys.path:
     sys.path.insert(0, package_root)
 
-# Import the dynamic model factory from your models file.
-# Note the corrected function name: create_portal_category_model
+from portals.modules.portal_db import fetch_portal_id_by_prefix
 from db_scripts.models.models import create_portal_category_model
+from portals.modules.logging_config import setup_script_logging
 
-# Create the dynamic category model for the ABC News portal.
-ABCNewsCategory = create_portal_category_model("pt_abc")
+logger = setup_script_logging(__file__)
+
+# Dynamically create the category model for the ABC News portal.
+ABCCategory = create_portal_category_model("pt_abc")
 
 
-def fetch_portal_id_by_prefix(portal_prefix: str, env: str = 'dev') -> UUID:
+class ABCRSSCategoriesParser:
     """
-    Fetches the portal_id from the news_portals table for the given portal_prefix.
-
-    Args:
-        portal_prefix: The prefix of the portal (e.g., 'pt_abc')
-        env: The environment to use ('dev' or 'prod')
-
-    Returns:
-        The UUID of the portal.
-
-    Raises:
-        Exception: If no portal with the given prefix is found.
+    Parser for ABC News RSS feed categories.
+    Fetches a page listing RSS feeds, parses each feed to extract category metadata,
+    and stores unique categories in the database.
     """
-    from db_scripts.db_context import DatabaseContext
-    db_context = DatabaseContext.get_instance(env)
-    with db_context.session() as session:
-        result = session.execute(
-            text("SELECT portal_id FROM public.news_portals WHERE portal_prefix = :prefix"),
-            {'prefix': portal_prefix}
-        ).fetchone()
-        if result:
-            return result[0]
-        else:
-            raise Exception(f"Portal with prefix '{portal_prefix}' not found.")
 
-
-class ABCNewsRSSCategoriesParser:
-    """Parser for ABC News RSS feed categories"""
-
-    def __init__(self, portal_id: UUID, env: str = 'dev', category_model=None):
+    def __init__(self, portal_id: UUID, env: str = 'dev', category_model=ABCCategory):
         """
         Initialize the parser.
 
         Args:
-            portal_id: UUID of the ABC News portal in news_portals table.
-            env: Environment to use (dev/prod).
+            portal_id: UUID of the ABC News portal in the news_portals table.
+            env: Environment to use ('dev' or 'prod').
             category_model: SQLAlchemy ORM model for categories.
         """
         self.portal_id = portal_id
         self.env = env
+        self.category_model = category_model
         self.base_url = "https://abcnews.go.com/Site/page/rss-feeds-3520115"
-        self.ABCNewsCategory = category_model
-
-    def get_session(self):
-        """
-        Obtain a database session from the DatabaseContext.
-        """
-        from db_scripts.db_context import DatabaseContext
-        db_context = DatabaseContext.get_instance(self.env)
-        return db_context.session().__enter__()
 
     @staticmethod
     def clean_ltree(value: str) -> str:
@@ -89,8 +57,8 @@ class ABCNewsRSSCategoriesParser:
         """
         if not value:
             return "unknown"
-        # Replace "U.S." with "U_S", slashes and backslashes with dots,
-        # arrow indicators with dots, and then convert to lowercase.
+        # Replace "U.S." with "U_S", slashes/backslashes with dots, arrow indicators with dots,
+        # then convert to lowercase.
         value = value.replace('U.S.', 'U_S')
         value = value.replace('/', '.').replace('\\', '.')
         value = value.replace('>', '.').strip()
@@ -101,13 +69,13 @@ class ABCNewsRSSCategoriesParser:
         value = re.sub(r'[._]{2,}', '.', value)
         return value.strip('._')
 
-    def fetch_rss_feeds(self) -> List[Dict]:
+    def fetch_rss_feeds(self):
         """
-        Fetch and parse the ABC News RSS feeds page to extract RSS feed links,
-        then process each feed to extract category metadata.
+        Fetch the ABC News RSS feeds page, extract unique RSS feed URLs,
+        and parse each feed to extract category metadata.
         """
         try:
-            print(f"Fetching RSS feeds page from {self.base_url}")
+            logger.info(f"Fetching RSS feeds page from {self.base_url}")
             response = requests.get(self.base_url)
             response.raise_for_status()
             soup = BeautifulSoup(response.content, 'html.parser')
@@ -118,12 +86,13 @@ class ABCNewsRSSCategoriesParser:
                 if href.startswith("https://feeds.abcnews.com/"):
                     rss_links.append(href)
             unique_rss_links = list(set(rss_links))
-            print(f"Found {len(unique_rss_links)} unique RSS feeds")
+            logger.info(f"Found {len(unique_rss_links)} unique RSS feeds")
             return self.parse_rss_feeds(unique_rss_links)
         except requests.exceptions.RequestException as e:
+            logger.error(f"Failed to fetch RSS feeds page: {e}")
             raise Exception(f"Failed to fetch RSS feeds page: {e}")
 
-    def parse_rss_feeds(self, rss_links: List[str]) -> List[Dict]:
+    def parse_rss_feeds(self, rss_links):
         """
         Parse each RSS feed URL and extract category metadata.
 
@@ -136,7 +105,7 @@ class ABCNewsRSSCategoriesParser:
         categories = []
         for rss_url in rss_links:
             try:
-                print(f"Processing RSS feed: {rss_url}")
+                logger.info(f"Processing RSS feed: {rss_url}")
                 response = requests.get(rss_url)
                 response.raise_for_status()
                 rss_soup = BeautifulSoup(response.content, 'xml')
@@ -182,11 +151,11 @@ class ABCNewsRSSCategoriesParser:
                     }
                     categories.append(category)
             except Exception as e:
-                print(f"Error processing RSS feed {rss_url}: {e}")
+                logger.error(f"Error processing RSS feed {rss_url}: {e}")
                 continue
         return categories
 
-    def store_categories(self, categories: List[Dict]):
+    def store_categories(self, categories):
         """
         Store categories in the database using SQLAlchemy ORM.
         Avoids inserting duplicate categories.
@@ -194,22 +163,24 @@ class ABCNewsRSSCategoriesParser:
         Args:
             categories: List of category dictionaries.
         """
-        session = self.get_session()
+        from db_scripts.db_context import DatabaseContext
+        db_context = DatabaseContext.get_instance(self.env)
+        session = db_context.session().__enter__()
         try:
-            print("Storing categories in the database...")
+            logger.info("Storing categories in the database...")
             count_added = 0
             for category_data in categories:
                 slug = self.clean_ltree(category_data['title'])
                 # Check if this category already exists for the portal.
-                existing = session.query(self.ABCNewsCategory).filter(
-                    self.ABCNewsCategory.slug == slug,
-                    self.ABCNewsCategory.portal_id == self.portal_id
+                existing = session.query(self.category_model).filter(
+                    self.category_model.slug == slug,
+                    self.category_model.portal_id == self.portal_id
                 ).first()
                 if existing:
-                    print(f"Category with slug '{slug}' already exists. Skipping insertion.")
+                    logger.info(f"Category with slug '{slug}' already exists. Skipping insertion.")
                     continue
 
-                category = self.ABCNewsCategory(
+                category = self.category_model(
                     name=category_data['title'],
                     slug=slug,
                     portal_id=self.portal_id,
@@ -224,9 +195,10 @@ class ABCNewsRSSCategoriesParser:
                 count_added += 1
 
             session.commit()
-            print(f"Successfully stored {count_added} new categories.")
+            logger.info(f"Successfully stored {count_added} new categories.")
         except Exception as e:
             session.rollback()
+            logger.error(f"Failed to store categories: {e}")
             raise Exception(f"Failed to store categories: {e}")
         finally:
             session.close()
@@ -238,41 +210,26 @@ class ABCNewsRSSCategoriesParser:
         try:
             categories = self.fetch_rss_feeds()
             self.store_categories(categories)
-            print("Category processing completed successfully.")
+            logger.info("Category processing completed successfully.")
         except Exception as e:
-            print(f"Error processing categories: {e}")
+            logger.error(f"Error processing categories: {e}")
             raise
 
 
 def main():
-    """
-    Script entry point.
-    """
-    # Print registered tables for debugging.
-    from db_scripts.models.models import Base
-    
-    argparser = argparse.ArgumentParser(description="ABC News RSS Categories Parser")
-    argparser.add_argument(
+    parser = argparse.ArgumentParser(description="ABC News RSS Categories Parser")
+    parser.add_argument(
         '--env',
         choices=['dev', 'prod'],
         default='dev',
-        help="Specify the environment to load data (default: dev)"
+        help="Specify the environment (default: dev)"
     )
-    args = argparser.parse_args()
+    args = parser.parse_args()
 
-    portal_prefix = "pt_abc"  # The portal prefix for ABC News.
-    try:
-        portal_id = fetch_portal_id_by_prefix(portal_prefix, env=args.env)
-        print(f"Using portal_id: {portal_id} for portal_prefix: {portal_prefix}")
-        parser_instance = ABCNewsRSSCategoriesParser(
-            portal_id=portal_id,
-            env=args.env,
-            category_model=ABCNewsCategory
-        )
-        parser_instance.run()
-    except Exception as e:
-        print(f"Script execution failed: {e}")
-        raise
+    portal_id = fetch_portal_id_by_prefix("pt_abc", env=args.env)
+    logger.info(f"Using portal_id: {portal_id} for portal_prefix: pt_abc")
+    parser_instance = ABCRSSCategoriesParser(portal_id=portal_id, env=args.env)
+    parser_instance.run()
 
 
 if __name__ == "__main__":

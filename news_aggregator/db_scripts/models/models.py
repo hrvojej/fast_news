@@ -72,7 +72,7 @@ def create_portal_article_model(schema: str):
         (Base,),
         {
             '__tablename__': 'articles',
-           '__table_args__': (
+            '__table_args__': (
                 Index(f'idx_{schema}_articles_pub_date', 'pub_date'),
                 Index(f'idx_{schema}_articles_category', 'category_id'),
                 sa.ForeignKeyConstraint(
@@ -80,6 +80,8 @@ def create_portal_article_model(schema: str):
                     [f'{schema}.categories.category_id'],
                     name=f'fk_{schema}_article_category'
                 ),
+                # Add the unique constraint for the url column
+                UniqueConstraint('url', name='unique_url'),
                 {'schema': schema}
             ),
             'article_id': sa.Column(UUID(as_uuid=True), primary_key=True, server_default=sa.text("gen_random_uuid()")),
