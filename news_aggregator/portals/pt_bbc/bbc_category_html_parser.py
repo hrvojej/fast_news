@@ -1,9 +1,3 @@
-"""
-BBC RSS Articles Parser
-Fetches and stores BBC RSS feed articles using SQLAlchemy ORM.
-Uses PostgreSQL upsert to update existing categories.
-"""
-
 import sys
 import os
 import re
@@ -13,20 +7,25 @@ import argparse
 from typing import Tuple, Optional, Dict, List
 from sqlalchemy import text
 from sqlalchemy.dialects.postgresql import insert
-from datetime import datetime
 from uuid import UUID
 
+# Set up paths so that package modules are discoverable.
 current_dir = os.path.dirname(os.path.abspath(__file__))
 package_root = os.path.abspath(os.path.join(current_dir, "../../"))
 if package_root not in sys.path:
     sys.path.insert(0, package_root)
 
 from db_scripts.models.models import create_portal_category_model
+from portals.modules.logging_config import setup_script_logging
+
+logger = setup_script_logging(__file__)
 BBCCategory = create_portal_category_model("pt_bbc")
 
 
 def fetch_portal_id_by_prefix(portal_prefix: str, env: str = 'dev') -> UUID:
-    """Fetches the portal_id from news_portals table."""
+    """
+    Fetch the portal_id from the news_portals table based on the portal prefix.
+    """
     from db_scripts.db_context import DatabaseContext
     db_context = DatabaseContext.get_instance(env)
     with db_context.session() as session:
@@ -40,7 +39,11 @@ def fetch_portal_id_by_prefix(portal_prefix: str, env: str = 'dev') -> UUID:
 
 
 class BBCRSSCategoriesParser:
-    """Parser for BBC RSS feed categories"""
+    """
+    Parser for BBC RSS feed categories.
+    Fetches multiple RSS feeds, extracts category metadata, and stores them
+    using PostgreSQL upsert functionality.
+    """
 
     def __init__(self, portal_id: UUID, env: str = 'dev'):
         self.portal_id = portal_id
@@ -77,36 +80,28 @@ class BBCRSSCategoriesParser:
         ]
 
     def get_session(self):
-        """Get database session from DatabaseContext."""
+        """
+        Get a database session from the DatabaseContext.
+        """
         from db_scripts.db_context import DatabaseContext
         db_context = DatabaseContext.get_instance(self.env)
         return db_context.session().__enter__()
 
     @staticmethod
     def clean_cdata(text_value: Optional[str]) -> Optional[str]:
-        """Clean CDATA tags from text."""
+        """
+        Clean CDATA tags from the text.
+        """
         if not text_value:
             return None
         cleaned = re.sub(r'<!\[CDATA\[(.*?)\]\]>', r'\1', str(text_value)).strip()
         return cleaned if cleaned else None
 
     @staticmethod
-    def generate_slug(url: Optional[str], title: Optional[str]) -> str:
-        """Generate a slug from URL or title."""
-        if not url:
-            return BBCRSSCategoriesParser.clean_ltree(title or 'unknown')
-        try:
-            # Extract parts from URL
-            parts = url.split('//')[1].split('/')[2:-1]
-            if not parts:
-                return BBCRSSCategoriesParser.clean_ltree(title or 'unknown')
-            return '_'.join(parts)
-        except Exception:
-            return BBCRSSCategoriesParser.clean_ltree(title or 'unknown')
-
-    @staticmethod
     def clean_ltree(value: Optional[str]) -> str:
-        """Clean value for ltree compatibility."""
+        """
+        Clean a string to make it compatible with ltree format.
+        """
         if not value:
             return "unknown"
         value = value.replace(">", ".").strip()
@@ -114,39 +109,62 @@ class BBCRSSCategoriesParser:
         value = re.sub(r"[._]{2,}", ".", value)
         return value.strip("._")
 
-    def validate_rss(self, rss_url: str) -> Tuple[bool, Optional[BeautifulSoup], Optional[str]]:
-        """Validate RSS feed URL."""
+    @staticmethod
+    def generate_slug(url: Optional[str], title: Optional[str]) -> str:
+        """
+        Generate a slug from the URL or title.
+        """
+        if not url:
+            return BBCRSSCategoriesParser.clean_ltree(title or 'unknown')
         try:
-            print(f"\nValidating RSS feed: {rss_url}")
+            # Extract parts from the URL.
+            parts = url.split('//')[1].split('/')[2:-1]
+            if not parts:
+                return BBCRSSCategoriesParser.clean_ltree(title or 'unknown')
+            return '_'.join(parts)
+        except Exception:
+            return BBCRSSCategoriesParser.clean_ltree(title or 'unknown')
+
+    def validate_rss(self, rss_url: str) -> Tuple[bool, Optional[BeautifulSoup], Optional[str]]:
+        """
+        Validate the RSS feed URL by checking for the existence of
+        required elements in the XML (e.g., <channel> and <title>).
+        """
+        try:
+            logger.info(f"Validating RSS feed: {rss_url}")
             response = requests.get(rss_url, timeout=10)
             response.raise_for_status()
-
             soup = BeautifulSoup(response.content, 'xml')
             channel = soup.find('channel')
-
             if not channel:
+                logger.error(f"No channel element found in RSS feed: {rss_url}")
                 return False, None, "No channel element found"
             if not channel.find('title'):
+                logger.error(f"No title element found in RSS feed: {rss_url}")
                 return False, None, "No title element found"
-
             return True, soup, None
-
         except requests.exceptions.RequestException as e:
+            logger.error(f"HTTP error for RSS feed {rss_url}: {e}")
             return False, None, f"HTTP error: {str(e)}"
         except Exception as e:
+            logger.error(f"Error processing RSS feed {rss_url}: {e}")
             return False, None, f"Error: {str(e)}"
 
     def parse_category(self, channel: BeautifulSoup, rss_url: str) -> Dict:
-        """Parse RSS channel metadata."""
+        """
+        Parse the RSS channel metadata to extract category information.
+        """
         title = self.clean_cdata(channel.find('title').string if channel.find('title') else None)
         path = self.clean_ltree(title or 'unknown')
         slug = self.generate_slug(rss_url, title)
+        atom_link_elem = channel.find('atom:link')
+        atom_link = atom_link_elem['href'] if atom_link_elem and atom_link_elem.has_attr('href') else rss_url
 
         return {
-            'title': title,  # keeping original title for slug generation later
+            'title': title,
             'name': title,
             'link': self.clean_cdata(channel.find('link').string if channel.find('link') else None),
-            'atom_link': channel.find('atom:link')['href'] if channel.find('atom:link') else rss_url,
+            'atom_link': atom_link,
             'description': self.clean_cdata(channel.find('description').string if channel.find('description') else None),
             'path': path,
             'level': len(slug.split('_')),
@@ -154,39 +172,37 @@ class BBCRSSCategoriesParser:
         }
 
     def process_categories(self) -> List[Dict]:
-        """Process all RSS feeds and extract categories."""
+        """
+        Process all RSS feeds and extract category metadata.
+        """
         categories = []
-
-        for index, rss_url in enumerate(self.base_urls, 1):
+        for rss_url in self.base_urls:
             try:
                 is_valid, rss_soup, error_msg = self.validate_rss(rss_url)
-
                 if not is_valid:
-                    print(f"❌ Skipping invalid RSS feed: {rss_url}")
-                    if error_msg:
-                        print(f"Error details: {error_msg}")
+                    logger.warning(f"Skipping invalid RSS feed: {rss_url} - {error_msg}")
                     continue
 
                 channel = rss_soup.find('channel')
                 if channel:
                     category_data = self.parse_category(channel, rss_url)
                     categories.append(category_data)
-                    print(f"✓ Successfully processed: {category_data['name']}")
-
+                    logger.info(f"Processed category: {category_data['name']}")
             except Exception as e:
-                print(f"❌ Error processing feed {rss_url}: {str(e)}")
+                logger.error(f"Error processing feed {rss_url}: {e}")
                 continue
-
         return categories
 
     def store_categories(self, categories: List[Dict]):
-        """Store categories in the database using upsert."""
+        """
+        Store categories in the database using PostgreSQL upsert.
+        """
         session = self.get_session()
         try:
+            count_upserted = 0
             for category in categories:
-                # Generate a slug using the atom_link and title (from parsing)
+                # Generate a slug using the atom_link and title.
                 slug = self.generate_slug(category['atom_link'], category['title'])
-                # Prepare the data dictionary for upsert (note: slug and portal_id are conflict keys)
                 category_data = {
                     'name': category['name'],
                     'slug': slug,
@@ -198,8 +214,6 @@ class BBCRSSCategoriesParser:
                     'atom_link': category['atom_link'],
                     'is_active': category['is_active']
                 }
-
-                # Build the INSERT statement with upsert logic
                 stmt = insert(BBCCategory).values(category_data)
                 upsert_stmt = stmt.on_conflict_do_update(
                     index_elements=['slug', 'portal_id'],
@@ -214,46 +228,45 @@ class BBCRSSCategoriesParser:
                     }
                 )
                 session.execute(upsert_stmt)
-                print(f"✓ Upserted category: {category_data['name']}")
-
+                count_upserted += 1
+                logger.info(f"Upserted category: {category_data['name']}")
             session.commit()
-            print("Categories stored successfully")
-
+            logger.info(f"Stored {count_upserted} categories successfully.")
         except Exception as e:
-            print(f"Error storing categories: {e}")
             session.rollback()
+            logger.error(f"Error storing categories: {e}")
             raise
         finally:
             session.close()
 
     def run(self):
-        """Main method to fetch and store BBC categories."""
+        """
+        Main method to fetch and store BBC RSS feed categories.
+        """
         try:
             categories = self.process_categories()
             self.store_categories(categories)
-            print("Category processing completed successfully")
+            logger.info("Category processing completed successfully.")
         except Exception as e:
-            print(f"Error processing categories: {e}")
+            logger.error(f"Error processing categories: {e}")
             raise
 
 
 def main():
-    """Script entry point."""
+    """
+    Script entry point.
+    """
     argparser = argparse.ArgumentParser(description="BBC RSS Categories Parser")
-    argparser.add_argument(
-        '--env',
-        choices=['dev', 'prod'],
-        default='dev',
-        help="Specify the environment (default: dev)"
-    )
+    argparser.add_argument('--env', choices=['dev', 'prod'], default='dev', help="Specify the environment")
     args = argparser.parse_args()
 
     try:
         portal_id = fetch_portal_id_by_prefix("pt_bbc", env=args.env)
+        logger.info(f"Using portal_id: {portal_id}")
         parser = BBCRSSCategoriesParser(portal_id=portal_id, env=args.env)
         parser.run()
     except Exception as e:
-        print(f"Script execution failed: {e}")
+        logger.error(f"Script execution failed: {e}")
         raise
 
 

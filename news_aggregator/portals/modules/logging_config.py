@@ -38,14 +38,14 @@ def setup_script_logging(script_file, log_level=logging.DEBUG, max_bytes=50 * 10
         '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
     )
     
-    # Create a RotatingFileHandler that overwrites the file once max_bytes is reached.
+    # Create a RotatingFileHandler with UTF-8 encoding and a safe error handler.
     file_handler = RotatingFileHandler(
-        log_file, maxBytes=max_bytes, backupCount=0
+        log_file, maxBytes=max_bytes, backupCount=0, encoding="utf-8", errors="backslashreplace"
     )
     file_handler.setLevel(log_level)
     file_handler.setFormatter(formatter)
     
-    # Optionally, add a console handler.
+    # Create a console handler.
     console_handler = logging.StreamHandler()
     console_handler.setLevel(log_level)
     console_handler.setFormatter(formatter)

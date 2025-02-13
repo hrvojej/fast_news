@@ -3,6 +3,8 @@ import requests
 from bs4 import BeautifulSoup
 from db_scripts.db_context import DatabaseContext
 from portals.modules.logging_config import setup_script_logging
+from sqlalchemy.dialects.postgresql import insert
+
 
 # Configure logger using the shared logging configuration.
 logger = setup_script_logging(__file__)
@@ -98,27 +100,40 @@ class BaseRSSParser(ABC):
         """
         pass
 
+
+
     def upsert_item(self, item_data, session):
         try:
             if self.model is None:
                 raise Exception("Model not set in parser. Ensure self.model is defined in the subclass.")
-            existing = session.query(self.model).filter(self.model.guid == item_data.get('guid')).first()
-            if not existing:
-                new_item = self.model(**item_data)
-                session.add(new_item)
-                logger.info(f"Added new item: {item_data.get('title')}")
-                return 'new', None
+            
+            stmt = insert(self.model).values(**item_data)
+            # Use the unique index on url
+            stmt = stmt.on_conflict_do_update(
+                index_elements=[self.model.url],
+                set_=item_data,
+                where=(self.model.pub_date != stmt.excluded.pub_date)
+            ).returning(self.model.pub_date)
+            
+            result = session.execute(stmt)
+            session.commit()
+            
+            # Optionally, inspect result.fetchone() if needed for logging
+            returned_pub_date = result.scalar()  # This is the new pub_date if update happened, or None if no update
+            if returned_pub_date is None:
+                # No update took place because the pub_date was the same.
+                # logger.info(f"No update needed for item: {item_data.get('title')}")
+                return 'unchanged', None
             else:
-                if self.is_update_needed(existing, item_data):
-                    old_pub_date = existing.pub_date
-                    for key, value in item_data.items():
-                        setattr(existing, key, value)
-                    logger.info(f"Updated item: {item_data.get('title')}")
-                    return 'updated', (item_data.get('title'), old_pub_date, item_data.get('pub_date'))
+                logger.info(f"Upserted item: {item_data.get('title')}")
+                # You can decide here how to report "new" vs "updated"
+                # For example, if an existing row was found, treat it as "updated"
+                return 'updated', (item_data.get('title'), None, item_data.get('pub_date'))
         except Exception as e:
-            logger.error(f"Error upserting item with guid {item_data.get('guid')}: {e}")
+            logger.error(f"Error upserting item with url {item_data.get('url')}: {e}")
             raise
-        return 'unchanged', None
+
+
 
     def is_update_needed(self, existing, new_data):
         """
