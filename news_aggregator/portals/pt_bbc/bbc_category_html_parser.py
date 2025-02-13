@@ -195,11 +195,11 @@ class BBCRSSCategoriesParser:
 
     def store_categories(self, categories: List[Dict]):
         """
-        Store categories in the database using PostgreSQL upsert.
+        Store categories in the database by inserting only those that do not already exist.
         """
         session = self.get_session()
         try:
-            count_upserted = 0
+            count_inserted = 0
             for category in categories:
                 # Generate a slug using the atom_link and title.
                 slug = self.generate_slug(category['atom_link'], category['title'])
@@ -215,29 +215,23 @@ class BBCRSSCategoriesParser:
                     'is_active': category['is_active']
                 }
                 stmt = insert(BBCCategory).values(category_data)
-                upsert_stmt = stmt.on_conflict_do_update(
-                    index_elements=['slug', 'portal_id'],
-                    set_={
-                        'name': stmt.excluded.name,
-                        'path': stmt.excluded.path,
-                        'level': stmt.excluded.level,
-                        'description': stmt.excluded.description,
-                        'link': stmt.excluded.link,
-                        'atom_link': stmt.excluded.atom_link,
-                        'is_active': stmt.excluded.is_active,
-                    }
+                # Instead of updating on conflict, do nothing if the record exists.
+                stmt = stmt.on_conflict_do_nothing(
+                    index_elements=['slug', 'portal_id']
                 )
-                session.execute(upsert_stmt)
-                count_upserted += 1
-                logger.info(f"Upserted category: {category_data['name']}")
+                result = session.execute(stmt)
+                # result.rowcount will be 1 if a new row was inserted, 0 if the row already exists.
+                count_inserted += result.rowcount if result.rowcount else 0
+                logger.info(f"Attempted to insert category: {category_data['name']}")
             session.commit()
-            logger.info(f"Stored {count_upserted} categories successfully.")
+            logger.info(f"Inserted {count_inserted} new categories successfully.")
         except Exception as e:
             session.rollback()
             logger.error(f"Error storing categories: {e}")
             raise
         finally:
             session.close()
+
 
     def run(self):
         """
