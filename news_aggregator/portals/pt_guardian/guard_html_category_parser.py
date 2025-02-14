@@ -1,83 +1,66 @@
-# path: news_dagster-etl/news_aggregator/portals/guardian/rss_categories_parser.py
+#!/usr/bin/env python
 """
 Guardian Categories Parser
 Fetches and stores Guardian categories using SQLAlchemy ORM.
 """
 
+import argparse
 import sys
 import os
-from typing import List, Dict
-from uuid import UUID
 import requests
-from bs4 import BeautifulSoup
 import re
 import time
+from uuid import UUID
 from urllib.parse import urljoin
-from sqlalchemy import text
+from bs4 import BeautifulSoup
 
-# Add the package root to sys.path
+# Add the package root (e.g., news_aggregator) to sys.path if needed.
 current_dir = os.path.dirname(os.path.abspath(__file__))
 package_root = os.path.abspath(os.path.join(current_dir, "../../"))
 if package_root not in sys.path:
     sys.path.insert(0, package_root)
 
-# Import the dynamic model factory
+from portals.modules.portal_db import fetch_portal_id_by_prefix
 from db_scripts.models.models import create_portal_category_model
+from portals.modules.logging_config import setup_script_logging
+
+logger = setup_script_logging(__file__)
 
 # Create the dynamic category model for the Guardian portal
 GuardianCategory = create_portal_category_model("pt_guardian")
 
-def fetch_portal_id_by_prefix(portal_prefix: str, env: str = 'dev') -> UUID:
-    """
-    Fetches the portal_id from the news_portals table for the given portal_prefix.
-    """
-    from db_scripts.db_context import DatabaseContext
-    db_context = DatabaseContext.get_instance(env)
-    with db_context.session() as session:
-        result = session.execute(
-            text("SELECT portal_id FROM public.news_portals WHERE portal_prefix = :prefix"),
-            {'prefix': portal_prefix}
-        ).fetchone()
-        if result:
-            return result[0]
-        else:
-            raise Exception(f"Portal with prefix '{portal_prefix}' not found.")
 
 class GuardianCategoriesParser:
-    """Parser for Guardian categories and subcategories"""
-
-    def __init__(self, portal_id: UUID, env: str = 'dev', category_model=None):
+    def __init__(self, portal_id: UUID, env: str = 'dev', category_model=GuardianCategory):
         """
-        Initialize the parser
-
+        Initialize the Guardian parser.
         Args:
-            portal_id: UUID of the Guardian portal in news_portals table
-            env: Environment to use (dev/prod)
-            category_model: SQLAlchemy ORM model for categories
+            portal_id: UUID of the Guardian portal.
+            env: Environment to use (dev/prod).
+            category_model: SQLAlchemy ORM model for categories.
         """
         self.portal_id = portal_id
         self.env = env
+        self.category_model = category_model
         self.base_url = 'https://www.theguardian.com'
-        self.GuardianCategory = category_model
         self.headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+            'User-Agent': (
+                'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
+                'AppleWebKit/537.36 (KHTML, like Gecko) '
+                'Chrome/91.0.4472.124 Safari/537.36'
+            ),
             'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8',
             'Accept-Language': 'en-US,en;q=0.9',
             'Accept-Encoding': 'gzip, deflate, br',
             'Connection': 'keep-alive'
         }
 
-    def get_session(self):
-        """Get a database session from the DatabaseContext."""
-        from db_scripts.db_context import DatabaseContext
-        db_context = DatabaseContext.get_instance(self.env)
-        return db_context.session().__enter__()
-
     @staticmethod
     def clean_ltree(value: str) -> str:
-        """Convert category title into valid ltree path."""
+        """Convert a category title into a valid ltree path."""
         if not value:
             return "unknown"
+        # Replace '>' with dot and clean up the string
         value = value.replace('>', '.').strip()
         value = re.sub(r"[^a-zA-Z0-9.]+", "_", value.lower())
         value = re.sub(r"[._]{2,}", ".", value)
@@ -85,195 +68,187 @@ class GuardianCategoriesParser:
 
     @staticmethod
     def generate_slug(url: str) -> str:
-        """Generate a unique slug from URL."""
+        """Generate a unique slug from a URL."""
         try:
-            path = url.split('//')[1].split('/')[1:]
-            path = [p for p in path if p and p not in ['index.html', 'article', 'articles']]
-            if not path:
+            parts = url.split('//')[1].split('/')[1:]
+            # Filter out known non-slug parts
+            parts = [part for part in parts if part and part not in ['index.html', 'article', 'articles']]
+            if not parts:
                 return 'home'
-            return '_'.join(path)
-        except:
+            return '_'.join(parts)
+        except Exception:
             return 'unknown'
 
-    def fetch_html_content(self) -> str:
-        """Fetch HTML content from Guardian website."""
+    def fetch_page(self, url: str) -> BeautifulSoup:
+        """
+        Fetch a page and return a BeautifulSoup object.
+        """
         try:
-            print(f"Requesting URL: {self.base_url}")
-            response = requests.get(self.base_url, headers=self.headers, timeout=30)
+            logger.info(f"Fetching URL: {url}")
+            response = requests.get(url, headers=self.headers, timeout=30)
             response.raise_for_status()
-            return response.text
+            return BeautifulSoup(response.text, 'html.parser')
         except requests.exceptions.RequestException as e:
-            raise Exception(f"Failed to fetch Guardian homepage: {str(e)}")
+            logger.error(f"Failed to fetch page {url}: {e}")
+            return None
 
-    def validate_html_content(self, html_content: str) -> bool:
-        """Validate if the HTML content contains expected elements."""
-        if not html_content:
-            raise Exception("Empty HTML content")
-            
-        soup = BeautifulSoup(html_content, 'html.parser')
-        nav_links = soup.find_all('a', class_='dcr-7612kl')
-        
-        if not nav_links:
-            raise Exception("Could not find main navigation links")
-            
-        return True
-
-    def extract_categories(self, html_content: str) -> List[Dict]:
-        """Extract main categories and subcategories from Guardian navigation."""
-        self.validate_html_content(html_content)
-        soup = BeautifulSoup(html_content, 'html.parser')
+    def parse_main_categories(self, soup: BeautifulSoup):
+        """
+        Parse the main categories from the Guardian homepage soup.
+        """
+        if not soup:
+            raise Exception("No content to parse for main categories.")
         categories = []
-        
+        # The main navigation links use a specific class
         main_links = soup.find_all('a', class_='dcr-7612kl')
-        print(f"Found {len(main_links)} main categories")
-        
-        for main_link in main_links:
-            href = main_link.get('href', '')
+        logger.info(f"Found {len(main_links)} main navigation links.")
+
+        for link in main_links:
+            href = link.get('href', '')
+            # Special case: if link is root, use '/news'
             if href == '/':
-                href = '/news'  # Special case for home/news
-                
+                href = '/news'
             full_url = urljoin(self.base_url, href)
-            title = main_link.text.strip()
-            
-            # Get meta description if available
-            meta_desc = soup.find('meta', {'name': 'description'})
-            description = meta_desc['content'] if meta_desc else None
+            title = link.get_text(strip=True)
+            slug = self.generate_slug(full_url)
+            path = self.clean_ltree(title)
+            # Optionally, you could fetch a meta description from the homepage if needed.
+            description = None
 
             main_category = {
-                'name': title,
-                'slug': self.generate_slug(full_url),
-                'portal_id': self.portal_id,  # Explicitly include portal_id
-                'path': self.clean_ltree(title),
-                'level': 1,
-                'description': description,
+                'title': title,
                 'link': full_url,
-                'atom_link': f"{full_url}/rss",
-                'is_active': True
-                # category_id is handled by server_default
+                'slug': slug,
+                'path': path,
+                'level': 1,
+                'description': description
             }
-            
-            # Fetch subcategories
-            try:
-                response = requests.get(full_url, headers=self.headers, timeout=30)
-                if response.status_code == 200:
-                    sub_soup = BeautifulSoup(response.text, 'html.parser')
-                    sub_links = sub_soup.find_all('li', class_='dcr-5wkng0')
-                    
-                    for sub_item in sub_links:
-                        sub_link = sub_item.find('a')
-                        if sub_link:
-                            sub_href = sub_link.get('href', '')
-                            sub_full_url = urljoin(self.base_url, sub_href)
-                            sub_title = sub_link.text.strip()
-                            
-                            # Try to get subcategory description
-                            sub_desc = sub_soup.find('meta', {'name': 'description'})
-                            sub_description = sub_desc['content'] if sub_desc else None
-
-                            subcategory = {
-                                'name': sub_title,
-                                'slug': self.generate_slug(sub_full_url),
-                                'portal_id': self.portal_id,  # Explicitly include portal_id
-                                'path': f"{main_category['path']}.{self.clean_ltree(sub_title)}",
-                                'level': 2,
-                                'description': sub_description,
-                                'link': sub_full_url,
-                                'atom_link': f"{sub_full_url}/rss",
-                                'is_active': True
-                                # category_id is handled by server_default
-                            }
-                            categories.append(subcategory)
-            except Exception as e:
-                print(f"Error fetching subcategories for {title}: {str(e)}")
-                
-            time.sleep(2)  # Rate limiting
             categories.append(main_category)
-        
+            # Attempt to fetch subcategories for this main category
+            subcategories = self.parse_subcategories(full_url, path)
+            if subcategories:
+                categories.extend(subcategories)
+            time.sleep(2)  # Respect rate limiting
         return categories
 
-    def store_categories(self, categories: List[Dict]):
-        """Store categories using SQLAlchemy ORM."""
-        session = self.get_session()
-        
+    def parse_subcategories(self, url: str, parent_path: str):
+        """
+        Fetch the page at the given URL and extract subcategories.
+        """
+        subcategories = []
+        soup = self.fetch_page(url)
+        if not soup:
+            logger.warning(f"Could not fetch subcategories page for URL: {url}")
+            return subcategories
+
+        # The subcategory items are contained in list items with a specific class
+        sub_items = soup.find_all('li', class_='dcr-5wkng0')
+        logger.info(f"Found {len(sub_items)} subcategory items on page: {url}")
+
+        for item in sub_items:
+            a_tag = item.find('a', href=True)
+            if not a_tag:
+                continue
+            sub_href = a_tag.get('href', '')
+            sub_full_url = urljoin(self.base_url, sub_href)
+            sub_title = a_tag.get_text(strip=True)
+            sub_slug = self.generate_slug(sub_full_url)
+            sub_path = f"{parent_path}.{self.clean_ltree(sub_title)}"
+
+            subcategory = {
+                'title': sub_title,
+                'link': sub_full_url,
+                'slug': sub_slug,
+                'path': sub_path,
+                'level': 2,
+                'description': None  # Could be extended to extract a proper description if available
+            }
+            subcategories.append(subcategory)
+        return subcategories
+
+    def store_categories(self, categories):
+        """
+        Store categories in the database using SQLAlchemy ORM.
+        """
+        from db_scripts.db_context import DatabaseContext
+        session = DatabaseContext.get_instance(self.env).session().__enter__()
         try:
-            print("Storing categories in database...")
             count_added = 0
-            for category_data in categories:
-                existing = session.query(self.GuardianCategory).filter(
-                    self.GuardianCategory.slug == category_data['slug'],
-                    self.GuardianCategory.portal_id == self.portal_id
+            for cat in categories:
+                # Check for existing category using slug and portal_id
+                existing = session.query(self.category_model).filter(
+                    self.category_model.slug == cat['slug'],
+                    self.category_model.portal_id == self.portal_id
                 ).first()
-                
                 if existing:
-                    print(f"Category with slug '{category_data['slug']}' already exists. Skipping.")
+                    logger.info(f"Category '{cat['slug']}' already exists. Skipping.")
                     continue
 
-                # Create new category ensuring all fields are explicitly set
-                category = self.GuardianCategory(
-                    name=category_data['name'],
-                    slug=category_data['slug'],
+                # Create new category record
+                category = self.category_model(
+                    name=cat['title'],
+                    slug=cat['slug'],
                     portal_id=self.portal_id,
-                    path=category_data['path'],
-                    level=category_data['level'],
-                    description=category_data['description'],
-                    link=category_data['link'],
-                    atom_link=category_data['atom_link'],
-                    is_active=category_data['is_active']
-                    # category_id is handled by server_default
+                    path=cat['path'],
+                    level=cat['level'],
+                    description=cat['description'],
+                    link=cat['link'],
+                    atom_link=f"{cat['link']}/rss",
+                    is_active=True
                 )
                 session.add(category)
                 count_added += 1
 
             session.commit()
-            print(f"Successfully stored {count_added} new categories")
-
+            logger.info(f"Stored {count_added} new categories.")
         except Exception as e:
             session.rollback()
-            raise Exception(f"Failed to store categories: {e}")
-
+            logger.error(f"Failed to store categories: {e}")
+            raise
         finally:
             session.close()
 
     def run(self):
-        """Main method to fetch and store Guardian categories."""
+        """
+        Main method to fetch, parse, and store Guardian categories.
+        """
         try:
-            html_content = self.fetch_html_content()
-            categories = self.extract_categories(html_content)
-            self.store_categories(categories)
-            print("Category processing completed successfully")
+            homepage_soup = self.fetch_page(self.base_url)
+            if not homepage_soup:
+                raise Exception("Failed to fetch the Guardian homepage.")
+            categories = self.parse_main_categories(homepage_soup)
+            # Remove duplicate categories based on unique path if needed
+            unique_categories = {cat['path']: cat for cat in categories}.values()
+            self.store_categories(unique_categories)
+            logger.info("Category processing completed successfully.")
         except Exception as e:
-            print(f"Error processing categories: {e}")
+            logger.error(f"Error processing categories: {e}")
             raise
 
-def main():
-    """Script entry point."""
-    import argparse
-    from db_scripts.models.models import Base
-    print("Registered tables in metadata:", Base.metadata.tables.keys())
 
+def main():
     parser = argparse.ArgumentParser(description="Guardian Categories Parser")
     parser.add_argument(
         '--env',
         choices=['dev', 'prod'],
         default='dev',
-        help="Specify the environment to load data (default: dev)"
+        help="Specify the environment (default: dev)"
     )
     args = parser.parse_args()
 
-    portal_prefix = "pt_guardian"
     try:
-        portal_id = fetch_portal_id_by_prefix(portal_prefix, env=args.env)
-        print(f"Using portal_id: {portal_id} for portal_prefix: {portal_prefix}")
-
-        parser = GuardianCategoriesParser(
+        portal_id = fetch_portal_id_by_prefix("pt_guardian", env=args.env)
+        logger.info(f"Using portal_id: {portal_id} for Guardian portal.")
+        parser_instance = GuardianCategoriesParser(
             portal_id=portal_id,
             env=args.env,
             category_model=GuardianCategory
         )
-        parser.run()
+        parser_instance.run()
     except Exception as e:
-        print(f"Script execution failed: {e}")
+        logger.error(f"Script execution failed: {e}")
         raise
+
 
 if __name__ == "__main__":
     main()
