@@ -202,14 +202,23 @@ if __name__ == "__main__":
     main()
 
 
-I need to create same for schema (portal) pt_cnn. Structure of all tables are same in that schema as in pt_abc.
+I need to create same for schema (portal) pt_reuters. Structure of all tables are same in that schema as in pt_abc.
 You need to fetch content of the article from:
-SELECT url  FROM pt_cnn.articles
+SELECT url  FROM pt_reuters.articles
 
 When opening them extract text from:
 #### Rules of extraction of content START
 
-<div class="article__content" 
+<div class="article-body__content__17Yit"> so you need to find div with class that begins with "article-body__content" and extract text from it. 
+<div class="story-content-container past-first"> - this is another type of news pages that might appear. 
+<div data-testid="paragraph-0"  ...> - - this is another type of news pages that might appear. 
+<p data-testid="Body" ..> - - this is another type of news pages that might appear. 
+<div class="arena-liveblog"  ..- this is another type of news pages that might appear. 
+
+Ignore pages that have at the begining:
+https://www.reuters.com/pictures/
+https://www.reuters.com/graphics/
+
 
 
 
@@ -228,11 +237,8 @@ I want to make sure I fully understand your requirements before proceeding. Here
 Yes.
 
 2. **Target Element & Extraction:**  
-   For the article pages, you mentioned that we need to extract text from the  
-   ```html
- <div class="article__content" 
-   ```  
-   element.  
+   For the article pages, you mentioned that we need to extract text from the  various html elements in various pages.
+
    - Should we simply use BeautifulSoup’s `get_text()` on that element to obtain the “pure text” (thus stripping out any JS, CSS, or HTML styling)?  YES.
    - In cases where that element isn’t found, do you want to handle the error the same way as in the pt_abc script (for example, marking the status with an error code like "NO_DIV" or a similar designation)? YES.
 

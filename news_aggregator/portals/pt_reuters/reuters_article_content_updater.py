@@ -3,7 +3,8 @@
 Reuters Article Updater
 
 This script refactors the original article update functionality into a class-based updater for the pt_reuters portal.
-It uses shared utilities for updating status records and processing the update loop with random sleep intervals.
+It uses the shared utilities for fetching HTML (with retries and error handling), updating status records, 
+and processing the update loop with random sleep intervals.
 
 Extraction Rules for pt_reuters:
   - For each article (fetched from SELECT url FROM pt_reuters.articles), skip pages starting with:
@@ -24,8 +25,6 @@ The script logs a final summary on the number of processed, skipped, errored, an
 import sys
 import os
 import argparse
-import random
-import time
 from datetime import datetime, timezone
 from bs4 import BeautifulSoup
 
@@ -43,23 +42,23 @@ from db_scripts.models.models import (
 )
 from db_scripts.db_context import DatabaseContext
 
-# Import updater utilities from modules/article_updater_utils.py,
-# but note that we remove fetch_html (it will be replaced by our Chrome DevTools function).
+# Import updater utilities from modules/article_updater_utils.py
 from portals.modules.article_updater_utils import (
     random_sleep,
+    fetch_html,
     update_status_error,
     update_status_success,
     get_articles_to_update,
     log_update_summary
 )
 
+# Set up shared logging
 logger = setup_script_logging(__file__)
 
 # Dynamically create models for the portal pt_reuters.
 ReutersCategory = create_portal_category_model("pt_reuters")
 ReutersArticle = create_portal_article_model("pt_reuters")
 ReutersArticleStatus = create_portal_article_status_model("pt_reuters")
-
 
 class ReutersArticleUpdater:
     def __init__(self, env='dev'):
@@ -78,7 +77,7 @@ class ReutersArticleUpdater:
             "skipped": 0
         }
         self.error_counts = {}
-        # Context for fetch functions (if needed)
+        # Context for fetch_html to track state (e.g., consecutive 403 errors)
         self.context = {"consecutive_403_count": 0}
 
     def _extract_article_content(self, soup):
@@ -128,73 +127,11 @@ class ReutersArticleUpdater:
         # If no valid content found
         return None
 
-    def _fetch_html_with_chrome(self, url):
-        """
-        Uses pychrome to open the URL in a new Chromium tab, automates cookie acceptance,
-        removes unwanted elements, and returns the cleaned HTML content.
-        """
-        try:
-            import pychrome  # Ensure pychrome is installed and available.
-        except ImportError:
-            self.logger.error("pychrome is not installed. Please install it to use Chrome DevTools for fetching.")
-            return "", "PYCHROME_NOT_INSTALLED"
-
-        try:
-            browser = pychrome.Browser(url="http://127.0.0.1:9222")
-            tab = browser.new_tab()
-            tab.start()
-            tab.Page.enable()
-            tab.Runtime.enable()
-            tab.Page.navigate(url=url)
-
-            # Wait a random delay between 1 and 3 seconds for the page to load.
-            delay = random.uniform(1, 3)
-            self.logger.info(f"Waiting {delay:.2f} seconds for page to load: {url}")
-            time.sleep(delay)
-
-            # --- AUTOMATE COOKIE ACCEPTANCE ---
-            cookie_js = """
-            (function() {
-                var btn = document.querySelector('button[aria-label="Accept Cookies"], button[data-testid="CookieBanner-accept"]');
-                if (btn) { 
-                    btn.click(); 
-                    return "Clicked cookie button";
-                }
-                return "No cookie button found";
-            })();
-            """
-            result_cookie = tab.Runtime.evaluate(expression=cookie_js)
-            cookie_result = result_cookie.get("result", {}).get("value")
-            self.logger.info("Cookie acceptance result: %s", cookie_result)
-            time.sleep(2)
-
-            # --- CLEAN THE HTML ---
-            clean_html_js = """
-            (function cleanHTML() {
-                const elements = document.querySelectorAll('script, style, iframe, link, meta');
-                elements.forEach(el => el.remove());
-                return document.documentElement.outerHTML;
-            })();
-            """
-            result = tab.Runtime.evaluate(expression=clean_html_js)
-            html_content = result["result"]["value"]
-            return html_content, None
-
-        except Exception as e:
-            self.logger.error(f"Error fetching page {url}: {e}")
-            return "", str(e)
-        finally:
-            try:
-                tab.stop()
-                browser.close_tab(tab)
-            except Exception:
-                pass
-
     def update_article(self, article_info):
         """
         Process an individual article update:
           - Skip pages based on URL patterns.
-          - Fetch HTML content using Chrome DevTools.
+          - Fetch HTML content.
           - Parse and extract article content using Reuters-specific rules.
           - Update the article record (clearing any existing content first).
           - Update or create the status record.
@@ -209,10 +146,9 @@ class ReutersArticleUpdater:
             return
 
         fetched_at = datetime.now(timezone.utc)
-        # Use the Chrome DevTools-based fetch function
-        html_content, fetch_error = self._fetch_html_with_chrome(url)
+        html_content, fetch_error = fetch_html(url, self.logger, context=self.context)
 
-        if not html_content:
+        if html_content is None:
             error_type = fetch_error if fetch_error else "UNKNOWN_FETCH"
             with self.db_context.session() as session:
                 update_status_error(
@@ -299,7 +235,6 @@ class ReutersArticleUpdater:
         # Log summary statistics.
         log_update_summary(self.logger, self.counters, self.error_counts)
 
-
 def main():
     parser = argparse.ArgumentParser(description="Reuters Article Updater")
     parser.add_argument(
@@ -317,7 +252,6 @@ def main():
     except Exception as e:
         logger.error(f"Script execution failed: {e}")
         raise
-
 
 if __name__ == "__main__":
     main()

@@ -1,6 +1,9 @@
 """
 Reuters RSS Categories Parser
 Fetches and stores Reuters navigation categories using SQLAlchemy ORM and pychrome.
+
+Run first in PowerShell command to start Chrome in headless mode. Go to info.md for more details.
+
 """
 
 import sys
