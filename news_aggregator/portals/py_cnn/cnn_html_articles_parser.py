@@ -1,161 +1,66 @@
-import sys
+#!/usr/bin/env python
+import argparse
 import os
+import sys
 import re
+import unicodedata
+import time
 from datetime import datetime
-from typing import Dict, List
+from urllib.parse import urljoin, urlparse
 from uuid import UUID
+
 import requests
 from bs4 import BeautifulSoup
-import argparse
 from sqlalchemy import text
-from sentence_transformers import SentenceTransformer
-from sklearn.metrics.pairwise import cosine_similarity
-from nltk.corpus import stopwords
-import nltk
-import unicodedata
-from urllib.parse import urljoin
-from urllib.parse import urlparse
 
-# Add package root to path
+# Add package root to path.
 current_dir = os.path.dirname(os.path.abspath(__file__))
 package_root = os.path.abspath(os.path.join(current_dir, "../../"))
 if package_root not in sys.path:
     sys.path.insert(0, package_root)
 
-# Category model creation
-from db_scripts.models.models import create_portal_category_model
-CNNCategory = create_portal_category_model("pt_cnn")
+from db_scripts.models.models import create_portal_category_model, create_portal_article_model
+from portals.modules.logging_config import setup_script_logging
+from portals.modules.keyword_extractor import KeywordExtractor
+from portals.modules.portal_db import fetch_portal_id_by_prefix
 
-# Create the dynamic article model for CNN portal
-from db_scripts.models.models import create_portal_article_model
+# Configure logger.
+logger = setup_script_logging(__file__)
+
+# Dynamically create models for CNN portal.
+CNNCategory = create_portal_category_model("pt_cnn")
 CNNArticle = create_portal_article_model("pt_cnn")
 
 
-def extract_pub_date_from_url(url: str) -> str:
-    # Extract just the path from the URL.
-    path = urlparse(url).path
-    # Look for the date anywhere in the path.
-    match = re.search(r'/(\d{4})/(\d{2})/(\d{2})/', path)
-    if match:
-        year, month, day = match.groups()
-        return f"{year}-{month}-{day}"
-    return None
-
-# Example usage:
-# url = "/2025/02/06/tech/deepseek-ai-us-ban-bill/index.html"
-# publication_date = extract_pub_date_from_url(url)
-# print("Publication date:", publication_date)
-
-
-def fetch_portal_id_by_prefix(portal_prefix: str, env: str = 'dev') -> UUID:
-    """Fetches the portal_id from news_portals table."""
-    print(f"[DEBUG] Fetching portal ID for prefix: {portal_prefix}, env: {env}")
-    from db_scripts.db_context import DatabaseContext
-    db_context = DatabaseContext.get_instance(env)
-    with db_context.session() as session:
-        result = session.execute(
-            text("SELECT portal_id FROM public.news_portals WHERE portal_prefix = :prefix"),
-            {'prefix': portal_prefix}
-        ).fetchone()
-        if result:
-            print(f"[DEBUG] Found portal ID: {result[0]}")
-            return result[0]
-        print(f"[DEBUG] No portal found for prefix: {portal_prefix}")
-        raise Exception(f"Portal with prefix '{portal_prefix}' not found.")
-
-
-class KeywordExtractor:
-    """Extracts keywords from text using sentence transformers."""
-    
-    def __init__(self):
-        print("[DEBUG] Initializing KeywordExtractor")
-        self.model = SentenceTransformer('all-MiniLM-L6-v2')
-        try:
-            self.stop_words = set(stopwords.words('english'))
-        except LookupError:
-            print("[DEBUG] Downloading stopwords")
-            nltk.download('stopwords')
-            self.stop_words = set(stopwords.words('english'))
-        print("[DEBUG] KeywordExtractor initialized")
-    
-    def extract_keywords(self, text: str, max_keywords: int = 5) -> List[str]:
-        print(f"[DEBUG] Extracting keywords from text: {text[:50]}...")
-        if not text:
-            print("[DEBUG] Empty text, returning empty keywords")
-            return []
-        
-        chunks = text.split()
-        if not chunks:
-            print("[DEBUG] No chunks found, returning empty keywords")
-            return []
-            
-        text_embedding = self.model.encode([text])
-        chunk_embeddings = self.model.encode(chunks)
-        
-        similarities = cosine_similarity(text_embedding, chunk_embeddings).flatten()
-        scored_chunks = sorted(
-            [(chunks[i], score) for i, score in enumerate(similarities)],
-            key=lambda x: x[1], reverse=True
-        )
-        
-        keywords = []
-        seen = set()
-        for word, score in scored_chunks:
-            word = word.lower()
-            if word not in self.stop_words and word not in seen and len(word) > 2:
-                keywords.append(word)
-                seen.add(word)
-                print(f"[DEBUG] Added keyword: {word} (score: {score:.3f})")
-            if len(keywords) >= max_keywords:
-                break
-        print(f"[DEBUG] Extracted keywords: {keywords}")
-        return keywords
-
-
-class CNNArticlesParser:
-    """Parser for CNN articles"""
-
-    def __init__(self, portal_id: UUID, env: str = 'dev', article_model=None):
-        print(f"[DEBUG] Initializing CNNArticlesParser with portal_id: {portal_id}, env: {env}")
+class BaseHTMLParser:
+    """
+    Base class for HTML parsers.
+    Provides common functionality such as database session management
+    and page fetching with a retry mechanism.
+    """
+    def __init__(self, portal_id: UUID, env: str = 'dev'):
         self.portal_id = portal_id
         self.env = env
-        self.CNNArticle = article_model
-        self.keyword_extractor = KeywordExtractor()
-        print("[DEBUG] CNNArticlesParser initialized")
+        from db_scripts.db_context import DatabaseContext
+        self.db_context = DatabaseContext.get_instance(env)
 
     def get_session(self):
-        """Get database session from DatabaseContext."""
-        print("[DEBUG] Getting database session")
-        from db_scripts.db_context import DatabaseContext
-        db_context = DatabaseContext.get_instance(self.env)
-        session = db_context.session().__enter__()
-        print("[DEBUG] Database session obtained")
-        return session
+        """Obtain a database session."""
+        return self.db_context.session().__enter__()
 
-    @staticmethod
-    def clean_text(text: str) -> str:
-        """Clean text from special characters and normalize whitespace"""
-        print(f"[DEBUG] Cleaning text: {text[:50]}...")
-        if not text:
-            print("[DEBUG] Empty text, returning empty string")
-            return ""
-            
-        cleaned = text.strip()
-        cleaned = re.sub(r'[\n\r\t\f\v]+', ' ', cleaned)
-        cleaned = re.sub(r'\s+', ' ', cleaned)
-        cleaned = re.sub(r'[^\S\r\n]+', ' ', cleaned)
-        cleaned = re.sub(r'¶|•|■|▪|►|▼|▲|◄|★|☆|⚡', '', cleaned)
-        cleaned = re.sub(r'\s+', ' ', cleaned)
-        cleaned = "".join(char for char in cleaned if unicodedata.category(char)[0] != "C")
-        result = cleaned.strip()
-        print(f"[DEBUG] Cleaned text result: {result[:50]}...")
-        return result
-
-    def fetch_page_with_retry(self, url: str, max_retries: int = 3) -> str:
-        """Fetch page content with retry mechanism"""
-        print(f"[DEBUG] Fetching URL with retry: {url}")
+    def fetch_page(self, url: str, max_retries: int = 3) -> str:
+        """
+        Fetches page content using a retry mechanism.
+        :param url: URL to fetch.
+        :param max_retries: Maximum number of retries.
+        :return: HTML content as text.
+        """
         headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+            'User-Agent': (
+                'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
+                'AppleWebKit/537.36 (KHTML, like Gecko) '
+                'Chrome/58.0.3029.110 Safari/537.3'
+            ),
             'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
             'Accept-Language': 'en-US,en;q=0.5',
             'Connection': 'keep-alive',
@@ -163,95 +68,114 @@ class CNNArticlesParser:
 
         for attempt in range(max_retries):
             try:
-                print(f"[DEBUG] Attempt {attempt + 1}/{max_retries}")
                 response = requests.get(url, headers=headers, timeout=30)
                 response.raise_for_status()
-                print(f"[DEBUG] Successfully fetched URL: {url}")
                 return response.text
             except requests.RequestException as e:
-                print(f"[DEBUG] Request failed: {str(e)}")
+                logger.error("Error fetching URL %s: %s", url, e)
                 if attempt == max_retries - 1:
                     raise
-                print("[DEBUG] Retrying...")
-                import time
                 time.sleep(2)
 
-    def parse_article(self, card: BeautifulSoup, category_id: UUID, base_url: str) -> Dict:
-        """Parse a single CNN article card."""
-        print("[DEBUG] Starting article parsing")
+
+class CNNArticlesParser(BaseHTMLParser):
+    """
+    CNN HTML articles parser.
+    Inherits common functionality from BaseHTMLParser.
+    """
+    def __init__(self, portal_id: UUID, env: str = 'dev'):
+        super().__init__(portal_id, env)
+        self.model = CNNArticle
+        self.keyword_extractor = KeywordExtractor()
+
+    @staticmethod
+    def extract_pub_date_from_url(url: str) -> str:
+        """
+        Extract publication date from a URL using a regex.
+        :param url: URL string.
+        :return: Publication date in YYYY-MM-DD format, or None.
+        """
+        path = urlparse(url).path
+        match = re.search(r'/(\d{4})/(\d{2})/(\d{2})/', path)
+        if match:
+            year, month, day = match.groups()
+            return f"{year}-{month}-{day}"
+        return None
+
+    @staticmethod
+    def clean_text(text: str) -> str:
+        """
+        Clean text from unwanted characters and normalize whitespace.
+        :param text: Raw text.
+        :return: Cleaned text.
+        """
+        if not text:
+            return ""
+        cleaned = text.strip()
+        cleaned = re.sub(r'[\n\r\t\f\v]+', ' ', cleaned)
+        cleaned = re.sub(r'\s+', ' ', cleaned)
+        cleaned = re.sub(r'¶|•|■|▪|►|▼|▲|◄|★|☆|⚡', '', cleaned)
+        cleaned = "".join(char for char in cleaned if unicodedata.category(char)[0] != "C")
+        return cleaned.strip()
+
+    def parse_article(self, card: BeautifulSoup, category_id: UUID, base_url: str) -> dict:
+        """
+        Parse a single CNN article card.
+        :param card: BeautifulSoup element containing article info.
+        :param category_id: Category identifier.
+        :param base_url: Base URL for joining relative links.
+        :return: Dictionary with article data or None if parsing fails.
+        """
         link_elem = card.find('a', class_='container__link') or card.find('a', href=True)
         if not link_elem or not link_elem.get('href'):
-            print("[DEBUG] No valid link element found")
             return None
 
-        relative_url = link_elem.get('href', '').strip()
+        relative_url = link_elem.get('href').strip()
         full_url = urljoin(base_url, relative_url)
-        print(f"[DEBUG] Processing article URL: {full_url}")
+        publication_date = self.extract_pub_date_from_url(relative_url)
 
-        # Extract publication date from the relative URL using the new helper function.
-        publication_date = extract_pub_date_from_url(relative_url)
-        if publication_date:
-            print(f"[DEBUG] Extracted publication date: {publication_date}")
-        else:
-            print("[DEBUG] Publication date not found in URL")
-
+        # Extract title from dedicated elements.
         title = None
-        author = None
-
-        # Extract title solely from dedicated elements (no splitting on " - By ").
         title_elem = card.find('span', class_='container__headline-text')
         if title_elem:
             title = self.clean_text(title_elem.get_text())
-            print(f"[DEBUG] Extracted title from headline-text: {title}")
-
         if not title:
             headline_div = link_elem.find('div', class_='container__headline')
             if headline_div:
                 title = self.clean_text(headline_div.get_text())
-                print(f"[DEBUG] Found title from headline div: {title}")
-
         if not title:
             link_text = self.clean_text(link_elem.get_text())
             if len(link_text) > 10:
                 title = link_text
-                print(f"[DEBUG] Using link text as title: {title}")
-
         if not title or len(title) < 10:
-            print("[DEBUG] No valid title found")
             return None
 
-        # Extract the author separately from its dedicated element.
+        # Extract author from its dedicated element.
+        author = None
         author_elem = card.find('span', class_='metadata__byline__author')
         if author_elem:
             author = self.clean_text(author_elem.get_text())
             author = re.sub(r'^By\s+', '', author)
-            print(f"[DEBUG] Extracted author from metadata: {author}")
-        else:
-            print("[DEBUG] No author element found")
 
-        # Clean the title further if necessary.
+        # Further clean the title.
         title = re.sub(r'►\s*Video\s*►\s*', '', title)
         title = re.sub(r'▶\s*', '', title)
         title = re.sub(r'\s*\d+:\d+\s*$', '', title)
-        print(f"[DEBUG] Cleaned title: {title}")
 
-        # Extract image.
+        # Extract image URL.
         image = card.find('img')
         image_url = None
         if image:
             image_url = image.get('src') or image.get('data-src')
             if image_url:
                 image_url = image_url.strip()
-            print(f"[DEBUG] Found image: {image_url}")
 
         # Calculate reading time based on title word count.
         word_count = len(title.split())
         reading_time = max(1, round(word_count / 200))
-        print(f"[DEBUG] Calculated reading time: {reading_time} minutes")
 
-        # Extract keywords using the title text.
+        # Extract keywords using the shared keyword extractor.
         keywords = self.keyword_extractor.extract_keywords(title) if title else []
-        print(f"[DEBUG] Extracted keywords: {keywords}")
 
         article_data = {
             'title': title,
@@ -271,87 +195,94 @@ class CNNArticlesParser:
             'view_count': 0,
             'comment_count': 0
         }
-        print(f"[DEBUG] Created article data: {article_data}")
         return article_data
 
-    def fetch_and_store_articles(self):
-        """Fetch and store articles from all CNN categories."""
-        print("[DEBUG] Starting fetch_and_store_articles")
-        session = self.get_session()
-        print("[DEBUG] Executing categories query")
+    def process_category(self, category: tuple) -> tuple:
+        """
+        Process a single category: fetch the page, parse article cards,
+        and insert new articles into the database.
+        :param category: Tuple of (category_id, link, category_name)
+        :return: Tuple (new_count, skipped_count) for this category.
+        """
+        category_id, link, category_name = category
+        logger.info("Processing category: %s", category_name)
+        new_count = 0
+        skipped_count = 0
+
         try:
+            html_content = self.fetch_page(link)
+            soup = BeautifulSoup(html_content, 'html.parser')
+            article_cards = []
+            for selector in ['div[data-component-name="card"]', 'div.container__item', 'div[data-uri*="card"]']:
+                cards = soup.select(selector)
+                if cards:
+                    article_cards = cards
+                    break
+            logger.info("Found %d article cards for category %s", len(article_cards), category_name)
+
+            with self.db_context.session() as session:
+                for idx, card in enumerate(article_cards, 1):
+                    article_data = self.parse_article(card, category_id, link)
+                    if article_data:
+                        existing = session.query(self.model).filter(
+                            self.model.url == article_data['url']
+                        ).first()
+                        if not existing:
+                            logger.info("Adding new article: %s", article_data['title'])
+                            article = self.model(**article_data)
+                            session.add(article)
+                            session.commit()
+                            new_count += 1
+                        else:
+                            # logger.info("Article already exists, skipping: %s", article_data['title'])
+                            skipped_count += 1
+                session.commit()
+                logger.info("Category %s processed successfully", category_name)
+        except Exception as e:
+            logger.error("Error processing category %s: %s", category_name, e)
+        return new_count, skipped_count
+
+    def run(self):
+        """
+        Main method to process all active categories and print a final report.
+        """
+        logger.info("Starting CNN HTML parser run")
+        total_new = 0
+        total_skipped = 0
+
+        with self.db_context.session() as session:
             categories = session.execute(
                 text("""
                     SELECT category_id, link, name 
                     FROM pt_cnn.categories 
                     WHERE is_active = true 
-                    AND link IS NOT NULL 
-                    AND link != '' 
+                      AND link IS NOT NULL 
+                      AND link != '' 
                     ORDER BY category_id;
                 """)
             ).fetchall()
-            print(f"[DEBUG] Found {len(categories)} categories")
 
-            for category_id, link, category_name in categories:
-                print(f"[DEBUG] Processing category: {category_name}")
-                try:
-                    html_content = self.fetch_page_with_retry(link)
-                    soup = BeautifulSoup(html_content, 'html.parser')
-                    
-                    article_cards = []
-                    for selector in ['div[data-component-name="card"]', 'div.container__item', 'div[data-uri*="card"]']:
-                        if not article_cards:
-                            article_cards = soup.select(selector)
-                    print(f"[DEBUG] Found {len(article_cards)} article cards")
+        logger.info("Found %d categories", len(categories))
+        for category in categories:
+            new_count, skipped_count = self.process_category(category)
+            total_new += new_count
+            total_skipped += skipped_count
 
-                    for idx, card in enumerate(article_cards, 1):
-                        print(f"[DEBUG] Processing article {idx}/{len(article_cards)}")
-                        article_data = self.parse_article(card, category_id, link)
-                        if article_data:
-                            # Check if article already exists by URL
-                            existing = session.query(self.CNNArticle).filter(
-                                self.CNNArticle.url == article_data['url']
-                            ).first()
-
-                            if not existing:
-                                print(f"[DEBUG] Adding new article: {article_data['title']}")
-                                article = self.CNNArticle(**article_data)
-                                session.add(article)
-                                session.commit()
-                            else:
-                                print(f"[DEBUG] Article already exists, skipping: {article_data['title']}")
-
-                    session.commit()
-                    print(f"[DEBUG] Successfully processed category {category_name}")
-                    
-                except Exception as e:
-                    print(f"[DEBUG] Error processing category {category_name}: {str(e)}")
-                    session.rollback()
-                    continue
-
-        except Exception as e:
-            print(f"[DEBUG] Error in fetch_and_store_articles: {str(e)}")
-            session.rollback()
-            raise
-        finally:
-            session.close()
-            print("[DEBUG] Database session closed")
-
-    def run(self):
-        """Main method to fetch and store CNN articles."""
-        print("[DEBUG] Starting CNN parser run")
-        try:
-            self.fetch_and_store_articles()
-            print("[DEBUG] Article processing completed successfully")
-        except Exception as e:
-            print(f"[DEBUG] Error processing articles: {str(e)}")
-            raise
+        # Print final report.
+        final_report = (
+            f"\nFinal Report:\n"
+            f"----------------------\n"
+            f"Newly added articles: {total_new}\n"
+            f"Existing (skipped) articles: {total_skipped}\n"
+            f"Total processed articles: {total_new + total_skipped}\n"
+            f"----------------------"
+        )
+        logger.info(final_report)
+        print(final_report)
 
 
 def main():
-    """Script entry point."""
-    print("[DEBUG] Starting main function")
-    argparser = argparse.ArgumentParser(description="CNN Articles Parser")
+    argparser = argparse.ArgumentParser(description="CNN HTML Articles Parser")
     argparser.add_argument(
         '--env',
         choices=['dev', 'prod'],
@@ -359,17 +290,15 @@ def main():
         help="Specify the environment (default: dev)"
     )
     args = argparser.parse_args()
-    print(f"[DEBUG] Parsed arguments: {args}")
 
     try:
         portal_id = fetch_portal_id_by_prefix("pt_cnn", env=args.env)
-        print(f"[DEBUG] Fetched portal_id: {portal_id}")
-        parser = CNNArticlesParser(portal_id=portal_id, env=args.env, article_model=CNNArticle)
+        parser = CNNArticlesParser(portal_id=portal_id, env=args.env)
         parser.run()
-        print("[DEBUG] Parser run completed")
     except Exception as e:
-        print(f"[DEBUG] Script execution failed: {str(e)}")
+        logger.error("Script execution failed: %s", e)
         raise
+
 
 if __name__ == "__main__":
     main()
