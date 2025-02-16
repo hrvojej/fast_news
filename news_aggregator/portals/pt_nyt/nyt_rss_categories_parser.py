@@ -1,193 +1,186 @@
-# path: news_dagster-etl/news_aggregator/portals/nyt/rss_categories_parser.py
+#!/usr/bin/env python
 """
 NYT RSS Categories Parser
 Fetches and stores NYT RSS feed categories using SQLAlchemy ORM.
 """
 
+import argparse
 import sys
 import os
+import requests
+import re
+from bs4 import BeautifulSoup
+from uuid import UUID
 
-# Add the package root (news_aggregator) to sys.path.
+# Add the package root (news_aggregator) to sys.path if needed.
 current_dir = os.path.dirname(os.path.abspath(__file__))
-# news_aggregator is two directories up from portals/nyt/
 package_root = os.path.abspath(os.path.join(current_dir, "../../"))
 if package_root not in sys.path:
     sys.path.insert(0, package_root)
 
-import argparse
-import requests
-from bs4 import BeautifulSoup
-import sqlalchemy as sa
-from sqlalchemy.orm import sessionmaker
-import re
-from typing import List, Dict
-from uuid import UUID
-from sqlalchemy import text
-
-# Import the dynamic model factory from your models file.
+from portals.modules.portal_db import fetch_portal_id_by_prefix
 from db_scripts.models.models import create_portal_category_model
+from portals.modules.logging_config import setup_script_logging
 
-# Create the dynamic category model for the NYT portal.
-# Here the schema is "pt_nyt" as used in your queries.
+logger = setup_script_logging(__file__)
+
+# Dynamically create the category model for the NYT portal.
 NYTCategory = create_portal_category_model("pt_nyt")
 
 
-def fetch_portal_id_by_prefix(portal_prefix: str, env: str = 'dev') -> UUID:
-    """
-    Fetches the portal_id from the news_portals table for the given portal_prefix.
-
-    Args:
-        portal_prefix: The prefix of the portal (e.g., 'pt_nyt')
-        env: The environment to use ('dev' or 'prod')
-
-    Returns:
-        The UUID of the portal.
-
-    Raises:
-        Exception: If no portal with the given prefix is found.
-    """
-    # Import DatabaseContext from your db_context module.
-    from db_scripts.db_context import DatabaseContext
-    db_context = DatabaseContext.get_instance(env)
-    with db_context.session() as session:
-        result = session.execute(
-            text("SELECT portal_id FROM public.news_portals WHERE portal_prefix = :prefix"),
-            {'prefix': portal_prefix}
-        ).fetchone()
-        if result:
-            return result[0]
-        else:
-            raise Exception(f"Portal with prefix '{portal_prefix}' not found.")
-
-
 class NYTRSSCategoriesParser:
-    """Parser for NYT RSS feed categories"""
+    """
+    Parser for NYT RSS feed categories.
+    Fetches a page listing RSS feeds, parses each feed to extract category metadata,
+    and stores unique categories in the database.
+    """
 
-    def __init__(self, portal_id: UUID, env: str = 'dev', category_model=None):
+    def __init__(self, portal_id: UUID, env: str = 'dev', category_model=NYTCategory):
         """
-        Initialize the parser
+        Initialize the parser.
 
         Args:
-            portal_id: UUID of the NYT portal in news_portals table
-            env: Environment to use (dev/prod)
-            category_model: SQLAlchemy ORM model for categories (if applicable)
+            portal_id: UUID of the NYT portal in the news_portals table.
+            env: Environment to use ('dev' or 'prod').
+            category_model: SQLAlchemy ORM model for categories.
         """
         self.portal_id = portal_id
         self.env = env
+        self.category_model = category_model
         self.base_url = "https://www.nytimes.com/rss"
-        self.NYTCategory = category_model
-
-    def get_session(self):
-        """
-        Obtain a database session from the DatabaseContext.
-        """
-        from db_scripts.db_context import DatabaseContext
-        db_context = DatabaseContext.get_instance(self.env)
-        # Directly enter the session context to get a session object.
-        return db_context.session().__enter__()
 
     @staticmethod
     def clean_ltree(value: str) -> str:
         """
-        Convert category title into valid ltree path.
+        Convert a category title into a valid ltree path.
         """
         if not value:
             return "unknown"
-
-        # Replace "U.S." with "U_S"
+        # Replace "U.S." with "U_S", slashes/backslashes with dots, arrow indicators with dots,
+        # then convert to lowercase.
         value = value.replace('U.S.', 'U_S')
-        # Replace slashes with dots
         value = value.replace('/', '.').replace('\\', '.')
-        # Replace arrow indicators with dots
         value = value.replace('>', '.').strip()
-        # Convert to lowercase
         value = value.lower()
-        # Replace any non-alphanumeric characters (except dots) with underscores
+        # Replace any non-alphanumeric characters (except dots) with underscores.
         value = re.sub(r'[^a-z0-9.]+', '_', value)
-        # Replace multiple dots or underscores with a single one
+        # Replace multiple dots or underscores with a single dot.
         value = re.sub(r'[._]{2,}', '.', value)
-        # Remove leading/trailing dots or underscores
         return value.strip('._')
 
-    def fetch_rss_feeds(self) -> List[Dict]:
+    def fetch_rss_feeds(self):
         """
-        Fetch and parse NYT RSS feeds.
+        Fetch the NYT RSS feeds page, extract unique RSS feed URLs,
+        and parse each feed to extract category metadata.
         """
         try:
-            print(f"Fetching RSS feeds from {self.base_url}")
+            logger.info(f"Fetching RSS feeds from {self.base_url}")
             response = requests.get(self.base_url)
             response.raise_for_status()
             soup = BeautifulSoup(response.content, 'html.parser')
-
             rss_links = []
-            for link in soup.find_all('a', href=True):
-                href = link['href']
+            for a in soup.find_all('a', href=True):
+                href = a['href'].strip()
                 if 'rss' in href and href.endswith('.xml'):
                     rss_links.append(href)
-
             unique_rss_links = list(set(rss_links))
-            print(f"Found {len(unique_rss_links)} unique RSS feeds")
+            logger.info(f"Found {len(unique_rss_links)} unique RSS feeds")
             return self.parse_rss_feeds(unique_rss_links)
-
         except requests.exceptions.RequestException as e:
-            raise Exception(f"Failed to fetch RSS feeds: {e}")
+            logger.error(f"Failed to fetch RSS feeds page: {e}")
+            raise Exception(f"Failed to fetch RSS feeds page: {e}")
 
-    def parse_rss_feeds(self, rss_links: List[str]) -> List[Dict]:
+    def parse_rss_feeds(self, rss_links):
         """
-        Parse RSS feeds and extract category metadata.
+        Parse each RSS feed URL and extract category metadata.
+
+        Args:
+            rss_links: List of RSS feed URLs.
+
+        Returns:
+            A list of dictionaries containing category metadata.
         """
         categories = []
         for rss_url in rss_links:
             try:
-                print(f"Processing RSS feed: {rss_url}")
+                logger.info(f"Processing RSS feed: {rss_url}")
                 response = requests.get(rss_url)
                 response.raise_for_status()
                 rss_soup = BeautifulSoup(response.content, 'xml')
-
                 channel = rss_soup.find('channel')
                 if channel:
+                    title_tag = channel.find('title')
+                    link_tag = channel.find('link')
+                    description_tag = channel.find('description')
+                    language_tag = channel.find('language')
+                    atom_link_tag = channel.find('atom:link', href=True)
+
+                    title = title_tag.text.strip() if title_tag and title_tag.text else rss_url
+                    link = link_tag.text.strip() if link_tag and link_tag.text else ""
+                    description = description_tag.text.strip() if description_tag and description_tag.text else ""
+                    language = language_tag.text.strip() if language_tag and language_tag.text else ""
+                    atom_link = atom_link_tag['href'].strip() if atom_link_tag and atom_link_tag.get('href') else rss_url
+
+                    # Create a path and level based on the title.
+                    path = self.clean_ltree(title)
+                    level = len(path.split('.'))
+
                     category = {
-                        'title': channel.find('title').text if channel.find('title') else None,
-                        'link': channel.find('link').text if channel.find('link') else None,
-                        'description': channel.find('description').text if channel.find('description') else None,
-                        'language': channel.find('language').text if channel.find('language') else None,
-                        'atom_link': channel.find('atom:link', href=True)['href'] if channel.find('atom:link', href=True) else None
+                        'title': title,
+                        'link': link,
+                        'description': description,
+                        'language': language,
+                        'atom_link': atom_link,
+                        'path': path,
+                        'level': level
                     }
-
-                    # Create ltree path and level.
-                    path = self.clean_ltree(category['title']) if category['title'] else 'unknown'
-                    category['path'] = path
-                    category['level'] = len(path.split('.'))
-
                     categories.append(category)
-
+                else:
+                    # If no <channel> element is present, store minimal information.
+                    title = rss_url
+                    path = self.clean_ltree(title)
+                    level = len(path.split('.'))
+                    category = {
+                        'title': title,
+                        'link': "",
+                        'description': "",
+                        'language': "",
+                        'atom_link': rss_url,
+                        'path': path,
+                        'level': level
+                    }
+                    categories.append(category)
             except Exception as e:
-                print(f"Error processing RSS feed {rss_url}: {e}")
+                logger.error(f"Error processing RSS feed {rss_url}: {e}")
                 continue
-
         return categories
-    
-    def store_categories(self, categories: List[Dict]):
-        """
-        Store categories using SQLAlchemy ORM.
-        """
-        session = self.get_session()
 
+    def store_categories(self, categories):
+        """
+        Store categories in the database using SQLAlchemy ORM.
+        Avoids inserting duplicate categories.
+
+        Args:
+            categories: List of category dictionaries.
+        """
+        from db_scripts.db_context import DatabaseContext
+        db_context = DatabaseContext.get_instance(self.env)
+        session = db_context.session().__enter__()
         try:
-            print("Storing categories in database...")
+            logger.info("Storing categories in the database...")
             count_added = 0
             for category_data in categories:
-                slug = self.clean_ltree(category_data['title']) if category_data['title'] else 'unknown'
-
-                existing = session.query(self.NYTCategory).filter(
-                    self.NYTCategory.slug == slug,
-                    self.NYTCategory.portal_id == self.portal_id
+                slug = self.clean_ltree(category_data['title'])
+                # Check if this category already exists for the portal.
+                existing = session.query(self.category_model).filter(
+                    self.category_model.slug == slug,
+                    self.category_model.portal_id == self.portal_id
                 ).first()
                 if existing:
-                    print(f"Category with slug '{slug}' already exists. Skipping insertion.")
+                    logger.info(f"Category with slug '{slug}' already exists. Skipping insertion.")
                     continue
 
-                category = self.NYTCategory(
+                category = self.category_model(
                     name=category_data['title'],
                     slug=slug,
                     portal_id=self.portal_id,
@@ -202,56 +195,41 @@ class NYTRSSCategoriesParser:
                 count_added += 1
 
             session.commit()
-            print(f"Successfully stored {count_added} new categories")
-
+            logger.info(f"Successfully stored {count_added} new categories.")
         except Exception as e:
             session.rollback()
+            logger.error(f"Failed to store categories: {e}")
             raise Exception(f"Failed to store categories: {e}")
-
         finally:
             session.close()
-    
+
     def run(self):
         """
-        Main method to fetch and store NYT categories.
+        Main method to fetch, parse, and store NYT categories.
         """
         try:
             categories = self.fetch_rss_feeds()
             self.store_categories(categories)
-            print("Category processing completed successfully")
+            logger.info("Category processing completed successfully.")
         except Exception as e:
-            print(f"Error processing categories: {e}")
+            logger.error(f"Error processing categories: {e}")
             raise
 
 
 def main():
-    """
-    Script entry point.
-    """
-    import argparse
-    # Import Base from your models file to inspect the metadata
-    from db_scripts.models.models import Base
-    print("Registered tables in metadata:", Base.metadata.tables.keys())
-
-    argparser = argparse.ArgumentParser(description="NYT RSS Categories Parser")
-    argparser.add_argument(
+    parser = argparse.ArgumentParser(description="NYT RSS Categories Parser")
+    parser.add_argument(
         '--env',
         choices=['dev', 'prod'],
         default='dev',
-        help="Specify the environment to load data (default: dev)"
+        help="Specify the environment (default: dev)"
     )
-    args = argparser.parse_args()
+    args = parser.parse_args()
 
-    portal_prefix = "pt_nyt"  # The portal prefix.
-    try:
-        portal_id = fetch_portal_id_by_prefix(portal_prefix, env=args.env)
-        print(f"Using portal_id: {portal_id} for portal_prefix: {portal_prefix}")
-
-        parser_instance = NYTRSSCategoriesParser(portal_id=portal_id, env=args.env, category_model=NYTCategory)
-        parser_instance.run()
-    except Exception as e:
-        print(f"Script execution failed: {e}")
-        raise
+    portal_id = fetch_portal_id_by_prefix("pt_nyt", env=args.env)
+    logger.info(f"Using portal_id: {portal_id} for portal_prefix: pt_nyt")
+    parser_instance = NYTRSSCategoriesParser(portal_id=portal_id, env=args.env, category_model=NYTCategory)
+    parser_instance.run()
 
 
 if __name__ == "__main__":

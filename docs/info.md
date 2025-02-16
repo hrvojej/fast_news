@@ -19,7 +19,7 @@ Start-Process -FilePath "C:\Program Files\Google\Chrome\Application\chrome.exe" 
   "--disable-notifications",
   "--mute-audio"
 
-# Chrome
+# Chrome - use this
 Start-Process -FilePath "C:\Program Files\Google\Chrome\Application\chrome.exe" -ArgumentList `
  "--remote-debugging-port=9222",
  "--user-data-dir=""C:\Users\Korisnik\AppData\Local\Google\Chrome\User Data""",
