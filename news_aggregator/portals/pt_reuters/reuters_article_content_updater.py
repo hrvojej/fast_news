@@ -3,8 +3,7 @@
 Reuters Article Updater
 
 This script refactors the original article update functionality into a class-based updater for the pt_reuters portal.
-It uses the shared utilities for fetching HTML (with retries and error handling), updating status records, 
-and processing the update loop with random sleep intervals.
+It uses shared utilities for updating status records and processing the update loop with random sleep intervals.
 
 Extraction Rules for pt_reuters:
   - For each article (fetched from SELECT url FROM pt_reuters.articles), skip pages starting with:
@@ -28,6 +27,10 @@ import argparse
 from datetime import datetime, timezone
 from bs4 import BeautifulSoup
 
+# Standard libraries for our pychrome-based fetcher.
+import time
+import pychrome
+
 # Add package root to path
 current_dir = os.path.dirname(os.path.abspath(__file__))
 package_root = os.path.abspath(os.path.join(current_dir, "../../"))
@@ -42,10 +45,9 @@ from db_scripts.models.models import (
 )
 from db_scripts.db_context import DatabaseContext
 
-# Import updater utilities from modules/article_updater_utils.py
+# Import updater utilities (except the original fetch_html) from modules/article_updater_utils.py
 from portals.modules.article_updater_utils import (
     random_sleep,
-    fetch_html,
     update_status_error,
     update_status_success,
     get_articles_to_update,
@@ -59,6 +61,59 @@ logger = setup_script_logging(__file__)
 ReutersCategory = create_portal_category_model("pt_reuters")
 ReutersArticle = create_portal_article_model("pt_reuters")
 ReutersArticleStatus = create_portal_article_status_model("pt_reuters")
+
+
+def fetch_html(url, logger, context=None):
+    """
+    Fetch HTML content using pychrome.
+    This function opens a new tab on a Chrome instance (with remote debugging enabled on port 9222),
+    navigates to the URL, waits for the page to load, and then cleans the HTML by removing script, style, iframe, link, and meta elements.
+    Returns a tuple (html_content, error) where error is None if successful.
+    """
+    browser = None
+    tab = None
+    try:
+        browser = pychrome.Browser(url="http://127.0.0.1:9222")
+        tab = browser.new_tab()
+
+        def handle_exception(msg):
+            logger.debug(f"Exception from tab: {msg}")
+
+        tab.set_listener("exception", handle_exception)
+        tab.start()
+
+        tab.Page.enable()
+        tab.Runtime.enable()
+
+        tab.Page.navigate(url=url)
+        # Wait for the page to load. Depending on the site, you might need a longer delay or more sophisticated waiting.
+        time.sleep(5)
+
+        clean_html_js = """
+        function cleanHTML() {
+            const elements = document.querySelectorAll('script, style, iframe, link, meta');
+            elements.forEach(el => el.remove());
+            return document.documentElement.outerHTML;
+        }
+        cleanHTML();
+        """
+        result = tab.Runtime.evaluate(expression=clean_html_js)
+        html_content = result.get("result", {}).get("value", None)
+        return html_content, None
+    except Exception as e:
+        logger.error(f"Error fetching {url} with pychrome: {e}")
+        return None, str(e)
+    finally:
+        if tab is not None:
+            try:
+                tab.stop()
+            except Exception as e:
+                logger.debug(f"Error stopping tab: {e}")
+            try:
+                browser.close_tab(tab)
+            except Exception as e:
+                logger.debug(f"Error closing tab: {e}")
+
 
 class ReutersArticleUpdater:
     def __init__(self, env='dev'):
@@ -131,7 +186,7 @@ class ReutersArticleUpdater:
         """
         Process an individual article update:
           - Skip pages based on URL patterns.
-          - Fetch HTML content.
+          - Fetch HTML content using pychrome.
           - Parse and extract article content using Reuters-specific rules.
           - Update the article record (clearing any existing content first).
           - Update or create the status record.
@@ -235,6 +290,7 @@ class ReutersArticleUpdater:
         # Log summary statistics.
         log_update_summary(self.logger, self.counters, self.error_counts)
 
+
 def main():
     parser = argparse.ArgumentParser(description="Reuters Article Updater")
     parser.add_argument(
@@ -252,6 +308,7 @@ def main():
     except Exception as e:
         logger.error(f"Script execution failed: {e}")
         raise
+
 
 if __name__ == "__main__":
     main()

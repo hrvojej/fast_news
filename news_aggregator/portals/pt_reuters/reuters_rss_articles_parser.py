@@ -1,24 +1,11 @@
 #!/usr/bin/env python3
 """
-Reuters Article Updater
+Reuters Sitemap Parser
 
-This script refactors the original article update functionality into a class-based updater for the pt_reuters portal.
-It uses shared utilities for updating status records and processing the update loop with random sleep intervals.
-
-Extraction Rules for pt_reuters:
-  - For each article (fetched from SELECT url FROM pt_reuters.articles), skip pages starting with:
-      https://www.reuters.com/pictures/
-      https://www.reuters.com/graphics/
-  - Attempt to extract the article content using the following methods (in order):
-      1. Find a <div> with a class that begins with "article-body__content" (e.g. <div class="article-body__content__17Yit">).
-      2. Find a <div> that has both the classes "story-content-container" and "past-first".
-      3. Find a <div> with the attribute data-testid="paragraph-0".
-      4. Find a <p> with the attribute data-testid="Body".
-      5. Find a <div> with a class that contains "arena-liveblog".
-  - If none of these elements are found or if the extracted text is empty, mark the article with the error flag "NO_CONTENT".
-  - Before storing, clear the existing content in the "content" field and then store the pure text.
-  
-The script logs a final summary on the number of processed, skipped, errored, and updated articles.
+This script fetches Reuters sitemap pages using Chromium DevTools (via pychrome),
+automatically accepts cookies if present, parses article metadata, and stores new
+articles (or updates existing ones) in the pt_reuters articles table. Article content
+updating is handled separately.
 """
 
 import sys
@@ -26,8 +13,13 @@ import os
 import argparse
 import random
 import time
+import re
+import math
 from datetime import datetime, timezone
-from bs4 import BeautifulSoup
+
+import pychrome
+from lxml import html
+from dateutil import parser as dateutil_parser
 
 # Add package root to path
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -38,285 +30,285 @@ if package_root not in sys.path:
 from portals.modules.logging_config import setup_script_logging
 from db_scripts.models.models import (
     create_portal_category_model,
-    create_portal_article_model,
-    create_portal_article_status_model
+    create_portal_article_model
 )
 from db_scripts.db_context import DatabaseContext
-
-# Import updater utilities from modules/article_updater_utils.py,
-# but note that we remove fetch_html (it will be replaced by our Chrome DevTools function).
-from portals.modules.article_updater_utils import (
-    random_sleep,
-    update_status_error,
-    update_status_success,
-    get_articles_to_update,
-    log_update_summary
-)
+from portals.modules.portal_db import fetch_portal_id_by_prefix  # shared utility
 
 logger = setup_script_logging(__file__)
 
-# Dynamically create models for the portal pt_reuters.
+# Dynamically create models for the Reuters portal.
 ReutersCategory = create_portal_category_model("pt_reuters")
 ReutersArticle = create_portal_article_model("pt_reuters")
-ReutersArticleStatus = create_portal_article_status_model("pt_reuters")
 
 
-class ReutersArticleUpdater:
-    def __init__(self, env='dev'):
+def slugify(text_str: str) -> str:
+    """
+    Lowercase the text, replace spaces with hyphens, and remove non-alphanumeric characters.
+    """
+    slug = text_str.lower()
+    slug = re.sub(r'\s+', '-', slug)
+    slug = re.sub(r'[^a-z0-9\-]', '', slug)
+    return slug
+
+
+def fetch_page_content(url: str) -> str:
+    """
+    Opens the specified URL in a new Chromium tab using pychrome,
+    waits a random delay between 4 and 7 seconds for the page to load,
+    automatically clicks any "Accept Cookies" button if present,
+    and then cleans the HTML by removing unwanted elements.
+    Returns the cleaned HTML.
+    """
+    try:
+        browser = pychrome.Browser(url="http://127.0.0.1:9222")
+        tab = browser.new_tab()
+        tab.start()
+        tab.Page.enable()
+        tab.Runtime.enable()
+        tab.Page.navigate(url=url)
+
+        delay = random.uniform(4, 7)
+        logger.info(f"Waiting {delay:.2f} seconds for page to load: {url}")
+        time.sleep(delay)
+
+        # AUTOMATE COOKIE ACCEPTANCE
+        cookie_js = """
+        (function() {
+            var btn = document.querySelector('button[aria-label="Accept Cookies"], button[data-testid="CookieBanner-accept"]');
+            if (btn) { 
+                btn.click(); 
+                return "Clicked cookie button";
+            }
+            return "No cookie button found";
+        })();
+        """
+        result_cookie = tab.Runtime.evaluate(expression=cookie_js)
+        logger.info("Cookie acceptance result: %s", result_cookie.get("result", {}).get("value"))
+        time.sleep(2)
+
+        # CLEAN THE HTML: remove unwanted elements
+        clean_html_js = """
+        (function cleanHTML() {
+            const elements = document.querySelectorAll('script, style, iframe, link, meta');
+            elements.forEach(el => el.remove());
+            return document.documentElement.outerHTML;
+        })();
+        """
+        result = tab.Runtime.evaluate(expression=clean_html_js)
+        html_content = result["result"]["value"]
+        return html_content
+    except Exception as e:
+        logger.error(f"Error fetching page {url}: {e}")
+        return ""
+    finally:
+        try:
+            tab.stop()
+            browser.close_tab(tab)
+        except Exception:
+            pass
+
+
+def get_or_create_category(session, category_name: str, portal_id, category_model):
+    """
+    Given a category name, looks for an existing category (case-insensitive).
+    If not found, creates a new category record.
+    """
+    if not category_name:
+        category_name = "Uncategorized"
+    existing = session.query(category_model).filter(
+        category_model.name.ilike(category_name)
+    ).first()
+    if existing:
+        return existing.category_id
+    else:
+        new_category = category_model(
+            name=category_name,
+            slug=slugify(category_name),
+            portal_id=portal_id,
+            path=category_name,
+            level=1,
+            description=None,
+            link=None,
+            atom_link=None,
+            is_active=True
+        )
+        session.add(new_category)
+        session.commit()
+        logger.info(f"Created new category: {category_name}")
+        return new_category.category_id
+
+
+class ReutersSitemapParser:
+    """
+    Iterates through today's Reuters sitemap pages, extracts article metadata,
+    and stores them in the database.
+    """
+    def __init__(self, env: str, portal_id):
         self.env = env
-        self.logger = logger
+        self.portal_id = portal_id
         self.db_context = DatabaseContext.get_instance(env)
-        self.ReutersArticle = ReutersArticle
-        self.ReutersArticleStatus = ReutersArticleStatus
-        self.counters = {
-            "total": 0,
-            "up_to_date": 0,
-            "to_update": 0,
-            "fetched": 0,
-            "updated": 0,
-            "failed": 0,
-            "skipped": 0
-        }
-        self.error_counts = {}
-        # Context for fetch functions (if needed)
-        self.context = {"consecutive_403_count": 0}
-
-    def _extract_article_content(self, soup):
-        """
-        Try various selectors in order to extract the article's pure text.
-        Returns the extracted text (if found and non-empty) or None.
-        """
-        # 1. <div> with a class that begins with "article-body__content"
-        content_div = soup.find(lambda tag: tag.name == 'div' and tag.has_attr('class') and
-                                any(cls.startswith("article-body__content") for cls in tag.get('class', [])))
-        if content_div:
-            text = content_div.get_text(separator="\n").strip()
-            if text:
-                return text
-
-        # 2. <div> with classes "story-content-container" and "past-first"
-        content_div = soup.find(lambda tag: tag.name == 'div' and tag.has_attr('class') and 
-                                'story-content-container' in tag.get('class', []) and 
-                                'past-first' in tag.get('class', []))
-        if content_div:
-            text = content_div.get_text(separator="\n").strip()
-            if text:
-                return text
-
-        # 3. <div data-testid="paragraph-0">
-        content_div = soup.find('div', {'data-testid': 'paragraph-0'})
-        if content_div:
-            text = content_div.get_text(separator="\n").strip()
-            if text:
-                return text
-
-        # 4. <p data-testid="Body">
-        content_p = soup.find('p', {'data-testid': 'Body'})
-        if content_p:
-            text = content_p.get_text(separator="\n").strip()
-            if text:
-                return text
-
-        # 5. <div> with class that contains "arena-liveblog"
-        content_div = soup.find(lambda tag: tag.name == 'div' and tag.has_attr('class') and
-                                'arena-liveblog' in tag.get('class', []))
-        if content_div:
-            text = content_div.get_text(separator="\n").strip()
-            if text:
-                return text
-
-        # If no valid content found
-        return None
-
-    def _fetch_html_with_chrome(self, url):
-        """
-        Uses pychrome to open the URL in a new Chromium tab, automates cookie acceptance,
-        removes unwanted elements, and returns the cleaned HTML content.
-        """
-        try:
-            import pychrome  # Ensure pychrome is installed and available.
-        except ImportError:
-            self.logger.error("pychrome is not installed. Please install it to use Chrome DevTools for fetching.")
-            return "", "PYCHROME_NOT_INSTALLED"
-
-        try:
-            browser = pychrome.Browser(url="http://127.0.0.1:9222")
-            tab = browser.new_tab()
-            tab.start()
-            tab.Page.enable()
-            tab.Runtime.enable()
-            tab.Page.navigate(url=url)
-
-            # Wait a random delay between 1 and 3 seconds for the page to load.
-            delay = random.uniform(1, 3)
-            self.logger.info(f"Waiting {delay:.2f} seconds for page to load: {url}")
-            time.sleep(delay)
-
-            # --- AUTOMATE COOKIE ACCEPTANCE ---
-            cookie_js = """
-            (function() {
-                var btn = document.querySelector('button[aria-label="Accept Cookies"], button[data-testid="CookieBanner-accept"]');
-                if (btn) { 
-                    btn.click(); 
-                    return "Clicked cookie button";
-                }
-                return "No cookie button found";
-            })();
-            """
-            result_cookie = tab.Runtime.evaluate(expression=cookie_js)
-            cookie_result = result_cookie.get("result", {}).get("value")
-            self.logger.info("Cookie acceptance result: %s", cookie_result)
-            time.sleep(2)
-
-            # --- CLEAN THE HTML ---
-            clean_html_js = """
-            (function cleanHTML() {
-                const elements = document.querySelectorAll('script, style, iframe, link, meta');
-                elements.forEach(el => el.remove());
-                return document.documentElement.outerHTML;
-            })();
-            """
-            result = tab.Runtime.evaluate(expression=clean_html_js)
-            html_content = result["result"]["value"]
-            return html_content, None
-
-        except Exception as e:
-            self.logger.error(f"Error fetching page {url}: {e}")
-            return "", str(e)
-        finally:
-            try:
-                tab.stop()
-                browser.close_tab(tab)
-            except Exception:
-                pass
-
-    def update_article(self, article_info):
-        """
-        Process an individual article update:
-          - Skip pages based on URL patterns.
-          - Fetch HTML content using Chrome DevTools.
-          - Parse and extract article content using Reuters-specific rules.
-          - Update the article record (clearing any existing content first).
-          - Update or create the status record.
-        """
-        url = article_info['url']
-        self.logger.info(f"Processing article with URL: {url}")
-
-        # Skip pages that should be ignored
-        if url.startswith("https://www.reuters.com/pictures/") or url.startswith("https://www.reuters.com/graphics/"):
-            self.logger.info(f"Skipping article with URL: {url} (ignored due to pictures/graphics page)")
-            self.counters["skipped"] += 1
-            return
-
-        fetched_at = datetime.now(timezone.utc)
-        # Use the Chrome DevTools-based fetch function
-        html_content, fetch_error = self._fetch_html_with_chrome(url)
-
-        if not html_content:
-            error_type = fetch_error if fetch_error else "UNKNOWN_FETCH"
-            with self.db_context.session() as session:
-                update_status_error(
-                    session,
-                    self.ReutersArticleStatus,
-                    url,
-                    fetched_at,
-                    article_info['pub_date'],
-                    error_type,
-                    status_id=article_info.get('status_id'),
-                    logger=self.logger
-                )
-            self.error_counts[error_type] = self.error_counts.get(error_type, 0) + 1
-            self.counters["failed"] += 1
-            return
-
-        soup = BeautifulSoup(html_content, 'html.parser')
-        new_content = self._extract_article_content(soup)
-        if not new_content:
-            error_type = "NO_CONTENT"
-            with self.db_context.session() as session:
-                update_status_error(
-                    session,
-                    self.ReutersArticleStatus,
-                    url,
-                    fetched_at,
-                    article_info['pub_date'],
-                    error_type,
-                    status_id=article_info.get('status_id'),
-                    logger=self.logger
-                )
-            self.error_counts[error_type] = self.error_counts.get(error_type, 0) + 1
-            self.counters["failed"] += 1
-            return
-
-        # Update the article record: first clear existing content then store new content.
-        with self.db_context.session() as session:
-            article_obj = session.query(self.ReutersArticle).filter(
-                self.ReutersArticle.article_id == article_info["article_id"]
-            ).first()
-            if article_obj:
-                article_obj.content = ""  # Clear existing content
-                article_obj.content = new_content
-                self.logger.info(f"Article {url} content updated.")
-            else:
-                self.logger.error(f"Article {article_info['article_id']} not found in articles table.")
-                self.counters["failed"] += 1
-                return
-
-            parsed_at = datetime.now(timezone.utc)
-            update_status_success(
-                session,
-                self.ReutersArticleStatus,
-                url,
-                fetched_at,
-                parsed_at,
-                article_info['pub_date'],
-                status_id=article_info.get('status_id'),
-                logger=self.logger
-            )
-
-        self.counters["fetched"] += 1
-        self.counters["updated"] += 1
 
     def run(self):
-        self.logger.info("Starting Article Content Updater for pt_reuters.")
-        # Retrieve articles that require an update.
+        logger.info("Starting Reuters Sitemap Parsing...")
+        today = datetime.now()
+        date_path = today.strftime("%Y-%m/%d")
+        base_url = f"https://www.reuters.com/sitemap/{date_path}/"
+        first_page_url = f"{base_url}1/"
+        logger.info(f"Fetching first page for pagination detection: {first_page_url}")
+        first_page_html = fetch_page_content(first_page_url)
+        if not first_page_html:
+            logger.error("Failed to fetch first page for pagination detection.")
+            return
+
+        tree = html.fromstring(first_page_html)
+        pagination_text_elements = tree.xpath("//span[@data-testid='SitemapFeedPaginationText']/text()")
+        if pagination_text_elements:
+            pagination_text = pagination_text_elements[0].strip()
+            logger.info(f"Pagination text found: '{pagination_text}'")
+            match = re.search(r'of\s+(\d+)', pagination_text)
+            if match:
+                total_articles = int(match.group(1))
+                total_pages = math.ceil(total_articles / 10)
+                logger.info(f"Detected total articles: {total_articles} => Total pages: {total_pages}")
+            else:
+                logger.warning("Failed to parse pagination text. Using default of 50 pages.")
+                total_pages = 50
+        else:
+            logger.warning("Pagination text element not found. Using default of 50 pages.")
+            total_pages = 50
+
         with self.db_context.session() as session:
-            articles_to_update, summary = get_articles_to_update(
-                session, "pt_reuters.articles", "pt_reuters.article_status", self.logger
-            )
+            logger.info(f"Processing first page: {first_page_url}")
+            self.process_page(session, 1, first_page_html)
 
-        self.counters["total"] = summary.get("total", 0)
-        self.counters["up_to_date"] = summary.get("up_to_date", 0)
-        self.counters["to_update"] = summary.get("to_update", 0)
-        self.logger.info(f"Total articles marked for update: {len(articles_to_update)}")
+            remaining_pages = list(range(2, total_pages + 1))
+            random.shuffle(remaining_pages)
+            for page_num in remaining_pages:
+                page_url = f"{base_url}{page_num}/"
+                logger.info(f"Processing page: {page_url}")
+                page_html = fetch_page_content(page_url)
+                if not page_html:
+                    logger.warning(f"Failed to fetch content for {page_url}, skipping.")
+                    continue
+                self.process_page(session, page_num, page_html)
+                sleep_time = random.uniform(5, 9)
+                logger.info(f"Sleeping for {sleep_time:.2f} seconds before next page...")
+                time.sleep(sleep_time)
+        logger.info("Reuters Sitemap Parsing completed successfully.")
 
-        # Process each article update.
-        for idx, article in enumerate(articles_to_update, start=1):
-            self.logger.info(f"Processing article {idx}/{len(articles_to_update)} with URL: {article['url']}")
-            self.update_article(article)
-            random_sleep(self.logger)
+    def process_page(self, session, page_num: int, page_html: str):
+        tree = html.fromstring(page_html)
+        article_elements = tree.xpath("//li[@data-testid='FeedListItem']")
+        logger.info(f"Found {len(article_elements)} article(s) on page {page_num}.")
+        for article_el in article_elements:
+            article_data = self.parse_article(article_el)
+            # Resolve the category by name (or default to Uncategorized)
+            category_name = article_data.pop("category_name", "Uncategorized")
+            category_id = get_or_create_category(session, category_name, self.portal_id, ReutersCategory)
+            article_data['category_id'] = category_id
 
-        # Log summary statistics.
-        log_update_summary(self.logger, self.counters, self.error_counts)
+            # Use the article's URL as a unique identifier (guid)
+            existing_article = session.query(ReutersArticle).filter(
+                ReutersArticle.guid == article_data['guid']
+            ).first()
+            if existing_article:
+                # Update fields if publication date has changed
+                if existing_article.pub_date != article_data['pub_date']:
+                    for key, value in article_data.items():
+                        setattr(existing_article, key, value)
+                    logger.info(f"Updated article: {article_data['title']}")
+            else:
+                new_article = ReutersArticle(**article_data)
+                session.add(new_article)
+                logger.info(f"Added new article: {article_data['title']}")
+        session.commit()
+
+    def parse_article(self, article_el) -> dict:
+        # --- Title ---
+        title_list = article_el.xpath('.//span[@data-testid="TitleHeading"]//text()')
+        title = " ".join(title_list).strip() if title_list else "Untitled"
+
+        # --- URL & GUID ---
+        url_list = article_el.xpath('.//a[@data-testid="TitleLink"]/@href')
+        relative_url = url_list[0].strip() if url_list else ""
+        full_url = "https://www.reuters.com" + relative_url if relative_url.startswith("/") else relative_url
+        guid = full_url  # use full URL as unique identifier
+
+        # --- Description & Content (placeholder until detailed content is fetched) ---
+        desc_list = article_el.xpath('.//p[@data-testid="Description"]//text()')
+        description = " ".join(desc_list).strip() if desc_list else None
+        content = description
+
+        # --- Publication Date ---
+        pub_date_list = article_el.xpath('.//time[@data-testid="DateLineText"]//text()')
+        pub_date_text = " ".join(pub_date_list).strip() if pub_date_list else ""
+        try:
+            if "ago" in pub_date_text.lower():
+                pub_date = datetime.now(timezone.utc)
+            else:
+                pub_date = dateutil_parser.parse(pub_date_text)
+        except Exception:
+            pub_date = datetime.now(timezone.utc)
+
+        # --- Authors ---
+        authors_attr = article_el.get("data-are-authors", "false")
+        authors = [] if authors_attr.lower() == "false" else []
+
+        # --- Image URL ---
+        img_list = article_el.xpath('.//img/@src')
+        image_url = img_list[0].strip() if img_list else None
+
+        # --- Category (temporary, will be resolved to a category_id) ---
+        category_list = article_el.xpath('.//span[@data-testid="KickerText"]//text()')
+        category_name = " ".join(category_list).strip() if category_list else "Uncategorized"
+
+        # --- Reading Time Estimate (assuming 200 words per minute) ---
+        combined_text = f"{title} {description or ''} {content or ''}"
+        word_count = len(combined_text.split())
+        reading_time_minutes = max(1, round(word_count / 200))
+
+        article_data = {
+            'title': title,
+            'url': full_url,
+            'guid': guid,
+            'description': description,
+            'content': content,
+            'author': authors,
+            'pub_date': pub_date,
+            'keywords': [],
+            'reading_time_minutes': reading_time_minutes,
+            'language_code': 'en',
+            'image_url': image_url,
+            'sentiment_score': 0.0,
+            'share_count': 0,
+            'view_count': 0,
+            'comment_count': 0,
+            # Temporarily store the category name; will be replaced by category_id
+            'category_name': category_name
+        }
+        return article_data
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Reuters Article Updater")
-    parser.add_argument(
+    argparser = argparse.ArgumentParser(description="Reuters Sitemap Parser")
+    argparser.add_argument(
         '--env',
         choices=['dev', 'prod'],
         default='dev',
         help="Specify the environment (default: dev)"
     )
-    args = parser.parse_args()
+    args = argparser.parse_args()
 
     try:
-        updater = ReutersArticleUpdater(env=args.env)
-        updater.run()
-        logger.info("Article content update completed successfully.")
+        # Fetch the portal_id using the shared utility (similar to the pt_abc parser)
+        portal_id = fetch_portal_id_by_prefix("pt_reuters", env=args.env)
     except Exception as e:
-        logger.error(f"Script execution failed: {e}")
-        raise
+        logger.error(f"Failed to fetch portal id: {e}")
+        return
+
+    parser_instance = ReutersSitemapParser(env=args.env, portal_id=portal_id)
+    parser_instance.run()
 
 
 if __name__ == "__main__":
