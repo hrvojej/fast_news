@@ -202,22 +202,74 @@ if __name__ == "__main__":
     main()
 
 
-I need to create same for schema (portal) pt_reuters. Structure of all tables are same in that schema as in pt_abc.
+I need to create same for schema (portal) pt_nyt. 
+
+HTML article page fetching based on url should be done like this:
+import pychrome
+import time
+import threading
+
+def main():
+   try:
+       browser = pychrome.Browser(url="http://127.0.0.1:9222")
+       tab = browser.new_tab()
+       
+       def handle_exception(msg):
+           print(f"Debug: {msg}")
+       
+       tab.set_listener("exception", handle_exception)
+       tab.start()
+       
+       tab.Page.enable()
+       tab.Runtime.enable()
+       
+       url = "https://edition.cnn.com/2025/02/04/politics/cia-workforce-buyouts/index.html"
+       tab.Page.navigate(url=url)
+       
+       time.sleep(5)
+       
+       clean_html_js = """
+       function cleanHTML() {
+           const elements = document.querySelectorAll('script, style, iframe, link, meta');
+           elements.forEach(el => el.remove());
+           return document.documentElement.outerHTML;
+       }
+       cleanHTML();
+       """
+       
+       result = tab.Runtime.evaluate(expression=clean_html_js)
+       html_content = result["result"]["value"]
+
+       with open("cnn.html", "w", encoding="utf-8") as f:
+           f.write(html_content)
+           
+   except Exception as e:
+       print(f"Error: {e}")
+   finally:
+       tab.stop()
+       browser.close_tab(tab)
+
+if __name__ == "__main__":
+   main()
+
+
+Structure of all tables are same in that schema as in pt_abc.
 You need to fetch content of the article from:
-SELECT url  FROM pt_reuters.articles
+SELECT url  FROM pt_nyt.articles
 
 When opening them extract text from:
 #### Rules of extraction of content START
 
-<div class="article-body__content__17Yit"> so you need to find div with class that begins with "article-body__content" and extract text from it. 
-<div class="story-content-container past-first"> - this is another type of news pages that might appear. 
-<div data-testid="paragraph-0"  ...> - - this is another type of news pages that might appear. 
-<p data-testid="Body" ..> - - this is another type of news pages that might appear. 
-<div class="arena-liveblog"  ..- this is another type of news pages that might appear. 
+<div data-testid="live-blog-post" 
+<section name="articleBody" 
+If page don't have any above elements extract text from all elements like this:
+<p class="g-text
 
-Ignore pages that have at the begining:
-https://www.reuters.com/pictures/
-https://www.reuters.com/graphics/
+Ignore pages that have in url path:
+/podcasts/
+/video/
+/audio/
+
 
 
 
@@ -232,7 +284,7 @@ Make sure we have final report on inserted skipped errored etc. articles.
 I want to make sure I fully understand your requirements before proceeding. Here are a few questions:
 
 1. **Script Structure & Logic:**  
-   Should the new script for the **pt_fox** schema follow the exact same structure, logging, error handling (including retries, status updates, and sleep intervals), and database update logic as the existing **pt_abc** script—except that it will target the **pt_fox** schema and use the updated content extraction?
+   Should the new script for the **pt_nyt** schema follow the exact same structure, logging, error handling (including retries, status updates, and sleep intervals), and database update logic as the existing **pt_abc** script—except that it will target the **pt_nyt** schema and use the updated content extraction?
 
 Yes.
 
@@ -246,7 +298,7 @@ Yes.
    When you say “Clear that field before storing from existing content,” do you mean that for each article we should explicitly set the **content** field to an empty string (or null) before writing the newly extracted text? YES. Is this intended to ensure that any old or partial data is removed prior to updating? YES.
 
 4. **Additional Customizations:**  
-   Are there any other differences in behavior or processing that you would like for the pt_fox version compared to the pt_abc version, or is it solely the change in schema and the new target extraction element? No, it solely the change in schema and the new target extraction element
+   Are there any other differences in behavior or processing that you would like for the pt_nyt version compared to the pt_abc version, or is it solely the change in schema and the new target extraction element? No, it solely the change in schema and the new target extraction element
 
    Please ask if something is not clear, do not assume. 
 
