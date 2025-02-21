@@ -279,7 +279,7 @@ def process_update_loop(articles_to_update, update_func, logger, sleep_func=rand
         sleep_func (callable): Function to perform sleeping. Defaults to random_sleep.
     """
     for idx, article in enumerate(articles_to_update, start=1):
-        logger.info(f"Processing article {idx}/{len(articles_to_update)} with URL: {article['url']}")
+        logger.info(f"\033[1mProcessing article {idx}/{len(articles_to_update)} with URL: {article['url']}\033[0m")
         update_func(article)
         sleep_func(logger)
 
