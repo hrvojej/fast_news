@@ -47,6 +47,7 @@ def stream_subprocess_output(context, process, log_file_path: str):
 # Pychrome Integration Helper
 ##############################################
 
+
 def is_chrome_running() -> bool:
     """Check if Chrome’s remote debugging port (9222) is open."""
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
@@ -60,22 +61,22 @@ def ensure_pychrome_running(context):
     """Ensure that Chrome is running with remote debugging enabled."""
     if not is_chrome_running():
         context.log.info("Chrome remote debugging (port 9222) not detected. Launching Chrome with pychrome...")
-        # Note: Adjust the paths if necessary.
         powershell_command = [
             "powershell",
             "-Command",
             (
                 'Start-Process -FilePath "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe" '
-                '-ArgumentList "--remote-debugging-port=9222",'
-                '"--user-data-dir=""C:\\Users\\Korisnik\\AppData\\Local\\Google\\Chrome\\User Data""",'
-                '"--profile-directory=""Profile 1""",'
-                '"--disable-gpu",'
-                '"--disable-popup-blocking",'
-                '"--disable-extensions",'
-                '"--disable-sync",'
-                '"--disable-translate",'
-                '"--disable-notifications",'
-                '"--mute-audio"'
+                '-ArgumentList \'--remote-debugging-port=9222\','
+                '\'--user-data-dir=C:\\Users\\Korisnik\\AppData\\Local\\Google\\Chrome\\User Data\','
+                '\'--profile-directory=Profile 1\','
+                '\'--disable-gpu\','
+                '\'--disable-popup-blocking\','
+                '\'--disable-extensions\','
+                '\'--disable-sync\','
+                '\'--disable-translate\','
+                '\'--disable-notifications\','
+                '\'--mute-audio\' '
+                '-WindowStyle Hidden'
             )
         ]
         subprocess.Popen(powershell_command)
