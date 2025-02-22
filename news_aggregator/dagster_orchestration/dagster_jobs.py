@@ -4,10 +4,21 @@ import sys
 import socket
 import subprocess
 from dagster import op, job
+import time
+import random
 
 ##############################################
 # Helper Functions
 ##############################################
+
+def add_random_delay(context, min_delay=0, max_delay=10):
+    """
+    Adds a random delay (in minutes) before proceeding.
+    You can adjust min_delay and max_delay as needed.
+    """
+    delay_minutes = random.randint(min_delay, max_delay)
+    context.log.info(f"Random delay: waiting for {delay_minutes} minutes before starting.")
+    time.sleep(delay_minutes * 60)
 
 def get_script_path(relative_path: str) -> str:
     """
@@ -87,6 +98,8 @@ def ensure_pychrome_running(context):
 
 @op
 def abc_category_parser_op(context):
+    # Add a random delay at the start
+    add_random_delay(context)
     context.log.info("Starting ABC Category Parser...")
     context.log.info(f"Current working directory: {os.getcwd()}")
     script_path = get_script_path("portals/pt_abc/abc_category_rss_parser.py")
@@ -146,6 +159,7 @@ def abc_news_job():
 
 @op
 def aljazeera_category_parser_op(context):
+    add_random_delay(context)
     context.log.info("Starting Al Jazeera Category Parser...")
     context.log.info(f"Current working directory: {os.getcwd()}")
     script_path = get_script_path("portals/pt_aljazeera/aljazeera_category_html_parser.py")
@@ -210,6 +224,7 @@ def aljazeera_news_job():
 # --- pt_bbc Job ---
 @op
 def bbc_category_parser_op(context):
+    add_random_delay(context)
     context.log.info("Starting BBC Category Parser...")
     script_path = get_script_path("portals/pt_bbc/bbc_category_html_parser.py")
     log_file = get_log_file_path("bbc_category_html_parser.log")
@@ -261,6 +276,7 @@ def bbc_news_job():
 # --- pt_fox Job ---
 @op
 def fox_category_parser_op(context):
+    add_random_delay(context)
     context.log.info("Starting FOX Category Parser...")
     script_path = get_script_path("portals/pt_fox/fox_category_rss_parser.py")
     log_file = get_log_file_path("fox_category_rss_parser.log")
@@ -312,6 +328,7 @@ def fox_news_job():
 # --- pt_guardian Job ---
 @op
 def guardian_category_parser_op(context):
+    add_random_delay(context)
     context.log.info("Starting Guardian Category Parser...")
     script_path = get_script_path("portals/pt_guardian/guard_html_category_parser.py")
     log_file = get_log_file_path("guardian_category_parser.log")
@@ -363,6 +380,7 @@ def guardian_news_job():
 # --- pt_nyt Job (requires pychrome) ---
 @op
 def nyt_category_parser_op(context):
+    add_random_delay(context)
     context.log.info("Starting NYT Category Parser...")
     ensure_pychrome_running(context)
     script_path = get_script_path("portals/pt_nyt/nyt_rss_categories_parser.py")
@@ -417,6 +435,7 @@ def nyt_news_job():
 # --- pt_reuters Job (requires pychrome) ---
 @op
 def reuters_category_parser_op(context):
+    add_random_delay(context)
     context.log.info("Starting Reuters Category Parser...")
     ensure_pychrome_running(context)
     script_path = get_script_path("portals/pt_reuters/reuters_rss_categories_parser.py")
@@ -471,6 +490,7 @@ def reuters_news_job():
 # --- py_cnn Job ---
 @op
 def cnn_category_parser_op(context):
+    add_random_delay(context)
     context.log.info("Starting CNN Category Parser...")
     script_path = get_script_path("portals/py_cnn/cnn_html_categories_parser.py")
     log_file = get_log_file_path("cnn_html_categories_parser.log")
