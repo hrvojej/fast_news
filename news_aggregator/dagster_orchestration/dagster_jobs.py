@@ -98,7 +98,6 @@ def ensure_pychrome_running(context):
 
 @op
 def abc_category_parser_op(context):
-    # Add a random delay at the start
     add_random_delay(context)
     context.log.info("Starting ABC Category Parser...")
     context.log.info(f"Current working directory: {os.getcwd()}")
