@@ -59,38 +59,58 @@ def stream_subprocess_output(context, process, log_file_path: str):
 ##############################################
 
 
-def is_chrome_running() -> bool:
-    """Check if Chrome’s remote debugging port (9222) is open."""
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        try:
-            s.connect(("localhost", 9222))
-            return True
-        except socket.error:
-            return False
+def is_chrome_running():
+    """Check if Chrome is running."""
+    try:
+        result = subprocess.run(["tasklist"], capture_output=True, text=True)
+        return "chrome.exe" in result.stdout.lower()
+    except Exception as e:
+        print(f"Error checking Chrome process: {e}")
+        return False
 
-def ensure_pychrome_running(context):
-    """Ensure that Chrome is running with remote debugging enabled."""
-    if not is_chrome_running():
-        context.log.info("Chrome remote debugging (port 9222) not detected. Launching Chrome with pychrome...")
-        powershell_command = [
-            "powershell",
-            "-Command",
-            (
-                'Start-Process -FilePath "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe" '
-                '-ArgumentList \'--remote-debugging-port=9222\','
-                '\'--user-data-dir=C:\\Users\\Korisnik\\AppData\\Local\\Google\\Chrome\\User Data\','
-                '\'--profile-directory=Profile 1\','
-                '\'--disable-gpu\','
-                '\'--disable-popup-blocking\','
-                '\'--disable-extensions\','
-                '\'--disable-sync\','
-                '\'--disable-translate\','
-                '\'--disable-notifications\','
-                '\'--mute-audio\' '
-                '-WindowStyle Hidden'
-            )
-        ]
-        subprocess.Popen(powershell_command)
+def kill_chrome():
+    """Kill all Chrome instances."""
+    try:
+        subprocess.run(["taskkill", "/IM", "chrome.exe", "/F"], capture_output=True, text=True)
+        print("Killed all running Chrome instances.")
+    except Exception as e:
+        print(f"Error killing Chrome process: {e}")
+
+def ensure_pychrome_running(context = None):
+    """Ensure Chrome is running with remote debugging enabled."""
+    
+    # Check if Chrome is running and kill it if necessary
+    if is_chrome_running():
+        print("Chrome is already running. Terminating existing instances...")
+        kill_chrome()
+        time.sleep(2)  # Give some time for Chrome to close
+    
+    # Define Chrome launch command
+    chrome_path = r"C:\Program Files\Google\Chrome\Application\chrome.exe"
+    user_data_dir = r"C:\Users\Korisnik\AppData\Local\Google\Chrome\User Data"
+    profile_name = "Profile 1"
+
+    cmd = [
+        chrome_path,
+        "--remote-debugging-port=9222",
+        f"--user-data-dir={user_data_dir}",
+        f"--profile-directory={profile_name}",
+        "--disable-gpu",
+        "--disable-popup-blocking",
+        "--disable-extensions",
+        "--disable-sync",
+        "--disable-translate",
+        "--disable-notifications",
+        "--mute-audio"
+    ]
+
+    # Launch Chrome
+    try:
+        subprocess.Popen(cmd)
+        print("Chrome launched successfully with debugging enabled.")
+    except Exception as e:
+        print(f"Error launching Chrome: {e}")
+
 
 ##############################################
 # Existing ABC and Al Jazeera Ops & Jobs
@@ -379,7 +399,7 @@ def guardian_news_job():
 # --- pt_nyt Job (requires pychrome) ---
 @op
 def nyt_category_parser_op(context):
-    add_random_delay(context)
+    # add_random_delay(context)
     context.log.info("Starting NYT Category Parser...")
     ensure_pychrome_running(context)
     script_path = get_script_path("portals/pt_nyt/nyt_rss_categories_parser.py")
