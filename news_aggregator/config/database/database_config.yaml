@@ -10,15 +10,16 @@ dev:
     idle_timeout: 300
 
 production:
-  name: news_aggregator_prod
-  user: news_admin_prod  
-  password: fasldkflk423mkj4k24jk242
-  host: localhost
+  name: news_prod
+  user: neondb_owner
+  password: npg_BbIn2gcSOok7
+  host: ep-old-sun-a8yj1lcn-pooler.eastus2.azure.neon.tech
   port: 5432
   pool:
     min_connections: 5
     max_connections: 50
     idle_timeout: 300
+
 
 shared:
   application_name: news_aggregator

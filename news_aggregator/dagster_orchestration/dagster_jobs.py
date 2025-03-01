@@ -6,6 +6,9 @@ import subprocess
 from dagster import op, job
 import time
 import random
+from dagster import success_hook
+from custom_dagster_client import dagster_client_resource
+
 
 ##############################################
 # Helper Functions
@@ -557,3 +560,4 @@ def cnn_news_job():
     cat_status = cnn_category_parser_op()
     articles_status = cnn_article_parser_op(cat_status)
     cnn_article_updater_op(articles_status)
+

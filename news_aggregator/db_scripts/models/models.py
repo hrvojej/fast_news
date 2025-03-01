@@ -100,10 +100,17 @@ def create_portal_article_model(schema: str):
             'sentiment_score': sa.Column(sa.Float, CheckConstraint('sentiment_score BETWEEN -1 AND 1')),
             'share_count': sa.Column(sa.Integer, server_default=sa.text("0")),
             'view_count': sa.Column(sa.Integer, server_default=sa.text("0")),
-            'comment_count': sa.Column(sa.Integer, server_default=sa.text("0"))
+            'comment_count': sa.Column(sa.Integer, server_default=sa.text("0")),
+            # New NLP columns from migration 0012
+            'summary': sa.Column(sa.Text),
+            'tldr': sa.Column(sa.Text),
+            'topics': sa.Column(sa.JSON),
+            'entities': sa.Column(sa.JSON),
+            'relations': sa.Column(sa.JSON),
+            'sentiment_label': sa.Column(sa.Text),
+            'nlp_updated_at': sa.Column(TIMESTAMP(timezone=True))
         }
     )
-    
 # ────────────────────────────────────────────── Dynamic Portal Model (Article Status) ───────────────────────────────────────────────
 
 def create_portal_article_status_model(schema: str):
