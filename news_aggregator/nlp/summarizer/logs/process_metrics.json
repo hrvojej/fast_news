@@ -1,0 +1,51 @@
+{
+  "current_run": {
+    "run_id": "5e7714a2-985a-4a07-b37e-3afe2df02a19",
+    "start_time": "2025-03-05T20:58:09.539162",
+    "end_time": "2025-03-05T20:58:09.595116",
+    "total_articles": 3379,
+    "processed_articles": 0,
+    "successful_articles": 0,
+    "failed_articles": 0,
+    "skipped_articles": 0,
+    "api_calls": 0,
+    "api_errors": 0,
+    "total_api_time": 0,
+    "total_process_time": 0.055954,
+    "article_metrics": {}
+  },
+  "historical_runs": [
+    {
+      "run_id": "25c85520-f12c-456c-b745-d85956aa6539",
+      "start_time": "2025-03-05T20:58:09.319080",
+      "end_time": "2025-03-05T20:58:09.536232",
+      "total_articles": 0,
+      "processed_articles": 0,
+      "successful_articles": 0,
+      "failed_articles": 0,
+      "skipped_articles": 0,
+      "api_calls": 0,
+      "api_errors": 0,
+      "total_api_time": 0,
+      "total_process_time": 0.217152,
+      "success_rate": 0,
+      "average_processing_time": 0
+    },
+    {
+      "run_id": "5e7714a2-985a-4a07-b37e-3afe2df02a19",
+      "start_time": "2025-03-05T20:58:09.539162",
+      "end_time": "2025-03-05T20:58:09.595116",
+      "total_articles": 3379,
+      "processed_articles": 0,
+      "successful_articles": 0,
+      "failed_articles": 0,
+      "skipped_articles": 0,
+      "api_calls": 0,
+      "api_errors": 0,
+      "total_api_time": 0,
+      "total_process_time": 0.055954,
+      "success_rate": 0,
+      "average_processing_time": 0
+    }
+  ]
+}

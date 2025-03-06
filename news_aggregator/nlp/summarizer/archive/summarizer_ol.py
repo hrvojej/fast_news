@@ -99,7 +99,7 @@ def ensure_output_directory():
             raise
 
 def rate_limit_sleep():
-    sleep_time = random.uniform(6.0, 9.0)
+    sleep_time = random.uniform(15.0, 17.0)
     print(f"Sleeping for {sleep_time:.2f} seconds to respect rate limits.")
     time.sleep(sleep_time)
 
@@ -227,9 +227,9 @@ class NYTArticleSummarizer:
         else:
             try:
                 self.logger.info("Calling Gemini API for article ID: %s", article_id)
-                model = 'gemini-2.0-flash'
-                if len(content) > 15000:
-                    model = 'gemini-2.0-pro'
+                model = 'gemini-2.0-pro-exp-02-05'
+                # if len(content) > 15000:
+                #     model = 'gemini-2.0-pro'
                 
                 config_kwargs = {
                     "max_output_tokens": 8192 if len(content) > 10000 else 5120,

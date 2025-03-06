@@ -1,0 +1,29 @@
+{
+    "api": {
+        "max_retries": 3,
+        "timeout": 60,
+        "default_temperature": 0.7,
+        "default_top_p": 0.9
+    },
+    "summarization": {
+        "include_images": true,
+        "enable_entity_links": true,
+        "enable_featured_image_search": true,
+        "char_limit_long_article": 5000,
+        "default_summary_length": "medium"
+    },
+    "output": {
+        "save_html": true,
+        "save_markdown": false,
+        "save_text": false
+    },
+    "database": {
+        "batch_size": 10,
+        "update_on_success": true
+    },
+    "rate_limiting": {
+        "min_delay": 15.0,
+        "max_delay": 17.0,
+        "adaptive": true
+    }
+}

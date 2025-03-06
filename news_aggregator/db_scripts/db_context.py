@@ -1,4 +1,4 @@
-# db_context.py
+# path: news_dagster-etl/news_aggregator/db_scripts/db_context.py
 from contextlib import contextmanager
 from typing import Optional, Dict, Any, Generator
 import sqlalchemy as sa
