@@ -190,7 +190,7 @@ def create_prompt(content, article_length, include_images=True, enable_entity_li
             )
         
         prompt += (
-            "7. Use simple and easy to understand phrases and language and avoid overly complex or long sentences.\n"
+            "7. Use simple language and avoid overly complex or long sentences.\n"
             "8. Create visual breathing room around key entities by adding a slight letter spacing using a span with class 'entity-spacing'.\n"
             "9. For transitional sentences between major ideas, use a paragraph with class 'transition-text'.\n"
             "10. CRITICAL: NEVER reference the source material. Do not use phrases like \"The article examines...\" \"The text discusses...\" \"The author argues...\" or any similar phrases that refer to the source content as an article, text, content, or document.\n"

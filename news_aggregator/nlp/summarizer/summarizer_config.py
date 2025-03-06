@@ -13,11 +13,10 @@ from summarizer_logging import get_logger
 # Initialize logger
 logger = get_logger(__name__)
 
-from summarizer_path_config import configure_paths
-news_aggregator_dir = configure_paths()  # Get the directory path
-
-# Output directory for HTML files - UPDATED PATH
-OUTPUT_HTML_DIR = os.path.join(news_aggregator_dir, "frontend", "web", "articles")
+from summarizer_path_config import configure_paths, get_output_dir, ensure_directory_exists
+configure_paths()  # Still call this to set up sys.path
+OUTPUT_HTML_DIR = get_output_dir()
+ensure_directory_exists(OUTPUT_HTML_DIR)
 
 # Default configuration values
 DEFAULT_CONFIG = {
@@ -105,6 +104,7 @@ def load_config(config_path=None):
     """
     # If no config path provided, use default in current directory
     if not config_path:
+        current_dir = os.path.dirname(os.path.abspath(__file__))
         config_path = os.path.join(current_dir, "config.json")
     
     config = DEFAULT_CONFIG.copy()
@@ -114,14 +114,12 @@ def load_config(config_path=None):
         if os.path.exists(config_path):
             with open(config_path, 'r') as f:
                 file_config = json.load(f)
-                
                 # Update each section while preserving defaults for missing values
                 for section, values in file_config.items():
                     if section in config:
                         config[section].update(values)
                     else:
                         config[section] = values
-                        
             logger.info(f"Loaded configuration from {config_path}")
         else:
             # Create default config file
