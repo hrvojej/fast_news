@@ -13,12 +13,11 @@ from summarizer_logging import get_logger
 # Initialize logger
 logger = get_logger(__name__)
 
-# Base directories
-current_dir = os.path.dirname(os.path.abspath(__file__))
-package_root = os.path.abspath(os.path.join(current_dir, "../"))
+from summarizer_path_config import configure_paths
+news_aggregator_dir = configure_paths()  # Get the directory path
 
-# Output directory for HTML files
-OUTPUT_HTML_DIR = os.path.join(current_dir, "data", "output_html")
+# Output directory for HTML files - UPDATED PATH
+OUTPUT_HTML_DIR = os.path.join(news_aggregator_dir, "frontend", "web", "articles")
 
 # Default configuration values
 DEFAULT_CONFIG = {
@@ -48,7 +47,22 @@ DEFAULT_CONFIG = {
         "min_delay": 15.0,
         "max_delay": 17.0,
         "adaptive": True
+    },
+    "templates": {
+        "use_templates": True,
+        "default_template": "article.html",
+        "cache_templates": True
+    },
+    "static": {
+        "url_prefix": "/static/"
+    },
+    "image_search": {
+        "provider": "wikimedia",
+        "short_threshold": 3000,   # Articles with fewer than 3000 characters get 1 image
+        "medium_threshold": 7000,  # Articles between 3000 and 7000 characters get 2 images
+        "max_images": 3            # Articles longer than 7000 characters get 3 images
     }
+
 }
 
 

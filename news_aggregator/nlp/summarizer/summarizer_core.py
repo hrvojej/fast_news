@@ -63,15 +63,6 @@ class ArticleSummarizer:
         logger.info(f"Initialized ArticleSummarizer for {schema} (env={env}, debug_mode={debug_mode})")
     
     def summarize_article(self, article_info):
-        """
-        Summarize a single article.
-        
-        Args:
-            article_info (dict): Dictionary containing article details
-            
-        Returns:
-            bool: True if successful, False otherwise
-        """
         try:
             # Extract article information
             content = article_info.get('content', '').strip()
@@ -84,7 +75,6 @@ class ArticleSummarizer:
                 logger.info(f"No valid content to summarize for article ID: {article_id}")
                 return False
             
-            # Log article start
             logger.info(f"=== START ARTICLE ID: {article_id} ===")
             logger.info(f"ARTICLE CONTENT LENGTH: {len(content)} characters")
             logger.debug(f"ARTICLE CONTENT PREVIEW:\n{content[:500]}...")
@@ -114,36 +104,36 @@ class ArticleSummarizer:
                     logger.error(f"Failed to generate summary for article ID: {article_id}")
                     return False
             
-            # Process and save the summary
+            # Process and update database
             cleaned_summary = clean_and_normalize_html(summary_text)
-            
-            # Update database
             if not self.debug_mode:
                 success = update_article_summary(
-                self.db_context, 
-                self.schema, 
-                article_id, 
-                cleaned_summary
-            )
+                    self.db_context, 
+                    self.schema, 
+                    article_id, 
+                    cleaned_summary
+                )
                 if not success:
                     logger.error(f"Failed to update database for article ID: {article_id}")
                     return False
             
-            # Save as HTML
-            html_saved = save_as_html(article_id, title, url, content, summary_text, raw_response_text)
+            # Save as HTML, now passing keywords from the database to enable image search
+            html_saved = save_as_html(
+                article_id, title, url, content, summary_text, raw_response_text,
+                keywords=article_info.get('keywords')
+            )
             if not html_saved:
                 logger.error(f"Failed to save HTML output for article ID: {article_id}")
                 return False
             
-            # Log completion
             logger.info(f"ARTICLE SUMMARY for ID {article_id} (first 500 chars):\n{summary_text[:500]}...")
             logger.info(f"=== END ARTICLE ID: {article_id} ===")
             return True
-            
         except Exception as e:
             logger.error(f"Unhandled exception in summarize_article for ID {article_id}: {e}", exc_info=True)
             return False
-    
+
+
     def run(self, limit=None):
         """
         Run the summarization process for multiple articles.

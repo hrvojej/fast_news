@@ -9,11 +9,9 @@ import argparse
 import time
 import traceback
 
-# Add package root to path
-current_dir = os.path.dirname(os.path.abspath(__file__))
-package_root = os.path.abspath(os.path.join(current_dir, "../"))
-if package_root not in sys.path:
-    sys.path.insert(0, package_root)
+# Add current directory to path
+from summarizer_path_config import configure_paths
+configure_paths()
 
 # Import our modules
 from summarizer_logging import get_logger

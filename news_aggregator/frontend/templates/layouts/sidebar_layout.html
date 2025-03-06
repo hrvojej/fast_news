@@ -1,0 +1,12 @@
+{% extends "base.html" %}
+
+{% block content %}
+    <div class="content-wrapper sidebar-layout">
+        <div class="main-content">
+            {% block page_content %}{% endblock %}
+        </div>
+        <div class="side-content">
+            {% block side_content %}{% endblock %}
+        </div>
+    </div>
+{% endblock %}

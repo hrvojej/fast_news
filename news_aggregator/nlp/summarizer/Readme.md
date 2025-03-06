@@ -1,19 +1,30 @@
+Below is an updated version of your README with the necessary changes. In this version, we explicitly state that the summarization is done via the Gemini API while image retrieval is now handled using the Wikimedia Commons API. We removed any misleading references to image fetching via Gemini API and adjusted the key features and documentation accordingly.
+
+---
+# venv
+C:\Users\Korisnik\Desktop\TLDR\venv\Scripts\Activate.ps1
+
+```markdown
 # Article Summarization System
 
-A modular system for summarizing articles using the Gemini API.
+```bash
+python main.py --schema pt_nyt --env dev --article-id "3b9c8262-8578-4db6-bff3-de2232df22e5"
+```
+
+A modular system for summarizing articles using the Gemini API for generating summaries and the Wikimedia Commons API for retrieving images.
 
 ## Overview
 
-This system processes articles from a database, generates summaries using the Gemini API, and stores the results. It features a modular architecture with clear separation of concerns and robust error handling.
+This system processes articles from a database, generates summaries using the Gemini API, and enriches the output with relevant images fetched from the Wikimedia Commons API. It features a modular architecture with clear separation of concerns and robust error handling.
 
 ## Key Features
 
-- Modular design with separate components for different functionality
-- Robust error handling and logging
-- Support for batch and continuous processing
-- HTML output generation
-- Process monitoring and statistics
-- Unit tests for reliability
+- Modular design with separate components for summarization, image retrieval, HTML generation, and database interactions.
+- Robust error handling and logging.
+- Support for batch and continuous processing.
+- HTML output generation that integrates text summaries (via Gemini API) and images (via Wikimedia Commons).
+- Process monitoring and statistics.
+- Unit tests for reliability.
 
 ## Installation and Setup
 
@@ -21,7 +32,7 @@ This system processes articles from a database, generates summaries using the Ge
 
 - Python 3.8 or later
 - PostgreSQL database with article data
-- Gemini API key
+- Gemini API key (for generating summaries)
 
 ### Step 1: Clone the Repository
 
@@ -111,7 +122,7 @@ python main.py --schema pt_nyt --env dev --article-id "3b9c8262-8578-4db6-bff3-d
 # - Retrieve the specific article from the database
 # - Generate a summary using the Gemini API
 # - Update the article's record in the database
-# - Save an HTML file with the summary
+# - Save an HTML file with the summary and associated images from Wikimedia Commons
 ```
 
 ### Batch Processing
@@ -128,7 +139,7 @@ python main.py --schema pt_nyt --env dev --limit 20
 # - Retrieve up to 20 articles from the database
 # - Generate summaries using the Gemini API
 # - Update the database with the summaries
-# - Save HTML files
+# - Save HTML files enriched with images fetched from Wikimedia Commons
 # - Display progress information
 ```
 
@@ -270,8 +281,8 @@ python -c "from summarizer_api import test_api_call; print(test_api_call())"
 ## Module Structure
 
 - **summarizer_core.py**: Main orchestration logic
-- **summarizer_prompt.py**: Prompt creation for the language model
-- **summarizer_api.py**: API interaction with Gemini
+- **summarizer_prompt.py**: Prompt creation for the language model (text summaries only)
+- **summarizer_api.py**: API interaction with Gemini (for summarization)
 - **summarizer_html.py**: HTML processing and output
 - **summarizer_db.py**: Database interactions
 - **summarizer_logging.py**: Logging configuration
@@ -281,6 +292,15 @@ python -c "from summarizer_api import test_api_call; print(test_api_call())"
 - **summarizer_tests.py**: Unit tests
 - **summarizer_cli.py**: Command-line interface
 - **main.py**: Main entry point
+
+## Image Handling
+
+Image retrieval is now managed by a dedicated module that uses the Wikimedia Commons API. This module:
+- Searches for freely usable images based on article keywords or title.
+- Determines the number of images to fetch based on the article's content length.
+- Downloads images and integrates them into the HTML output.
+  
+The image-related functionality is fully decoupled from the text summarization prompt, ensuring Gemini API is used solely for generating summaries.
 
 ## Troubleshooting
 
@@ -310,6 +330,6 @@ python -c "from summarizer_api import test_api_call; print(test_api_call())"
    python -c "from summarizer_monitoring import process_metrics; process_metrics.reset(); process_metrics.save_metrics()"
    ```
 
-## License
+---
 
-MIT License
+This updated README clarifies that text summarization is handled by the Gemini API while image retrieval is now performed via the Wikimedia Commons API. Let me know if you need further changes or additional sections!

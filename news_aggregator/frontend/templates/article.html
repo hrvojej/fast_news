@@ -1,0 +1,52 @@
+{% extends "base.html" %}
+
+{% block title %}{{ title or "Article Summary" }}{% endblock %}
+
+{% block extra_css %}
+    <link rel="stylesheet" href="{{ static_url('css/article.css') }}">
+{% endblock %}
+
+{% block content %}
+    <!-- Main Article Title as H1 using external CSS class -->
+    <h1 class="article-title">{{ title }}</h1>
+    
+    <div class="article-meta">
+        <p>Article ID: {{ article_id }}</p>
+        <p>URL: <a href="{{ url }}">{{ url }}</a></p>
+        <p>Processed: {{ processed_date }}</p>
+    </div>
+    
+    {% if featured_image %}
+    <div class="featured-image">
+        <img src="{{ featured_image.url }}" alt="{{ featured_image.alt }}">
+    </div>
+    {% endif %}
+    
+    <!-- Summary section: no extra heading here so that if the summary content already contains a heading it won’t be nested under an additional "Summary" heading -->
+    <div class="summary">
+        {{ summary|safe }}
+    </div>
+    
+    {% if fetched_images %}
+        {% for image in fetched_images %}
+            <figure class="article-image">
+                <img src="{{ image.url }}" alt="{{ image.caption }}">
+                <figcaption>{{ image.caption }}</figcaption>
+            </figure>
+        {% endfor %}
+    {% endif %}
+    
+    {% if show_api_response %}
+    <div class="api-response">
+        <h2>Raw API Response</h2>
+        <pre>{{ response_text }}</pre>
+    </div>
+    {% endif %}
+    
+    <div class="article-content">
+        <h2>Original Article Content</h2>
+        <div>
+            {{ content|safe }}
+        </div>
+    </div>
+{% endblock %}

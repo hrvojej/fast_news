@@ -36,7 +36,7 @@ def get_articles(db_context, schema, limit=None):
     try:
         with db_context.session() as session:
             # Build query
-            query = f"SELECT article_id, title, url, content FROM {schema}.articles"
+            query = f"SELECT article_id, title,keywords, url, content FROM {schema}.articles"
             
             # Add conditions to filter out articles that already have summaries
             # Uncomment this if you want to only process articles without summaries
