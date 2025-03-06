@@ -134,61 +134,108 @@ def search_and_download_images(query, article_id, base_name, num_images):
         list: A list of dictionaries, each containing 'url' (the local relative image path) and 'caption' (if available).
     """
     api_url = "https://commons.wikimedia.org/w/api.php"
-    params = {
-        "action": "query",
-        "format": "json",
-        "generator": "search",
-        "gsrsearch": query,
-        "gsrnamespace": 6,  # File namespace
-        "gsrlimit": num_images,
-        "prop": "imageinfo",
-        "iiprop": "url|extmetadata"
-    }
-    logger.debug(f"Searching Wikimedia Commons with query: '{query}' and params: {params}")
     
-    try:
-        response = requests.get(api_url, params=params, timeout=10)
-        logger.debug(f"Wikimedia Commons API response status: {response.status_code}")
-        if response.status_code != 200:
-            logger.error(f"Wikimedia Commons API returned status code {response.status_code}")
-            return []
+    # Try different search terms if the original query is too specific
+    search_queries = [
+        query,  # Original query
+        query.split()[0] if query.split() else "news",  # Just the first word
+        # Add some generic fallbacks based on context clues from the query
+        "prison" if any(word in query.lower() for word in ["prison", "jail", "inmate", "incarceration"]) else None,
+        "protest" if any(word in query.lower() for word in ["protest", "strike", "demonstration"]) else None,
+        "hunger strike" if "hunger" in query.lower() or "strike" in query.lower() else None
+    ]
+    
+    # Filter out None values
+    search_queries = [q for q in search_queries if q]
+    
+    # Valid image extensions to filter results
+    valid_extensions = ['.jpg', '.jpeg', '.png', '.gif', '.svg']
+    
+    logger.debug(f"Will try these search queries in order: {search_queries}")
+    
+    for current_query in search_queries:
+        params = {
+            "action": "query",
+            "format": "json",
+            "generator": "search",
+            "gsrsearch": f"filetype:bitmap {current_query}",  # Explicitly search for images, not PDFs/DJVUs
+            "gsrnamespace": 6,  # File namespace
+            "gsrlimit": num_images * 3,  # Get more results than needed to filter invalid formats
+            "prop": "imageinfo",
+            "iiprop": "url|extmetadata"
+        }
+        logger.debug(f"Searching Wikimedia Commons with query: '{current_query}' and params: {params}")
         
-        data = response.json()
-        logger.debug(f"Wikimedia Commons API response keys: {list(data.keys())}")
-        if "query" not in data or "pages" not in data["query"]:
-            logger.info("No images found for the query.")
-            return []
-        
-        images = []
-        pages = data["query"]["pages"]
-        sorted_pages = sorted(pages.values(), key=lambda p: int(p.get("pageid", 0)))
-        for idx, page in enumerate(sorted_pages, start=1):
-            imageinfo = page.get("imageinfo", [])
-            if not imageinfo:
-                logger.debug(f"No imageinfo found for page: {page.get('title', 'Unknown')}")
-                continue
-            info = imageinfo[0]
-            image_url = info.get("url")
-            extmeta = info.get("extmetadata", {})
-            caption = None
-            if extmeta:
-                caption = extmeta.get("ObjectName", {}).get("value")
+        try:
+            response = requests.get(api_url, params=params, timeout=10)
+            logger.debug(f"Wikimedia Commons API response status: {response.status_code}")
+            if response.status_code != 200:
+                logger.error(f"Wikimedia Commons API returned status code {response.status_code}")
+                continue  # Try next query
+            
+            data = response.json()
+            logger.debug(f"Wikimedia Commons API response keys: {list(data.keys())}")
+            if "query" not in data or "pages" not in data["query"]:
+                logger.info(f"No images found for the query: {current_query}")
+                continue  # Try next query
+            
+            images = []
+            pages = data["query"]["pages"]
+            sorted_pages = sorted(pages.values(), key=lambda p: int(p.get("pageid", 0)))
+            
+            for idx, page in enumerate(sorted_pages, start=1):
+                imageinfo = page.get("imageinfo", [])
+                if not imageinfo:
+                    logger.debug(f"No imageinfo found for page: {page.get('title', 'Unknown')}")
+                    continue
+                
+                info = imageinfo[0]
+                image_url = info.get("url")
+                
+                # Skip if not a valid image URL or not a valid image extension
+                if not image_url:
+                    continue
+                    
+                # Check if it has a valid image extension
+                _, ext = os.path.splitext(image_url.lower())
+                if ext not in valid_extensions:
+                    logger.warning(f"Invalid image format {ext} for URL: {image_url}")
+                    continue
+                
+                extmeta = info.get("extmetadata", {})
+                caption = None
+                if extmeta:
+                    caption = extmeta.get("ObjectName", {}).get("value")
+                    if not caption:
+                        caption = extmeta.get("ImageDescription", {}).get("value")
+                    if caption and '<' in caption:  # If caption has HTML
+                        caption = BeautifulSoup(caption, 'html.parser').get_text()
+                
+                # Use page title as fallback for caption
                 if not caption:
-                    caption = extmeta.get("ImageDescription", {}).get("value")
-            local_image_path = download_image(image_url, article_id, base_name=base_name, counter=idx)
-            if local_image_path:
-                images.append({
-                    "url": local_image_path,
-                    "caption": caption if caption else page.get("title", "Image")
-                })
-            if len(images) >= num_images:
-                break
-        
-        logger.info(f"Downloaded {len(images)} images for query: '{query}'")
-        return images
-    except Exception as e:
-        logger.error(f"Error searching for images on Wikimedia Commons: {e}", exc_info=True)
-        return []
+                    caption = page.get("title", "Image").replace("File:", "").replace("_", " ")
+                
+                local_image_path = download_image(image_url, article_id, base_name=base_name, counter=idx)
+                if local_image_path:
+                    images.append({
+                        "url": local_image_path,
+                        "caption": caption[:100]  # Limit caption length
+                    })
+                
+                if len(images) >= num_images:
+                    break
+            
+            # If we found at least one image, return the results
+            if images:
+                logger.info(f"Downloaded {len(images)} images for query: '{current_query}'")
+                return images
+            
+        except Exception as e:
+            logger.error(f"Error searching for images on Wikimedia Commons with query '{current_query}': {e}", exc_info=True)
+    
+    # If all queries failed, return an empty list (no placeholders)
+    logger.warning("All Wikimedia queries failed to find images. No images will be included.")
+    return []
 
 def process_images_in_html(html_content, article_id):
     """
