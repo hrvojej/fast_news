@@ -147,6 +147,255 @@ def save_as_html(article_id, title, url, content, summary, response_text, keywor
 
         # --- Get images based on keywords ---
         featured_image_html = ""
+        additional_images_html = ""
+        
+        # Use keywords, title words, or a default if nothing else is available
+        search_terms = []
+        if keywords and isinstance(keywords, list) and len(keywords) > 0:
+            search_terms = keywords[:3]
+        elif title:
+            # Extract words from title, excluding common stopwords
+            title_words = [word.lower() for word in re.findall(r'\b\w+\b', title) 
+                          if len(word) > 3 and word.lower() not in ['the', 'and', 'with', 'from', 'that', 'this']]
+            search_terms = title_words[:3]
+        
+        if search_terms:
+            # Create a sanitized base name for image filenames
+            base_name = re.sub(r'[^\w\s-]', '', title if title else "Article")
+            base_name = re.sub(r'\s+', '_', base_name)[:30]  # Limit length
+            
+            # Log available search terms for debugging
+            logger.debug(f"Terms for Wikimedia image search: {search_terms}")
+            
+            # Create search query
+            image_query = " ".join(search_terms)
+            
+            # If no query could be created, use a fallback based on content snippet
+            if not image_query and content:
+                # Extract a relevant phrase from the beginning of the content
+                content_snippet = content[:100].strip()
+                content_words = [word for word in re.findall(r'\b\w+\b', content_snippet) 
+                               if len(word) > 3 and word.lower() not in ['the', 'and', 'with', 'from', 'that', 'this']]
+                image_query = " ".join(content_words[:3])
+            
+            # If still no query, use fallback
+            if not image_query:
+                image_query = "news article"
+            
+            logger.info(f"Using Wikimedia search query: '{image_query}'")
+            
+            # Calculate number of images to request based on content length
+            content_length = len(content) if content else 0
+            from summarizer_config import CONFIG, get_config_value
+            short_threshold = get_config_value(CONFIG, 'image_search', 'short_threshold', 3000)
+            medium_threshold = get_config_value(CONFIG, 'image_search', 'medium_threshold', 7000)
+            max_images = get_config_value(CONFIG, 'image_search', 'max_images', 3)
+            
+            if content_length < short_threshold:
+                num_images = 1
+            elif content_length < medium_threshold:
+                num_images = 2
+            else:
+                num_images = max_images
+            
+            # Search for and download images from Wikimedia
+            from summarizer_image import search_and_download_images
+            images = search_and_download_images(image_query, article_id, base_name, num_images)
+            
+            logger.info(f"Found {len(images)} images for article {article_id}")
+            
+            # Create featured image HTML if images were found
+            if images and len(images) > 0:
+                featured_image = images[0]  # Use first image as featured image
+                # Make sure the image URL is properly formatted
+                if not featured_image["url"].startswith(("http://", "https://", "/")):
+                    featured_image["url"] = "/" + featured_image["url"]
+                
+                featured_image_html = (
+                    f'<div class="featured-image">'
+                    f'<img src="{featured_image["url"]}" alt="{featured_image["caption"]}">'
+                    f'<p class="image-caption">{featured_image["caption"]}</p>'
+                    f'</div>'
+                )
+                
+                # Add additional images within the summary if there are more
+                if len(images) > 1:
+                    additional_images_html = '<div class="additional-images">'
+                    for idx, img in enumerate(images[1:], 1):
+                        # Alternate image alignment (left/right)
+                        alignment = "left" if idx % 2 == 1 else "right"
+                        # Make sure the image URL is properly formatted
+                        if not img["url"].startswith(("http://", "https://", "/")):
+                            img["url"] = "/" + img["url"]
+                        
+                        additional_images_html += (
+                            f'<figure class="article-image {alignment}-aligned">'
+                            f'<img src="{img["url"]}" alt="{img["caption"]}">'
+                            f'<figcaption>{img["caption"]}</figcaption>'
+                            f'</figure>'
+                        )
+                    additional_images_html += '</div>'
+                    
+                    # Insert additional images into the processed summary
+                    # Find a good insertion point after the first paragraph
+                    first_p_end = processed_summary.find('</p>')
+                    if first_p_end > 0:
+                        insert_pos = first_p_end + 4  # After </p>
+                        processed_summary = processed_summary[:insert_pos] + additional_images_html + processed_summary[insert_pos:]
+        
+        # Process any images already in the summary, downloading them and updating src attributes
+        processed_summary = process_images_in_html(processed_summary, article_id)
+        
+        # Create filename and filepath
+        filename = create_filename_from_title(title, url, article_id)
+        filepath = os.path.join(OUTPUT_HTML_DIR, filename)
+        logger.debug(f"Preparing to save HTML to: {filepath}")
+        
+        # Create final HTML content - using proper relative paths for CSS
+        # Get the current directory structure to calculate relative paths
+        from summarizer_path_config import get_static_dir
+        static_dir = get_static_dir()
+        relative_static_path = os.path.relpath(static_dir, os.path.dirname(filepath))
+        relative_static_path = relative_static_path.replace('\\', '/')  # Fix Windows paths
+        
+        html_content = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{html.escape(title or f'Article {article_id}')}</title>
+    <link rel="stylesheet" href="../static/css/main.css">
+    <link rel="stylesheet" href="../static/css/article.css">
+    <style>
+        /* Fallback styles in case external CSS fails to load */
+        body {{ font-family: Arial, sans-serif; line-height: 1.6; margin: 0; padding: 20px; }}
+        .container {{ max-width: 800px; margin: 0 auto; padding: 20px; }}
+        h1 {{ color: #333; }}
+        h2 {{ color: #555; margin-top: 30px; }}
+        .article-meta {{ color: #777; margin-bottom: 20px; }}
+        .summary {{ background-color: #f5f5f5; padding: 15px; border-radius: 5px; margin-bottom: 30px; }}
+        .api-response {{ background-color: #eef; padding: 15px; border-radius: 5px; white-space: pre-wrap; overflow-x: auto; }}
+        .article-content {{ border-top: 1px solid #ddd; margin-top: 30px; padding-top: 20px; }}
+        .featured-image {{ text-align: center; margin: 1.2em 0; }}
+        .featured-image img {{ max-width: 100%; border-radius: 6px; box-shadow: 0 2px 12px rgba(0,0,0,0.1); }}
+        .image-caption {{ font-size: 0.9em; color: #666; margin-top: 0.5em; }}
+        .article-image {{ margin: 1em 0; }}
+        .article-image.left-aligned {{ float: left; margin-right: 1.5em; max-width: 40%; }}
+        .article-image.right-aligned {{ float: right; margin-left: 1.5em; max-width: 40%; }}
+        .article-image img {{ width: 100%; border-radius: 4px; }}
+        .clearfix {{ clear: both; }}
+    </style>
+</head>
+<body>
+<header class="site-header">
+    <div class="header-content">
+        <div class="logo">
+            <a href="/">Article Summarizer</a>
+        </div>
+        <nav class="main-nav">
+            <ul>
+                <li><a href="/">Home</a></li>
+                <li><a href="/stats">Statistics</a></li>
+                <li><a href="/about">About</a></li>
+            </ul>
+        </nav>
+    </div>
+</header>    
+    <div class="container">
+    <h1>{html.escape(title or f'Article {article_id}')}</h1>
+    
+    <div class="article-meta">
+        <p>Article ID: {article_id}</p>
+        <p>URL: <a href="{html.escape(url or '#')}">{html.escape(url or 'N/A')}</a></p>
+        <p>Processed: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</p>
+    </div>
+    
+    {featured_image_html}
+    
+    <div class="summary">
+        <h2>Summary</h2>
+        {processed_summary}
+        <div class="clearfix"></div>
+    </div>
+    
+    <div class="api-response">
+        <h2>Raw API Response</h2>
+        <pre>{html.escape(response_text if response_text else 'No API response available')}</pre>
+    </div>
+    
+    <div class="article-content">
+        <h2>Original Article Content</h2>
+        <div>
+            {html.escape(content).replace('\n', '<br>') if content else 'No content available'}
+        </div>
+    </div>
+    </div>
+    
+<aside class="sidebar">
+    <div class="sidebar-content">
+        <h3>Recent Summaries</h3>
+        <ul class="recent-list">
+                <li>No recent articles</li>
+        </ul>
+    </div>
+    
+<div class="ad-container">
+    <!-- Ad placeholder -->
+    <div class="ad-unit">
+        <div class="ad-placeholder">
+            <p>Advertisement</p>
+        </div>
+    </div>
+</div></aside>    
+<footer class="site-footer">
+    <div class="footer-content">
+        <p>&copy; {datetime.now().year} Article Summarizer. All rights reserved.</p>
+    </div>
+</footer>    
+        <script src="../static/js/main.js"></script>
+</body>
+</html>"""
+        
+        # Write the HTML file
+        with open(filepath, 'w', encoding='utf-8') as f:
+            f.write(html_content)
+            f.flush()
+        
+        # Verify file creation
+        if os.path.exists(filepath):
+            file_size = os.path.getsize(filepath)
+            logger.info(f"Successfully saved HTML output to {filepath} (size: {file_size} bytes)")
+            return True
+        else:
+            logger.error(f"File wasn't created despite no errors: {filepath}")
+            return False
+    except Exception as e:
+        logger.error(f"Error saving HTML file {filepath if 'filepath' in locals() else 'unknown'}", exc_info=True)
+        return False
+    """
+    Save the article and its summary as an HTML file, with images from Wikimedia based on keywords.
+    
+    Args:
+        article_id (str): The article ID
+        title (str): The article title
+        url (str): The article URL
+        content (str): The original article content
+        summary (str): The generated summary
+        response_text (str): The raw API response
+        keywords (list, optional): List of article keywords for Wikimedia image searches
+        
+    Returns:
+        bool: True if successful, False otherwise
+    """
+    try:
+        # Ensure output directory exists
+        ensure_output_directory()
+        
+        # Clean the summary HTML
+        processed_summary = clean_and_normalize_html(summary)
+
+        # --- Get images based on keywords ---
+        featured_image_html = ""
         if keywords and isinstance(keywords, list) and len(keywords) > 0:
             # Create a sanitized base name for image filenames
             base_name = re.sub(r'[^\w\s-]', '', title if title else "Article")
