@@ -9,8 +9,8 @@
         "include_images": true,
         "enable_entity_links": true,
         "enable_featured_image_search": true,
-        "char_limit_long_article": 5000,
-        "default_summary_length": "medium"
+        "char_limit_long_article": 20000,
+        "default_summary_length": "long"
     },
     "output": {
         "save_html": true,

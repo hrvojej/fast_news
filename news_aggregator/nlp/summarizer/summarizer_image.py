@@ -19,6 +19,15 @@ logger = get_logger(__name__)
 # Directory for storing images
 IMAGES_DIR = os.path.join(OUTPUT_HTML_DIR, "images")
 
+# Standard class names for images
+IMAGE_CLASSES = {
+    "featured": "featured-image",
+    "article": "article-image",
+    "left_float": "left-image",
+    "right_float": "right-image",
+    "caption": "image-caption"
+}
+
 def is_valid_image_url(url):
     """
     Check if a URL is likely a valid image URL.
@@ -77,7 +86,7 @@ def download_image(url, article_id, base_name=None, counter=None):
         counter (int, optional): A counter to append to the filename.
         
     Returns:
-        str: Relative path to the downloaded image (relative to the HTML output directory), or None if download failed.
+        dict: Image metadata including 'path', 'filename', 'original_url', or None if download failed.
     """
     logger.debug(f"download_image called with url: {url}, article_id: {article_id}, base_name: {base_name}, counter: {counter}")
     if not is_valid_image_url(url):
@@ -112,7 +121,14 @@ def download_image(url, article_id, base_name=None, counter=None):
                 shutil.copyfileobj(response.raw, f)
             relative_path = os.path.join("images", filename)
             logger.info(f"Downloaded image from {url} to {filepath}")
-            return relative_path
+            
+            return {
+                "path": relative_path,
+                "filename": filename,
+                "original_url": url,
+                "content_type": response.headers.get('Content-Type', ''),
+                "size": os.path.getsize(filepath)
+            }
         else:
             logger.warning(f"Failed to download image (status code {response.status_code}): {url}")
             return None
@@ -120,45 +136,133 @@ def download_image(url, article_id, base_name=None, counter=None):
         logger.error(f"Error downloading image from {url}: {e}", exc_info=True)
         return None
 
-def search_and_download_images(query, article_id, base_name, num_images):
+def extract_search_terms(query, title, content=None, entity_list=None):
     """
-    Search for images on Wikimedia Commons using the provided query and download up to num_images.
+    Extract better search terms from the query, title, and entity list.
+    
+    Args:
+        query (str): Original search query
+        title (str): Article title
+        content (str, optional): Article content for context
+        entity_list (list, optional): List of named entities from the article
+        
+    Returns:
+        list: Prioritized list of search terms to try
+    """
+    search_terms = []
+    
+    # Start with the original query
+    if query:
+        search_terms.append(query)
+    
+    # Add entity-based search terms if available
+    if entity_list and isinstance(entity_list, list):
+        # Prioritize named entities (people, organizations, locations)
+        named_entities = [entity for entity in entity_list 
+                         if isinstance(entity, dict) and entity.get('type') in 
+                         ['PERSON', 'ORGANIZATION', 'LOCATION', 'GPE']]
+        
+        if named_entities:
+            top_entities = [entity.get('text') for entity in sorted(named_entities, 
+                                              key=lambda x: x.get('count', 0), 
+                                              reverse=True)[:3]]
+            entity_query = " ".join(top_entities)
+            if entity_query and entity_query not in search_terms:
+                search_terms.append(entity_query)
+    
+    # Add title-based search terms
+    if title:
+        # Full title if it's short enough
+        if len(title.split()) <= 5 and title not in search_terms:
+            search_terms.append(title)
+        
+        # First half of the title (typically contains the main subject)
+        title_words = title.split()
+        if len(title_words) > 3:
+            first_half = " ".join(title_words[:len(title_words)//2])
+            if first_half not in search_terms:
+                search_terms.append(first_half)
+        
+        # Extract significant words from title (excluding common words)
+        common_words = ['the', 'a', 'an', 'in', 'on', 'at', 'of', 'to', 'and', 'or', 'for', 'with', 'by']
+        significant_words = [word.lower() for word in re.findall(r'\b\w+\b', title) 
+                            if len(word) > 3 and word.lower() not in common_words]
+        
+        if significant_words:
+            sig_query = " ".join(significant_words[:3])
+            if sig_query not in search_terms:
+                search_terms.append(sig_query)
+    
+    # Add context-based fallback search terms
+    if query or title or (content and isinstance(content, str)):
+        # Check for certain topics and add specialized terms
+        text_to_check = (query + " " + title + " " + (content[:500] if content else "")).lower()
+        
+        context_terms = [
+            ("prison", ["prison", "jail", "incarceration"]),
+            ("protest", ["protest", "demonstration", "march"]),
+            ("strike", ["strike", "labor action", "work stoppage"]),
+            ("war", ["conflict", "battlefield", "military operation"]),
+            ("election", ["voting", "campaign", "ballot"]),
+            ("climate", ["environment", "global warming", "sustainability"]),
+            ("health", ["medicine", "healthcare", "medical treatment"]),
+            ("technology", ["innovation", "digital", "computer"]),
+            ("business", ["company", "corporate", "industry"])
+        ]
+        
+        for keyword, related_terms in context_terms:
+            if keyword in text_to_check:
+                for term in related_terms:
+                    if term not in search_terms:
+                        search_terms.append(term)
+        
+    # Add first word of query as fallback
+    if query and " " in query and query.split()[0] not in search_terms:
+        search_terms.append(query.split()[0])
+    
+    # Generic fallback
+    search_terms.append("news")
+    
+    # Remove duplicates while preserving order
+    unique_terms = []
+    for term in search_terms:
+        if term and term not in unique_terms:
+            unique_terms.append(term)
+    
+    return unique_terms
+
+def search_and_download_images(query, article_id, base_name, num_images, title=None, entity_list=None, content=None):
+    """
+    Search for images on Wikimedia Commons using multiple strategies and download up to num_images.
     
     Args:
         query (str): Search query (derived from article keywords or title).
         article_id (str): ID of the article (used for naming images).
         base_name (str): Base name for image filenames (typically a sanitized article title).
         num_images (int): Number of images to download.
+        title (str, optional): Article title for fallback search terms.
+        entity_list (list, optional): List of named entities from the article.
+        content (str, optional): Article content for context-based fallbacks.
         
     Returns:
-        list: A list of dictionaries, each containing 'url' (the local relative image path) and 'caption' (if available).
+        list: A list of dictionaries, each containing 'url', 'caption', and 'alt'.
     """
     api_url = "https://commons.wikimedia.org/w/api.php"
     
-    # Try different search terms if the original query is too specific
-    search_queries = [
-        query,  # Original query
-        query.split()[0] if query.split() else "news",  # Just the first word
-        # Add some generic fallbacks based on context clues from the query
-        "prison" if any(word in query.lower() for word in ["prison", "jail", "inmate", "incarceration"]) else None,
-        "protest" if any(word in query.lower() for word in ["protest", "strike", "demonstration"]) else None,
-        "hunger strike" if "hunger" in query.lower() or "strike" in query.lower() else None
-    ]
+    # Get a prioritized list of search terms
+    search_queries = extract_search_terms(query, title, content, entity_list)
     
-    # Filter out None values
-    search_queries = [q for q in search_queries if q]
+    logger.debug(f"Will try these search queries in order: {search_queries}")
     
     # Valid image extensions to filter results
     valid_extensions = ['.jpg', '.jpeg', '.png', '.gif', '.svg']
-    
-    logger.debug(f"Will try these search queries in order: {search_queries}")
     
     for current_query in search_queries:
         params = {
             "action": "query",
             "format": "json",
             "generator": "search",
-            "gsrsearch": f"filetype:bitmap {current_query}",  # Explicitly search for images, not PDFs/DJVUs
+            "gsrsearch": f"filetype:bitmap {current_query}",  # Explicitly search for images
             "gsrnamespace": 6,  # File namespace
             "gsrlimit": num_images * 3,  # Get more results than needed to filter invalid formats
             "prop": "imageinfo",
@@ -215,11 +319,12 @@ def search_and_download_images(query, article_id, base_name, num_images):
                 if not caption:
                     caption = page.get("title", "Image").replace("File:", "").replace("_", " ")
                 
-                local_image_path = download_image(image_url, article_id, base_name=base_name, counter=idx)
-                if local_image_path:
+                image_data = download_image(image_url, article_id, base_name=base_name, counter=idx)
+                if image_data:
                     images.append({
-                        "url": local_image_path,
-                        "caption": caption[:100]  # Limit caption length
+                        "url": image_data["path"],
+                        "caption": caption[:100],  # Limit caption length
+                        "alt": caption[:100]  # Use caption as alt text
                     })
                 
                 if len(images) >= num_images:
@@ -233,38 +338,128 @@ def search_and_download_images(query, article_id, base_name, num_images):
         except Exception as e:
             logger.error(f"Error searching for images on Wikimedia Commons with query '{current_query}': {e}", exc_info=True)
     
-    # If all queries failed, return an empty list (no placeholders)
+    # If all queries failed, return an empty list
     logger.warning("All Wikimedia queries failed to find images. No images will be included.")
     return []
 
+def create_standardized_image_html(url, caption=None, alt=None, is_featured=False):
+    """
+    Create standardized HTML for images with proper classes and structure.
+    
+    Args:
+        url (str): URL path to the image.
+        caption (str, optional): Caption for the image.
+        alt (str, optional): Alt text for the image.
+        is_featured (bool): Whether this is a featured image.
+        
+    Returns:
+        str: Standardized HTML for the image.
+    """
+    alt_text = alt or caption or "Image"
+    
+    if is_featured:
+        html = f'<div class="{IMAGE_CLASSES["featured"]}">'
+        html += f'<img src="{url}" alt="{alt_text}">'
+        if caption:
+            html += f'<figcaption>{caption}</figcaption>'
+        html += '</div>'
+    else:
+        html = f'<figure class="{IMAGE_CLASSES["article"]}">'
+        html += f'<img src="{url}" alt="{alt_text}">'
+        if caption:
+            html += f'<figcaption>{caption}</figcaption>'
+        html += '</figure>'
+    
+    return html
+
 def process_images_in_html(html_content, article_id):
     """
-    Process all images in HTML content by downloading external images and replacing their source URLs with local paths.
+    Process all images in HTML content by downloading external images, replacing their
+    source URLs with local paths, and ensuring proper class structure.
     
     Args:
         html_content (str): HTML content containing <img> tags.
         article_id (str): ID of the article.
     
     Returns:
-        str: Updated HTML content with local image paths.
+        str: Updated HTML content with local image paths and standardized styling.
     """
     if not html_content:
         return html_content
     
     try:
         soup = BeautifulSoup(html_content, 'html.parser')
-        img_tags = soup.find_all('img')
         
-        for img in img_tags:
+        # Process standalone img tags
+        standalone_imgs = [img for img in soup.find_all('img') if img.parent.name != 'figure' and 
+                          (not img.parent.get('class') or IMAGE_CLASSES["featured"] not in img.parent.get('class', []))]
+        
+        for img in standalone_imgs:
             src = img.get('src')
             if src and (src.startswith('http://') or src.startswith('https://')):
-                local_path = download_image(src, article_id)
-                if local_path:
-                    img['src'] = local_path
+                image_data = download_image(src, article_id)
+                if image_data:
+                    img['src'] = image_data["path"]
+                    img['data-original-src'] = src
+                    
+                    # If the image isn't in a proper container, wrap it in one
+                    if img.parent.name not in ['div', 'figure'] or not img.parent.get('class'):
+                        # Create a figure container
+                        figure = soup.new_tag('figure')
+                        figure['class'] = IMAGE_CLASSES["article"]
+                        
+                        # Create a figcaption if alt text exists
+                        if img.get('alt') and img.get('alt') != 'Image':
+                            figcaption = soup.new_tag('figcaption')
+                            figcaption.string = img.get('alt')
+                            
+                            # Replace the img with the new structure
+                            img_copy = img.copy()
+                            img.replace_with(figure)
+                            figure.append(img_copy)
+                            figure.append(figcaption)
+                        else:
+                            # Just wrap the image without a caption
+                            img_copy = img.copy()
+                            img.replace_with(figure)
+                            figure.append(img_copy)
+                else:
+                    img['alt'] = f"{img.get('alt', 'Image')} (failed to download)"
+                    img['title'] = f"Failed to download: {src}"
+        
+        # Process images in figures or featured-image divs
+        for container in soup.find_all(['figure', 'div']):
+            if container.name == 'div' and (not container.get('class') or 
+                                            IMAGE_CLASSES["featured"] not in container.get('class', [])):
+                continue
+                
+            img = container.find('img')
+            if not img:
+                continue
+                
+            src = img.get('src')
+            if src and (src.startswith('http://') or src.startswith('https://')):
+                image_data = download_image(src, article_id)
+                if image_data:
+                    img['src'] = image_data["path"]
                     img['data-original-src'] = src
                 else:
                     img['alt'] = f"{img.get('alt', 'Image')} (failed to download)"
                     img['title'] = f"Failed to download: {src}"
+            
+            # Ensure the container has the proper class
+            if container.name == 'figure' and not container.get('class'):
+                container['class'] = IMAGE_CLASSES["article"]
+            
+            # Ensure it has a figcaption if needed
+            if container.name == 'figure' and not container.find('figcaption') and img.get('alt'):
+                figcaption = soup.new_tag('figcaption')
+                figcaption.string = img.get('alt')
+                container.append(figcaption)
+        
+        # Remove any style attributes
+        for element in soup.find_all(lambda tag: tag.has_attr('style')):
+            del element['style']
         
         return str(soup)
     except Exception as e:
@@ -297,10 +492,10 @@ def test_image_download():
     """Test the image download functionality using a known Wikimedia Commons image."""
     test_url = "https://upload.wikimedia.org/wikipedia/commons/thumb/c/c3/Python-logo-notext.svg/800px-Python-logo-notext.svg.png"
     test_article_id = "test_article_123"
-    local_path = download_image(test_url, test_article_id)
+    image_data = download_image(test_url, test_article_id)
     
-    if local_path:
-        print(f"Successfully downloaded test image to {local_path}")
+    if image_data:
+        print(f"Successfully downloaded test image to {image_data['path']}")
         return True
     else:
         print("Failed to download test image")

@@ -8,7 +8,7 @@ C:\Users\Korisnik\Desktop\TLDR\venv\Scripts\Activate.ps1
 # Article Summarization System
 
 ```bash
-python main.py --schema pt_nyt --env dev --article-id "3b9c8262-8578-4db6-bff3-de2232df22e5"
+python main.py --schema pt_nyt --env dev --article-id "0078e4d3-5782-4c73-a6ae-d791e7d8e914"
 ```
 
 A modular system for summarizing articles using the Gemini API for generating summaries and the Wikimedia Commons API for retrieving images.

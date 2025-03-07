@@ -7,46 +7,58 @@
 {% endblock %}
 
 {% block content %}
-    <!-- Main Article Title as H1 using external CSS class -->
-    <h1 class="article-title">{{ title }}</h1>
-    
-    <div class="article-meta">
-        <p>Article ID: {{ article_id }}</p>
-        <p>URL: <a href="{{ url }}">{{ url }}</a></p>
-        <p>Processed: {{ processed_date }}</p>
-    </div>
-    
-    {% if featured_image %}
-    <div class="featured-image">
-        <img src="{{ featured_image.url }}" alt="{{ featured_image.alt }}">
-    </div>
-    {% endif %}
-    
-    <!-- Summary section: no extra heading here so that if the summary content already contains a heading it won’t be nested under an additional "Summary" heading -->
-    <div class="summary">
-        {{ summary|safe }}
-    </div>
-    
-    {% if fetched_images %}
-        {% for image in fetched_images %}
-            <figure class="article-image">
-                <img src="{{ image.url }}" alt="{{ image.caption }}">
-                <figcaption>{{ image.caption }}</figcaption>
-            </figure>
-        {% endfor %}
-    {% endif %}
-    
-    {% if show_api_response %}
-    <div class="api-response">
-        <h2>Raw API Response</h2>
-        <pre>{{ response_text }}</pre>
-    </div>
-    {% endif %}
-    
-    <div class="article-content">
-        <h2>Original Article Content</h2>
-        <div>
-            {{ content|safe }}
+    <div class="article-container">
+        <!-- Main Article Title -->
+        <h1 class="article-title">{{ title }}</h1>
+        
+        <!-- Article Metadata -->
+        <div class="article-meta">
+            <p>Article ID: {{ article_id }}</p>
+            <p>URL: <a href="{{ url }}">{{ url }}</a></p>
+            <p>Processed: {{ processed_date }}</p>
+        </div>
+        
+        <!-- Featured Image -->
+        {% if featured_image %}
+        <div class="featured-image">
+            <img src="{{ featured_image.url }}" alt="{{ featured_image.alt|default('Featured image') }}">
+            {% if featured_image.caption %}
+            <figcaption>{{ featured_image.caption }}</figcaption>
+            {% endif %}
+        </div>
+        {% endif %}
+        
+        <!-- Article Summary -->
+        <div class="summary">
+            {{ summary|safe }}
+        </div>
+        
+        <!-- Additional Fetched Images -->
+        {% if fetched_images %}
+        <div class="additional-images">
+            {% for image in fetched_images %}
+                <figure class="article-image">
+                    <img src="{{ image.url }}" alt="{{ image.caption|default('Article image') }}">
+                    <figcaption>{{ image.caption }}</figcaption>
+                </figure>
+            {% endfor %}
+        </div>
+        {% endif %}
+        
+        <!-- API Response (if shown) -->
+        {% if show_api_response %}
+        <div class="api-response">
+            <h2>Raw API Response</h2>
+            <pre>{{ response_text }}</pre>
+        </div>
+        {% endif %}
+        
+        <!-- Original Content -->
+        <div class="article-content">
+            <h2>Original Article Content</h2>
+            <div>
+                {{ content|safe }}
+            </div>
         </div>
     </div>
 {% endblock %}

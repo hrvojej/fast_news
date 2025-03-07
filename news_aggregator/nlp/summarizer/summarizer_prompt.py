@@ -43,41 +43,64 @@ def create_prompt(content, article_length, include_images=True, enable_entity_li
             "Example: Instead of identifying 'company's financial turnaround as discussed in the article', simply identify 'company's financial turnaround' as the central topic.\n\n"
         )
         
+            # Add global HTML class requirements
+        prompt += (
+                "HTML CLASS REQUIREMENTS:\n"
+                "1. Use ONLY the following specific CSS classes for each element - no variations or inline styles allowed:\n"
+                "   - For titles: 'article-title'\n"
+                "   - For source attribution: 'source-attribution' and 'label'\n"
+                "   - For keywords: 'keywords-container', 'keywords-heading', 'keywords-tags', 'keyword-pill'\n"
+                "   - For entity types: 'named-individual', 'roles-categories', 'orgs-products', 'location', 'time-event', 'artistic', 'industry', 'financial', 'key-actions'\n"
+                "   - For summary elements: 'summary-intro', 'key-sentence', 'supporting-point', 'secondary-detail', 'crucial-fact'\n"
+                "   - For interesting facts: 'facts-container', 'facts-list', 'fact-primary', 'fact-secondary', 'fact-conclusion'\n"
+                "   - For separators: 'separator', 'divider', 'gradient-divider', 'facts-divider'\n"
+                "   - For entity structure: 'entity-overview-heading', 'entity-grid', 'entity-category', 'entity-category-title', 'entity-list', 'no-entity'\n"
+                "   - For miscellaneous elements: 'entity-spacing', 'transition-text', 'date-numeric', 'number-numeric', 'fact-bullet', 'fact-bullet-secondary'\n"
+                "2. NEVER include any inline styles (style attribute) or custom classes not listed above.\n"
+                "3. Always wrap your entire response in a single <div> element.\n"
+                "4. Use EXACTLY these class names with no variations, additions, or modifications.\n\n"
+            )
+        
         # Add format restrictions for longer articles
         if article_length > 5000:
             prompt += (
                 "CRITICAL FOR LONGER ARTICLES - FORMAT RESTRICTIONS:\n"
                 "1. Return ONLY valid, complete HTML content with no markdown formatting whatsoever.\n"
                 "2. DO NOT start your response with titles or headings outside of HTML tags.\n"
-                "3. Ensure ALL formatting is done using HTML elements only.\n"
+                "3. Ensure ALL formatting is done using HTML elements with ONLY the specific CSS classes defined in these instructions.\n"
                 "4. Wrap your entire response in a single <div> element.\n"
                 "5. Do not include ```html code blocks or any markdown syntax.\n"
-                "6. Never use 'The article discusses the' or similar phrases to start your response. Just give summary without relating to source. \n"
-                "Example: <div><h1>Example Title</h1><p>Content here...</p></div>\n\n"
+                "6. Never use 'The article discusses the' or similar phrases to start your response. Just give summary without relating to source.\n" 
+                "7. NEVER use inline styles (style attributes) in any element - use ONLY the specified CSS classes.\n"
+                "Example: <div><h1 class=\"article-title\">Example Title</h1><p>Content here...</p></div>\n\n"
             )
-        
+
         # Add title formatting instructions
         prompt += (
             "ENGAGING TITLE:\n"
             "1. Create a visually distinctive title using: '<h1 class=\"article-title\">[Title text]</h1>'\n"
             "2. The title should directly relate to the central issue or conflict in the article.\n"
             "3. Make it compelling and descriptive; it can be longer if needed and does not have to be in question format.\n"
-            "4. Consider adding subtle emphasis to key words in the title using: '<span class=\"emphasis-keyword\">[key word]</span>'\n"
+            "4. For emphasis on key words in the title, use: '<span class=\"emphasis-keyword\">[key word]</span>'\n"
+            "5. ALWAYS use the exact class name \"article-title\" for the h1 element and \"emphasis-keyword\" for emphasis spans - no variations.\n"
             "Example: <h1 class=\"article-title\">The <span class=\"emphasis-keyword\">Rise</span> and <span class=\"emphasis-keyword\">Fall</span> of a Tech Giant: A Story of Innovation and Intrigue</h1>\n\n"
         )
         
         # Add source attribution section
         prompt += (
             "SOURCE ATTRIBUTION SECTION:\n"
-            "1. Immediately after the title, create a visually distinct source attribution block using a <div> element.\n"
-            "2. Use a styled paragraph with class \"source-attribution\" to display the source info.\n"
-            "3. Add a subtle label (with class \"label\") for Source and another for Published.\n"
-            "Example: <div><p class=\"source-attribution\"><span class=\"label\">Source:</span> <span>[ORIGINAL SOURCE]</span> <span>|</span> <span class=\"label\">Published:</span> <span>[DATE]</span></p></div>\n"
+            "1. Immediately after the title, create a source attribution block using a <div> element (no class needed for this container div).\n"
+            "2. Inside the div, create EXACTLY ONE paragraph with class \"source-attribution\" to display the source info.\n"
+            "3. Within this paragraph, use <span class=\"label\"> elements ONLY for the labels \"Source:\" and \"Published:\".\n"
+            "4. Use plain <span> elements (without classes) for the actual source name and publication date.\n"
+            "5. The structure must be EXACTLY: <div><p class=\"source-attribution\"><span class=\"label\">Source:</span> <span>[SOURCE]</span> <span>|</span> <span class=\"label\">Published:</span> <span>[DATE]</span></p></div>\n"
+            "6. Do not add any additional classes, elements, or styling to this section.\n"
+            "Example: <div><p class=\"source-attribution\"><span class=\"label\">Source:</span> <span>Tesla, Inc.</span> <span>|</span> <span class=\"label\">Published:</span> <span>January 15, 2023</span></p></div>\n"
         )
-        
+
         # Add source attribution guidelines
         prompt += (
-            "8. For the original source, apply these STRICT guidelines:\n"
+            "7. For the original source, apply these STRICT guidelines:\n"
             "   - NEVER attribute to any news portals, websites, news organizations, or media outlets (such as The New York Times, BBC, PBS, etc.)\n"
             "   - NEVER attribute to photography sources, photographers, or image credits\n"
             "   - When source is known, attribute to the specific originating organization\n"
@@ -85,14 +108,14 @@ def create_prompt(content, article_length, include_images=True, enable_entity_li
             "   - If no organizations appear in the title, attribute to up to THREE most important organizations from the article body\n"
             "   - For government sources, ALWAYS specify which government (e.g., 'U.S. Department of Treasury' not just 'Government')\n"
             "   - Valid sources include: specific companies, named government agencies, industry associations, research institutions, regulatory bodies\n"
-            "9. For the date:\n"
+            "8. For the date:\n"
             "   - Use the format 'Month DD, YYYY' if the exact date is available\n"
             "   - If only the month and year are known, use 'Month YYYY'\n"
             "   - If date is completely unknown, use the current month and year (e.g., 'March 2025')\n"
-            "10. Examples of CORRECT attribution:\n"
+            "9. Examples of CORRECT attribution:\n"
             "   - <div><p class=\"source-attribution\"><span class=\"label\">Source:</span> <span>Tesla, Inc.</span> <span>|</span> <span class=\"label\">Published:</span> <span>January 15, 2023</span></p></div>\n"
             "   - <div><p class=\"source-attribution\"><span class=\"label\">Source:</span> <span>World Health Organization, UNICEF, Doctors Without Borders</span> <span>|</span> <span class=\"label\">Published:</span> <span>February 2025</span></p></div>\n"
-            "11. Examples of INCORRECT attribution (NEVER use these formats):\n"
+            "10. Examples of INCORRECT attribution (NEVER use these formats):\n"
             "   - Source: The New York Times | Published: April 26, 2024 (✗ - news portal)\n"
             "   - Source: Government Review | Published: February 28, 2024 (✗ - non-specific government)\n"
             "   - Source: James Lester Photography | Published: 2024 (✗ - photography source)\n\n"
@@ -103,20 +126,28 @@ def create_prompt(content, article_length, include_images=True, enable_entity_li
         # Add keywords section
         prompt += (
             "KEYWORDS SECTION:\n"
-            "1. After the source attribution, create a visually distinct keywords container using a CSS class 'keywords-container'.\n"
-            "2. Add a heading with: '<p class=\"keywords-heading\"><strong>Keywords:</strong></p>'\n"
-            "3. Create a flexible tag-like display for keywords with a container using class 'keywords-tags'.\n"
-            "4. Format each keyword as a subtle pill-shaped tag using class 'keyword-pill'.\n"
-            "5. Arrange keywords in order of relevance, with most important keywords first.\n"
-            "6. Include 5-10 most frequently appearing significant words or phrases from the article that are DIRECTLY RELATED to the main topic.\n"
-            "7. Close the container appropriately.\n"
-            "8. End this section with a subtle visual separator using an element with class 'separator'.\n"
+            "1. After the source attribution, create a keywords container using EXACTLY this structure: <div class=\"keywords-container\">...</div>\n"
+            "2. Add a heading with EXACTLY: '<p class=\"keywords-heading\"><strong>Keywords:</strong></p>'\n"
+            "3. Create a container for keyword tags using EXACTLY: <div class=\"keywords-tags\">...</div>\n"
+            "4. Format each keyword as: '<span class=\"keyword-pill\">keyword</span>'\n"
+            "5. Include 5-10 most frequently appearing significant words or phrases that are DIRECTLY RELATED to the main topic.\n"
+            "6. Arrange keywords in order of relevance, with most important keywords first.\n"
+            "7. Complete HTML structure must be:\n"
+            "   <div class=\"keywords-container\">\n"
+            "     <p class=\"keywords-heading\"><strong>Keywords:</strong></p>\n"
+            "     <div class=\"keywords-tags\">\n"
+            "       <span class=\"keyword-pill\">keyword1</span>\n"
+            "       <span class=\"keyword-pill\">keyword2</span>\n"
+            "       ...\n"
+            "     </div>\n"
+            "   </div>\n"
+            "8. After the keywords container, add a visual separator with: <div class=\"separator\"></div>\n"
         )
-        
+
         # Add entity overview section with entity containers
         prompt += (
             "ENTITY OVERVIEW SECTION:\n"
-            "0. Identify and classify all key entities from the text into these categories, STRICTLY focusing on entities relevant to the CORE topic:\n"
+            "1. First identify and classify all key entities from the text into these categories, STRICTLY focusing on entities relevant to the CORE topic:\n"
             "   - NAMED INDIVIDUALS: Specific people mentioned by name who are central to the main story.\n"
             "   - ROLES & CATEGORIES: Occupations, types of people, or classifications that play a significant role in the core narrative.\n"
             "   - ORGANIZATIONS & PRODUCTS: Companies, brands, product types, and services that are directly involved in the main topic.\n"
@@ -126,112 +157,129 @@ def create_prompt(content, article_length, include_images=True, enable_entity_li
             "   - INDUSTRY TERMINOLOGY: Specialized terms and jargon specific to the industry being discussed that are essential to understanding the core topic.\n"
             "   - FINANCIAL & BUSINESS TERMS: Important business metrics, financial concepts, or market terminology directly relevant to the main narrative.\n"
             "   - KEY ACTIONS & RELATIONSHIPS: Verbs that show important actions or relationships between key entities in the core story.\n"
-            "1. CRITICAL: Only include entities that are genuinely relevant to the core topic. Exclude entities that appear in tangential discussions, background information, or unrelated sections.\n"
-            "2. Track the frequency and prominence of each entity throughout the text.\n"
-            "3. Rank entities within each category based on importance (using factors such as frequency, prominence in headlines, or early mentions).\n"
+            "2. CRITICAL: Only include entities that are genuinely relevant to the core topic. Exclude entities that appear in tangential discussions, background information, or unrelated sections.\n"
+            "3. Track the frequency and prominence of each entity throughout the text.\n"
+            "4. Rank entities within each category based on importance (using factors such as frequency, prominence in headlines, or early mentions).\n"
         )
         
-        # Add entity linking instructions based on setting
+       # Add entity linking instructions based on setting
         if enable_entity_links:
             prompt += (
-                "4. For each entity, create appropriate hyperlinks to external reference sources using the following formats:\n"
+                "5. For each entity, create hyperlinks to external reference sources using EXACTLY these formats:\n"
                 "   - For NAMED INDIVIDUALS: <strong class=\"named-individual\"><u><a href=\"https://en.wikipedia.org/wiki/[Entity_Name_Formatted]\" target=\"_blank\">[Entity Name]</a></u></strong>\n"
                 "   - For ORGANIZATIONS & PRODUCTS: <strong class=\"orgs-products\"><a href=\"https://en.wikipedia.org/wiki/[Entity_Name_Formatted]\" target=\"_blank\">[Entity Name]</a></strong>\n"
                 "   - For LOCATIONS: <strong class=\"location\"><a href=\"https://en.wikipedia.org/wiki/[Entity_Name_Formatted]\" target=\"_blank\">[Entity Name]</a></strong>\n"
-                "   - For other entity types, use the standard styling without hyperlinks\n"
                 "   - When formatting Wikipedia URLs, replace spaces with underscores and handle special characters appropriately\n"
                 "   - For entities unlikely to have dedicated Wikipedia pages, use appropriate alternative references or omit hyperlinks\n"
+                "   - All other entity types must use the standard styling formats listed below WITHOUT hyperlinks\n"
             )
         else:
             prompt += (
-                "Examples:\n"
-                "   - For NAMED INDIVIDUALS, list: <strong class=\"named-individual\"><u>John Doe</u></strong>, <strong class=\"named-individual\"><u>Jane Smith</u></strong>.\n"
-                "   - For ROLES & CATEGORIES, list: <strong class=\"roles-categories\">Founder</strong>, <strong class=\"roles-categories\">Accountant</strong>.\n"
-                "   - For ORGANIZATIONS & PRODUCTS, list: <strong class=\"orgs-products\">TechCorp</strong>, <strong class=\"orgs-products\">GadgetPro</strong>.\n"
-                "   - For LOCATIONS, list: <strong class=\"location\">New York</strong>, <strong class=\"location\">Tokyo</strong>.\n"
-                "   - For TIME PERIODS & EVENTS, list: <strong class=\"time-event\">2023</strong>, <strong class=\"time-event\">Fashion Week</strong>.\n"
-                "   - For ARTISTIC CONCEPTS & DESIGN ELEMENTS, list: <strong class=\"artistic\">minimalism</strong>, <strong class=\"artistic\">avant-garde</strong>.\n"
-                "   - For INDUSTRY TERMINOLOGY, list: <strong class=\"industry\">haute couture</strong>, <strong class=\"industry\">ready-to-wear</strong>.\n"
-                "   - For FINANCIAL & BUSINESS TERMS, list: <strong class=\"financial\">acquisition</strong>, <strong class=\"financial\">market share</strong>.\n"
-                "   - For KEY ACTIONS & RELATIONSHIPS, list: <strong class=\"key-actions\">acquired</strong>, <strong class=\"key-actions\">merged</strong>.\n\n"
+                "5. Format EACH entity type using ONLY these EXACT HTML structures:\n"
+                "   - NAMED INDIVIDUALS: <strong class=\"named-individual\"><u>[Name]</u></strong>\n"
+                "   - ROLES & CATEGORIES: <strong class=\"roles-categories\">[Role]</strong>\n"
+                "   - ORGANIZATIONS & PRODUCTS: <strong class=\"orgs-products\">[Organization]</strong>\n"
+                "   - LOCATIONS: <strong class=\"location\">[Location]</strong>\n"
+                "   - TIME PERIODS & EVENTS: <strong class=\"time-event\">[Time/Event]</strong>\n"
+                "   - ARTISTIC CONCEPTS & DESIGN ELEMENTS: <strong class=\"artistic\">[Concept]</strong>\n"
+                "   - INDUSTRY TERMINOLOGY: <strong class=\"industry\">[Term]</strong>\n"
+                "   - FINANCIAL & BUSINESS TERMS: <strong class=\"financial\">[Term]</strong>\n"
+                "   - KEY ACTIONS & RELATIONSHIPS: <strong class=\"key-actions\">[Action]</strong>\n"
+                "   - Do NOT modify these class names or HTML structures in any way\n"
+                "   - Do NOT add any additional classes, styles, or HTML elements\n\n"
             )
-        
         # Add entity overview formatting instructions
         prompt += (
-            "1. Create a section with the heading '<strong class=\"entity-overview-heading\">Entity Overview:</strong>' (styled as specified).\n"
-            "2. Display entities in a visually structured format using a flexible grid-like approach with a container class 'entity-grid':\n"
-            "   - For each category, use a container with class 'entity-category'.\n"
-            "   - Include a title for each category with class 'entity-category-title'.\n"
-            "   - List entities in a paragraph with class 'entity-list'.\n"
-            "3. Apply consistent entity styling across all categories as previously defined, but with improved micro-typography.\n"
-            "4. If a particular category has no relevant entities for the core topic, indicate this with '<em class=\"no-entity\">None identified</em>' after the colon.\n"
-            "5. End this section with a visual divider using an element with class 'divider'.\n\n"
+            "ENTITY OVERVIEW SECTION STRUCTURE:\n"
+            "1. Create a section with EXACTLY this heading: '<strong class=\"entity-overview-heading\">Entity Overview:</strong>'\n"
+            "2. Structure the entity display using this EXACT HTML pattern:\n"
+            "   <div class=\"entity-grid\">\n"
+            "     <div class=\"entity-category\">\n"
+            "       <h3 class=\"entity-category-title\">CATEGORY NAME:</h3>\n"
+            "       <p class=\"entity-list\">entity1, entity2, entity3</p>\n"
+            "     </div>\n"
+            "     <!-- Repeat for each category -->\n"
+            "   </div>\n"
+            "3. Use a separate <div class=\"entity-category\"> for EACH of the entity categories identified earlier.\n"
+            "4. If a particular category has no relevant entities, use EXACTLY: '<em class=\"no-entity\">None identified</em>'\n"
+            "5. Apply the entity styling formats defined earlier consistently for ALL mentions of entities.\n"
+            "6. End this section with EXACTLY: <div class=\"divider\"></div>\n\n"
             
             "SUMMARY CREATION:\n"
-            "1. Create a section with the heading '<strong class=\"summary-heading\">Summary:</strong>' (the heading must be bold).\n"
+            "1. Create a section with EXACTLY this heading: '<strong class=\"summary-heading\">Summary:</strong>'\n"
             "2. Write a focused, engaging summary that addresses ONLY the central topic identified earlier.\n"
-            "3. Structure your summary with enhanced visual hierarchy using the following classes:\n"
-            "   - FIRST PARAGRAPH: Use class 'summary-intro' with a larger font.\n"
-            "   - KEY SENTENCES: Use class 'key-sentence' to emphasize important sentences.\n"
-            "   - SUPPORTING PARAGRAPHS: Use classes 'supporting-point' for important supporting points and 'secondary-detail' for secondary details.\n"
-            "   - CRUCIAL FACTS: Use class 'crucial-fact' for highlighting numerical data or statistics.\n"
+            "3. Structure your summary with these EXACT classes:\n"
+            "   - First paragraph must use: <p class=\"summary-intro\">First paragraph content...</p>\n"
+            "   - For key sentences: <span class=\"key-sentence\">Important sentence</span>\n"
+            "   - For supporting points: <p class=\"supporting-point\">Supporting content...</p>\n"
+            "   - For secondary details: <p class=\"secondary-detail\">Secondary information...</p>\n"
+            "   - For numerical data: <span class=\"crucial-fact\">statistic or number</span>\n"
             "4. Include important details such as names, numbers, dates, organizations, and relationships related to the main topic.\n"
         )
-        
+
         # Add different formatting based on entity links
         if enable_entity_links:
             prompt += (
-                "5. Format all entities with appropriate styling and hyperlinks as defined in the Entity Overview section using the designated CSS classes.\n"
+                "5. Format all entities with appropriate styling and hyperlinks as defined in the Entity Overview section using the EXACT same HTML patterns and CSS classes.\n"
             )
         else:
             prompt += (
-                "5. Format all named individuals as bold AND underlined in their designated color using class 'named-individual' with EXACTLY this format: '<strong class=\"named-individual\"><u>Name</u></strong>'.\n"
-                "6. Format all other entities according to their respective categories with appropriate CSS classes as defined in the Entity Overview section.\n"
+                "5. Format all named individuals EXACTLY as: '<strong class=\"named-individual\"><u>Name</u></strong>'\n"
+                "6. Format all other entities using the EXACT HTML patterns for their respective categories as defined earlier.\n"
             )
-        
+
         prompt += (
             "7. Use simple language and avoid overly complex or long sentences.\n"
-            "8. Create visual breathing room around key entities by adding a slight letter spacing using a span with class 'entity-spacing'.\n"
-            "9. For transitional sentences between major ideas, use a paragraph with class 'transition-text'.\n"
-            "10. CRITICAL: NEVER reference the source material. Do not use phrases like \"The article examines...\" \"The text discusses...\" \"The author argues...\" or any similar phrases that refer to the source content as an article, text, content, or document.\n"
-            "11. Instead, write directly about the subject matter as if presenting original information. For example, instead of \"The article discusses Tesla's new battery technology\" write \"Tesla's new battery technology represents a significant breakthrough...\"\n"
-            "12. IMPORTANT: Only reference entities that are directly relevant to the core topic. Do not mention entities that appeared in passing or in tangential discussions.\n"
-            "13. End this section with a horizontal line using a gradient effect, represented by a divider with class 'gradient-divider'.\n"
-            "14. Every entity mentioned in the 'ENTITY OVERVIEW SECTION' should also be present and properly formatted in the summary.\n\n"
+            "8. For key entities that need emphasis, wrap them in EXACTLY: <span class=\"entity-spacing\">entity name</span>\n"
+            "9. For transitions between major points, use EXACTLY: <p class=\"transition-text\">Transitional sentence...</p>\n"
+            "10. CRITICAL: NEVER reference the source material. Do not use phrases like \"The article examines...\" \"The text discusses...\" \"The author argues...\" or any similar phrases that refer to the source content.\n"
+            "11. Write directly about the subject matter as if presenting original information.\n"
+            "12. IMPORTANT: Only reference entities that are directly relevant to the core topic.\n"
+            "13. End the summary section with EXACTLY: <div class=\"gradient-divider\"></div>\n"
+            "14. Every entity mentioned in the Entity Overview section must also appear and be properly formatted in the summary.\n\n"
         )
         
         
         # Add interesting facts section
         prompt += (
             "INTERESTING FACTS SECTION:\n"
-            "1. Create a section with the heading '<strong class=\"facts-heading\">Interesting Facts:</strong>' (styled as specified).\n"
-            "2. List 5-10 additional interesting facts using a visually engaging format with a container class 'facts-container':\n"
-            "   - Use an unordered list with class 'facts-list'.\n"
-            "   - For each fact, use list items with varying styles using classes 'fact-primary', 'fact-secondary', and 'fact-conclusion' respectively.\n"
-            "3. Apply the same entity formatting as in the summary section for any entities mentioned in the facts.\n"
-            "4. Use micro-typography to improve readability, with spans using classes 'date-numeric' and 'number-numeric' for dates and numbers respectively.\n"
-            "5. CRITICAL: NEVER reference the source material. Do not use phrases like \"According to the article...\" \"The text mentions...\" or any similar phrases.\n"
-            "6. Present each fact as a direct statement about the subject matter, not as information derived from a source.\n"
-            "7. IMPORTANT: Only include facts that are directly relevant to the core topic. Exclude tangential or passing mentions.\n"
-            "8. End this section with a visually distinct horizontal line using a divider with class 'facts-divider'.\n"
-            "Example:\n"
+            "1. Create a section with EXACTLY this heading: '<strong class=\"facts-heading\">Interesting Facts:</strong>'\n"
+            "2. Structure the facts section using this EXACT HTML pattern:\n"
             "   <div class=\"facts-container\">\n"
-            "   <ul class=\"facts-list\">\n"
-            "       <li class=\"fact-primary\"><span class=\"fact-bullet\">●</span><strong class=\"named-individual\"><u>John Doe</u></strong> was the youngest <strong class=\"roles-categories\">CEO</strong> in his industry in <span class=\"date-numeric\"><strong class=\"time-event\">2018</strong></span>.</li>\n"
-            "       <li class=\"fact-secondary\"><span class=\"fact-bullet-secondary\">○</span><strong class=\"orgs-products\">Company XYZ</strong> set a record for quarterly <strong class=\"financial\">profits</strong> in <strong class=\"location\">Silicon Valley</strong>.</li>\n"
-            "   </ul>\n"
+            "     <ul class=\"facts-list\">\n"
+            "       <li class=\"fact-primary\"><span class=\"fact-bullet\">●</span>First fact content...</li>\n"
+            "       <li class=\"fact-secondary\"><span class=\"fact-bullet-secondary\">○</span>Second fact content...</li>\n"
+            "       <li class=\"fact-conclusion\"><span class=\"fact-bullet\">●</span>Final important fact...</li>\n"
+            "     </ul>\n"
             "   </div>\n"
-            "   <div class=\"facts-divider\"></div>\n\n"
+            "3. Include 5-10 additional interesting facts about the subject matter.\n"
+            "4. For each fact, alternate between the classes 'fact-primary' and 'fact-secondary', with the last fact using 'fact-conclusion'.\n"
+            "5. Format all entity mentions using the EXACT same HTML patterns and class names as in the summary section.\n"
+            "6. For dates, use: <span class=\"date-numeric\">date</span>\n"
+            "7. For numbers and statistics, use: <span class=\"number-numeric\">number</span>\n"
+            "8. CRITICAL: NEVER reference the source material. Present each fact as a direct statement about the subject matter.\n"
+            "9. IMPORTANT: Only include facts that are directly relevant to the core topic.\n"
+            "10. End this section with EXACTLY: <div class=\"facts-divider\"></div>\n"
         )
+
         # Add legend section
         prompt += (
             "LEGEND SECTION:\n"
-            "1. Create a visually distinctive legend section using a container with class 'legend-container':\n"
-            "   - Add a heading with class 'legend-heading'.\n"
-            "   - Create a responsive grid for entity types with class 'legend-grid'.\n"
-            "   - For each entity type, create a styled container with class 'legend-item'.\n"
-            "   - Include each entity type styled in its designated color.\n"
-            "2. Close all containers appropriately.\n\n"
+            "1. Create a legend section using this EXACT HTML pattern:\n"
+            "   <div class=\"legend-container\">\n"
+            "     <h4 class=\"legend-heading\">Entity Type Legend:</h4>\n"
+            "     <div class=\"legend-grid\">\n"
+            "       <div class=\"legend-item\"><strong class=\"named-individual\">Named Individual</strong></div>\n"
+            "       <div class=\"legend-item\"><strong class=\"roles-categories\">Role/Category</strong></div>\n"
+            "       <div class=\"legend-item\"><strong class=\"orgs-products\">Organization/Product</strong></div>\n"
+            "       <div class=\"legend-item\"><strong class=\"location\">Location</strong></div>\n"
+            "       <div class=\"legend-item\"><strong class=\"time-event\">Time Period/Event</strong></div>\n"
+            "       <div class=\"legend-item\"><strong class=\"artistic\">Artistic Concept</strong></div>\n"
+            "       <div class=\"legend-item\"><strong class=\"industry\">Industry Term</strong></div>\n"
+            "       <div class=\"legend-item\"><strong class=\"financial\">Financial Term</strong></div>\n"
+            "       <div class=\"legend-item\"><strong class=\"key-actions\">Key Action</strong></div>\n"
+            "     </div>\n"
+            "   </div>\n\n"
             
             "ARTICLE TEXT:\n" 
             + content + "\n"
