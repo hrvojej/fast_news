@@ -207,7 +207,7 @@ def create_prompt(content, article_length, include_images=True, enable_entity_li
             
             "SUMMARY CREATION:\n"
             "1. Create a section with EXACTLY this heading: '<strong class=\"summary-heading\">Summary:</strong>'\n"
-            "2. Write a focused, engaging summary that addresses ONLY the central topic identified earlier.\n"
+            "2. Write a comprehensive, detailed, and extended summary that thoroughly covers the central topic. Expand on key points with multiple paragraphs, elaborate supporting details, and extensive analysis..\n"
             "3. Structure your summary with these EXACT classes:\n"
             "   - First paragraph must use: <p class=\"summary-intro\">First paragraph content...</p>\n"
             "   - For key sentences: <span class=\"key-sentence\">Important sentence</span>\n"

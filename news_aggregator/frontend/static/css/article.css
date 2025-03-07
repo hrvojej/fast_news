@@ -230,6 +230,8 @@ body {
     color: #666;
     margin-top: 0.5em;
     font-style: italic;
+    white-space: normal; /* allow text to wrap */
+    overflow: visible;   /* ensure the overflow isn't hidden */
 }
 .additional-images {
     display: flex;

@@ -296,6 +296,20 @@ def save_as_html(article_id, title, url, content, summary, response_text, keywor
             logger.warning(f"Invalid summary content: {type(processed_summary)}")
             clean_summary = "<div>No valid summary content available</div>"
         
+        
+        # Attempt to extract Gemini-generated title from the cleaned summary HTML
+        soup_summary = BeautifulSoup(clean_summary, 'html.parser')
+        legend_container = soup_summary.find('div', class_='legend-container')
+        if legend_container:
+            legend_container.decompose()  # removes the entire legend section
+        clean_summary = str(soup_summary)
+        
+        gemini_title_tag = soup_summary.find('h1', class_='article-title')
+        gemini_title = gemini_title_tag.get_text(separator=' ', strip=True) if gemini_title_tag else title
+
+        
+        
+        
         # If clean_summary is empty or just a placeholder, try with the API response
         if not clean_summary or clean_summary == "<div>No content available</div>" or clean_summary == "<div>No valid summary content available</div>":
             logger.warning("Processed summary is empty, attempting to extract from raw API response")
@@ -386,6 +400,29 @@ def save_as_html(article_id, title, url, content, summary, response_text, keywor
                 else:
                     featured_image_html = ""
                     logger.warning("No featured image available to add to HTML.")
+                    
+                        # -----------------------------------------------
+                # INSERT ADDITIONAL IMAGE SNIPPET HERE
+                # -----------------------------------------------
+                # If more than one image was fetched, insert the second image
+                if images and len(images) > 1:
+                    second_image = images[1]
+                    second_image_url = second_image["url"].replace("\\", "/")
+                    additional_images_html = (
+                        f'<div class="featured-image">'
+                        f'<img src="{second_image_url}" alt="{second_image["caption"]}">'
+                        f'<figcaption>{second_image["caption"]}</figcaption>'
+                        f'</div>'
+                    )
+                    # Parse the clean summary and locate the "Interesting Facts:" header
+                    soup_summary = BeautifulSoup(clean_summary, 'html.parser')
+                    interesting_facts = soup_summary.find(lambda tag: tag.name in ['strong', 'h3', 'h4'] and 'Interesting Facts:' in tag.get_text())
+                    if interesting_facts:
+                        # Insert additional image HTML before the "Interesting Facts:" header
+                        interesting_facts.insert_before(BeautifulSoup(additional_images_html, 'html.parser'))
+                        clean_summary = str(soup_summary)
+                # -----------------------------------------------
+        # End of image search block
 
         
         # Process any images in the summary, downloading them and updating src attributes
@@ -393,7 +430,8 @@ def save_as_html(article_id, title, url, content, summary, response_text, keywor
             clean_summary = process_images_in_html(clean_summary, article_id)
         
         # Create filename and filepath
-        filename = create_filename_from_title(title, url, article_id)
+        filename = create_filename_from_title(gemini_title, url, article_id)
+
         filepath = os.path.join(OUTPUT_HTML_DIR, filename)
         logger.debug(f"Preparing to save HTML to: {filepath}")
         
@@ -406,92 +444,19 @@ def save_as_html(article_id, title, url, content, summary, response_text, keywor
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>{html.escape(title or f'Article {article_id}')}</title>
+    <title>{html.escape(gemini_title or f'Article {article_id}')}</title>
     <link rel="stylesheet" href="{relative_static_path}/css/main.css">
     <link rel="stylesheet" href="{relative_static_path}/css/article.css">
-    <style>
-        /* Fallback styles in case external CSS fails to load */
-        body {{ font-family: Arial, sans-serif; line-height: 1.6; margin: 0; padding: 20px; }}
-        .container {{ max-width: 800px; margin: 0 auto; padding: 20px; }}
-        h1 {{ color: #333; }}
-        h2 {{ color: #555; margin-top: 30px; }}
-        .article-meta {{ color: #777; margin-bottom: 20px; }}
-        .summary {{ background-color: #f5f5f5; padding: 15px; border-radius: 5px; margin-bottom: 30px; }}
-        .api-response {{ background-color: #eef; padding: 15px; border-radius: 5px; white-space: pre-wrap; overflow-x: auto; }}
-        .article-content {{ border-top: 1px solid #ddd; margin-top: 30px; padding-top: 20px; }}
-        .featured-image {{ text-align: center; margin: 1.2em 0; }}
-        .featured-image img {{ max-width: 100%; border-radius: 6px; box-shadow: 0 2px 12px rgba(0,0,0,0.1); }}
-        .featured-image figcaption {{ font-size: 0.9em; color: #666; margin-top: 0.5em; }}
-        .clearfix {{ clear: both; }}
-    </style>
 </head>
-<body>
-<header class="site-header">
-    <div class="header-content">
-        <div class="logo">
-            <a href="/">Article Summarizer</a>
-        </div>
-        <nav class="main-nav">
-            <ul>
-                <li><a href="/">Home</a></li>
-                <li><a href="/stats">Statistics</a></li>
-                <li><a href="/about">About</a></li>
-            </ul>
-        </nav>
-    </div>
-</header>    
-    <div class="container">
-    <h1>{html.escape(title or f'Article {article_id}')}</h1>
-    
-    <div class="article-meta">
-        <p>Article ID: {article_id}</p>
-        <p>URL: <a href="{html.escape(url or '#')}">{html.escape(url or 'N/A')}</a></p>
-        <p>Processed: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</p>
-    </div>
-    
-    {featured_image_html}
-    
+<body>  
+    <div class="container">        
     <div class="summary">
-        <h2>Summary</h2>
+        {featured_image_html}
         {clean_summary if clean_summary else '<div>No summary available</div>'}
         <div class="clearfix"></div>
     </div>
-    
-    <div class="api-response">
-        <h2>Raw API Response</h2>
-        <pre>{html.escape(response_text if response_text else 'No API response available')}</pre>
     </div>
-    
-    <div class="article-content">
-        <h2>Original Article Content</h2>
-        <div>
-            {html.escape(content).replace('\n', '<br>') if content else 'No content available'}
-        </div>
-    </div>
-    </div>
-    
-<aside class="sidebar">
-    <div class="sidebar-content">
-        <h3>Recent Summaries</h3>
-        <ul class="recent-list">
-                <li>No recent articles</li>
-        </ul>
-    </div>
-    
-<div class="ad-container">
-    <!-- Ad placeholder -->
-    <div class="ad-unit">
-        <div class="ad-placeholder">
-            <p>Advertisement</p>
-        </div>
-    </div>
-</div></aside>    
-<footer class="site-footer">
-    <div class="footer-content">
-        <p>&copy; {datetime.now().year} Article Summarizer. All rights reserved.</p>
-    </div>
-</footer>    
-        <script src="{relative_static_path}/js/main.js"></script>
+    <script src="{relative_static_path}/js/main.js"></script>
 </body>
 </html>"""
         

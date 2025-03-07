@@ -364,8 +364,8 @@ def search_and_download_images(query, article_id, base_name, num_images, title=N
                 if image_data:
                     images.append({
                         "url": image_data["path"],
-                        "caption": caption[:100],  # Limit caption length
-                        "alt": caption[:100]       # Use caption as alt text
+                        "caption": caption,  # Limit caption length
+                        "alt": caption      # Use caption as alt text
                     })
                 
                 if len(images) >= num_images:
