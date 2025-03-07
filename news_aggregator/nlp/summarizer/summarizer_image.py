@@ -3,8 +3,10 @@ Module for image handling operations in the article summarization system.
 This module retrieves and downloads images from Wikimedia Commons.
 """
 
+import json
 import os
 import re
+import time
 import requests
 import uuid
 import shutil
@@ -78,62 +80,87 @@ def ensure_images_directory():
 def download_image(url, article_id, base_name=None, counter=None):
     """
     Download an image from a URL and save it to the images directory.
-    
+
     Args:
         url (str): URL of the image to download.
         article_id (str): ID of the article (used for naming fallback).
         base_name (str, optional): Base name for the image file (e.g., sanitized article title).
         counter (int, optional): A counter to append to the filename.
-        
+
     Returns:
         dict: Image metadata including 'path', 'filename', 'original_url', or None if download failed.
     """
     logger.debug(f"download_image called with url: {url}, article_id: {article_id}, base_name: {base_name}, counter: {counter}")
+
     if not is_valid_image_url(url):
         logger.warning(f"Invalid image URL: {url}")
         return None
-    
+
+    if not ensure_images_directory():
+        logger.error("Images directory could not be ensured.")
+        return None
+
+    parsed_url = urlparse(url)
+    extension = os.path.splitext(parsed_url.path.lower())[1] or '.jpg'
+
+    if base_name and counter is not None:
+        sanitized_base = re.sub(r'[^\w\s-]', '', base_name).strip().replace(' ', '_')
+        filename = f"{sanitized_base}_{counter}{extension}"
+    else:
+        unique_id = str(uuid.uuid4())[:8]
+        filename = f"img_{article_id}_{unique_id}{extension}"
+
+    filepath = os.path.join(IMAGES_DIR, filename)
+    logger.debug(f"Attempting to download image from {url} to {filepath}")
+
     try:
-        if not ensure_images_directory():
-            logger.error("Images directory could not be ensured.")
+        headers = {
+            'User-Agent': 'MySummarizer/1.0 (your.email@example.com)'
+        }
+        response = requests.get(url, headers=headers, stream=True, timeout=10)
+        logger.debug(f"Image download response status: {response.status_code}")
+
+        # Check if the response contains an image
+        content_type = response.headers.get('Content-Type', '')
+        if not content_type.startswith('image/'):
+            logger.error(f"URL did not return image content: {url} (Content-Type: {content_type})")
             return None
-        
-        parsed_url = urlparse(url)
-        path = parsed_url.path.lower()
-        extension = os.path.splitext(path)[1]
-        if not extension or extension == '.':
-            extension = '.jpg'
-        
-        if base_name and counter is not None:
-            sanitized_base = re.sub(r'[^\w\s-]', '', base_name).strip().replace(' ', '_')
-            filename = f"{sanitized_base}_{counter}{extension}"
-        else:
-            unique_id = str(uuid.uuid4())[:8]
-            filename = f"img_{article_id}_{unique_id}{extension}"
-        
-        filepath = os.path.join(IMAGES_DIR, filename)
-        logger.debug(f"Attempting to download image from {url} to {filepath}")
-        
-        response = requests.get(url, stream=True, timeout=10)
+
         if response.status_code == 200:
+            # Write the image to file once
             with open(filepath, 'wb') as f:
                 response.raw.decode_content = True
                 shutil.copyfileobj(response.raw, f)
+        else:
+            logger.error(f"Response status code {response.status_code} for URL: {url}")
+            return None
+
+        # Verify file existence explicitly
+        if os.path.exists(filepath):
+            file_size = os.path.getsize(filepath)
             relative_path = os.path.join("images", filename)
-            logger.info(f"Downloaded image from {url} to {filepath}")
-            
+            logger.info(f"Downloaded image successfully:\n"
+                        f"    Original URL: {url}\n"
+                        f"    Local path: {relative_path}\n"
+                        f"    Absolute path: {filepath}\n"
+                        f"    Size: {file_size} bytes, Content-Type: {content_type}")
+
             return {
                 "path": relative_path,
                 "filename": filename,
                 "original_url": url,
-                "content_type": response.headers.get('Content-Type', ''),
-                "size": os.path.getsize(filepath)
+                "content_type": content_type,
+                "size": file_size
             }
         else:
-            logger.warning(f"Failed to download image (status code {response.status_code}): {url}")
+            logger.error(f"Image file {filepath} was not created after download attempt.")
             return None
-    except Exception as e:
-        logger.error(f"Error downloading image from {url}: {e}", exc_info=True)
+
+    except requests.RequestException as req_error:
+        logger.error(f"Request error while downloading image from {url}: {req_error}", exc_info=True)
+        return None
+    except Exception as file_error:
+        logger.error(f"Failed to save image to {filepath}: {file_error}", exc_info=True)
         return None
 
 def extract_search_terms(query, title, content=None, entity_list=None):
@@ -196,8 +223,8 @@ def extract_search_terms(query, title, content=None, entity_list=None):
     # Add context-based fallback search terms
     if query or title or (content and isinstance(content, str)):
         # Check for certain topics and add specialized terms
-        text_to_check = (query + " " + title + " " + (content[:500] if content else "")).lower()
-        
+        text_to_check = ((query or "") + " " + (title or "") + " " + ((content or "")[:500])).lower()
+
         context_terms = [
             ("prison", ["prison", "jail", "incarceration"]),
             ("protest", ["protest", "demonstration", "march"]),
@@ -231,7 +258,7 @@ def extract_search_terms(query, title, content=None, entity_list=None):
     
     return unique_terms
 
-def search_and_download_images(query, article_id, base_name, num_images, title=None, entity_list=None, content=None):
+def search_and_download_images(query, article_id, base_name, num_images, title=None, entity_list=None, content=None, requested_width=600):
     """
     Search for images on Wikimedia Commons using multiple strategies and download up to num_images.
     
@@ -243,6 +270,7 @@ def search_and_download_images(query, article_id, base_name, num_images, title=N
         title (str, optional): Article title for fallback search terms.
         entity_list (list, optional): List of named entities from the article.
         content (str, optional): Article content for context-based fallbacks.
+        requested_width (int, optional): Desired width (in pixels) for the image thumbnail. Defaults to 600.
         
     Returns:
         list: A list of dictionaries, each containing 'url', 'caption', and 'alt'.
@@ -266,25 +294,37 @@ def search_and_download_images(query, article_id, base_name, num_images, title=N
             "gsrnamespace": 6,  # File namespace
             "gsrlimit": num_images * 3,  # Get more results than needed to filter invalid formats
             "prop": "imageinfo",
-            "iiprop": "url|extmetadata"
+            "iiprop": "url|extmetadata",
+            "iiurlwidth": requested_width  # Request a thumbnail at the desired width
         }
         logger.debug(f"Searching Wikimedia Commons with query: '{current_query}' and params: {params}")
-        
+
         try:
-            response = requests.get(api_url, params=params, timeout=10)
-            logger.debug(f"Wikimedia Commons API response status: {response.status_code}")
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36 (your.email@example.com)'
+            }
+            response = requests.get(api_url, headers=headers, params=params, timeout=10)
+            logger.debug(f"API Request URL: {response.url}")
+            logger.debug(f"Response status: {response.status_code}")
+
             if response.status_code != 200:
-                logger.error(f"Wikimedia Commons API returned status code {response.status_code}")
+                logger.error(f"API request failed (status: {response.status_code}). Response: {response.text[:500]}")
+                continue  # Try next query
+
+            try:
+                json_response = response.json()
+                logger.debug(f"Wikimedia Commons API JSON response (truncated): {json.dumps(json_response, indent=2)[:500]}")
+            except ValueError as e:
+                logger.error(f"Failed to parse JSON from Wikimedia response: {e}")
+                continue  # Try next query
+
+            if 'query' not in json_response or 'pages' not in json_response['query']:
+                logger.info(f"No images found in response for query '{current_query}'")
                 continue  # Try next query
             
-            data = response.json()
-            logger.debug(f"Wikimedia Commons API response keys: {list(data.keys())}")
-            if "query" not in data or "pages" not in data["query"]:
-                logger.info(f"No images found for the query: {current_query}")
-                continue  # Try next query
-            
+            time.sleep(1)
             images = []
-            pages = data["query"]["pages"]
+            pages = json_response["query"]["pages"]
             sorted_pages = sorted(pages.values(), key=lambda p: int(p.get("pageid", 0)))
             
             for idx, page in enumerate(sorted_pages, start=1):
@@ -294,7 +334,8 @@ def search_and_download_images(query, article_id, base_name, num_images, title=N
                     continue
                 
                 info = imageinfo[0]
-                image_url = info.get("url")
+                # Use the thumbnail URL if available (at requested_width); otherwise, fall back to the original URL
+                image_url = info.get("thumburl") or info.get("url")
                 
                 # Skip if not a valid image URL or not a valid image extension
                 if not image_url:
@@ -324,7 +365,7 @@ def search_and_download_images(query, article_id, base_name, num_images, title=N
                     images.append({
                         "url": image_data["path"],
                         "caption": caption[:100],  # Limit caption length
-                        "alt": caption[:100]  # Use caption as alt text
+                        "alt": caption[:100]       # Use caption as alt text
                     })
                 
                 if len(images) >= num_images:
@@ -489,17 +530,41 @@ def extract_image_urls_from_html(html_content):
         return []
 
 def test_image_download():
-    """Test the image download functionality using a known Wikimedia Commons image."""
+    """
+    Test image download functionality with detailed logging and User-Agent compliance.
+    """
     test_url = "https://upload.wikimedia.org/wikipedia/commons/thumb/c/c3/Python-logo-notext.svg/800px-Python-logo-notext.svg.png"
     test_article_id = "test_article_123"
-    image_data = download_image(test_url, test_article_id)
+    headers = {
+        'User-Agent': 'MySummarizerTest/1.0 (your.email@example.com) requests/2.25.1'
+    }
+
+    logger.debug(f"Testing image download with URL: {test_url}")
     
-    if image_data:
-        print(f"Successfully downloaded test image to {image_data['path']}")
-        return True
-    else:
-        print("Failed to download test image")
-        return False
+    try:
+        response = requests.get(test_url, headers=headers, stream=True, timeout=10)
+        logger.debug(f"Test image download response status: {response.status_code}")
+
+        if response.status_code == 200:
+            filename = f"test_image_{test_article_id}.png"
+            filepath = os.path.join(IMAGES_DIR, filename)
+            os.makedirs(IMAGES_DIR, exist_ok=True)
+
+            with open(filepath, 'wb') as f:
+                response.raw.decode_content = True
+                shutil.copyfileobj(response.raw, f)
+
+            file_size = os.path.getsize(filepath)
+            logger.info(f"Successfully downloaded test image: {filepath} (Size: {file_size} bytes)")
+            print(f"Downloaded test image successfully: {filepath}")
+
+        else:
+            logger.error(f"Failed to download test image. Status code: {response.status_code}")
+            print(f"Failed to download image. Status code: {response.status_code}")
+
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Request error during test image download: {e}", exc_info=True)
+        print(f"Request exception: {e}")
 
 if __name__ == "__main__":
     ensure_images_directory()

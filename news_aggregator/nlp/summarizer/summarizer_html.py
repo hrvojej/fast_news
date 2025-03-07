@@ -6,13 +6,15 @@ Module for HTML processing and file operations for the article summarization sys
 import os
 import re
 import html
+from urllib.parse import urlparse
 import requests
-from bs4 import BeautifulSoup
+from bs4 import BeautifulSoup, Tag, NavigableString
+
 from datetime import datetime
 
 from summarizer_logging import get_logger
 from summarizer_config import OUTPUT_HTML_DIR, ensure_output_directory
-from summarizer_image import process_images_in_html
+from summarizer_image import IMAGES_DIR, process_images_in_html, search_and_download_images
 
 
 # Initialize logger
@@ -155,64 +157,66 @@ def ensure_proper_classes(soup):
 def clean_and_normalize_html(text):
     """
     Clean and normalize HTML content to ensure it's valid.
-    
+
     Args:
         text (str): The HTML text to clean
-        
+
     Returns:
         str: Cleaned and normalized HTML
     """
+    logger.debug(f"Starting HTML normalization. Original length: {len(text) if text else 0}")
+
     if not text or not isinstance(text, str):
-        logger.warning("Invalid input to clean_and_normalize_html")
+        logger.warning("Invalid input provided to clean_and_normalize_html.")
         return "<div>No content available</div>"
-    
+
     try:
-        # Extract HTML from code blocks if needed
+        # Extract HTML content from markdown-style code blocks if present
         if "```html" in text:
             try:
                 text = text.split('```html')[1].split('```')[0].strip()
-                logger.debug("Extracted HTML from code block")
+                logger.debug("HTML content successfully extracted from markdown code block.")
             except Exception as e:
-                logger.warning(f"Error extracting HTML from code block: {e}")
-        
-        # Remove any heading markdown
+                logger.warning(f"Failed extracting HTML from markdown block: {e}")
+
+        # Remove markdown-style heading indicators
         text = re.sub(r'^#\s+', '', text, flags=re.MULTILINE)
-        
-        # Use BeautifulSoup to parse and clean the HTML
+
+        # Parse and clean the HTML content
         soup = BeautifulSoup(text, 'html.parser')
-        
-        # Remove any inline styles
-        for tag in soup.find_all(lambda tag: tag.has_attr('style')):
+
+        # Remove inline styles
+        for tag in soup.find_all(style=True):
             del tag['style']
-        
-        # Ensure proper class usage
+            logger.debug(f"Removed inline styles from tag: {tag.name}")
+
+        # Ensure correct class usage throughout HTML
         soup = ensure_proper_classes(soup)
-        
-        # Check if the cleaned HTML has any content
-        cleaned_html = str(soup)
-        if not soup.find() or cleaned_html.strip() == "":
-            logger.warning("Empty or invalid HTML after cleaning")
+
+        # Check if resulting HTML content is valid and non-empty
+        if not soup.find() or not soup.text.strip():
+            logger.warning("Resulting HTML is empty or invalid after cleaning.")
             return f"<div>{html.escape(text)}</div>"
-        
-        # Ensure the HTML is wrapped in a div if not already
-        if soup.find() and soup.find().name != "div":
-            # Check if we have multiple top-level elements
-            top_level_elements = [tag for tag in soup.children if tag.name is not None]
-            if len(top_level_elements) > 1:
-                # Wrap multiple top-level elements in a div
-                new_soup = BeautifulSoup("<div></div>", "html.parser")
-                div = new_soup.div
-                for element in top_level_elements:
-                    div.append(element.extract())
-                cleaned_html = str(new_soup)
-                logger.debug("Wrapped multiple elements in a div")
-        
-        logger.debug(f"Cleaned HTML (first 100 chars): {cleaned_html[:100]}...")
+
+        # Ensure HTML is wrapped in a single top-level div
+        top_level_elements = [tag for tag in soup.children if isinstance(tag, (Tag, NavigableString))]
+
+        if len(top_level_elements) != 1 or (top_level_elements[0].name != 'div'):
+            wrapper_div = soup.new_tag("div")
+            for element in top_level_elements:
+                wrapper_div.append(element.extract())
+            soup = BeautifulSoup(str(wrapper_div), 'html.parser')
+            logger.debug("Wrapped HTML content within a single top-level div.")
+
+        cleaned_html = str(soup)
+        logger.debug(f"Cleaned HTML (preview 100 chars): {cleaned_html[:100]}...")
+
         return cleaned_html
-        
+
     except Exception as e:
-        logger.error(f"Error cleaning HTML: {e}", exc_info=True)
+        logger.error(f"Exception occurred during HTML cleaning: {e}", exc_info=True)
         return f"<div>{html.escape(text)}</div>"
+
 
 def create_filename_from_title(title, url, article_id):
     """
@@ -268,50 +272,8 @@ def save_as_html(article_id, title, url, content, summary, response_text, keywor
         
         # Process featured image extraction first
         featured_image_html = ""
-        processed_summary = summary
-        
-        # Check if the summary has image markers
-        if summary and isinstance(summary, str):
-            lines = summary.splitlines()
-            image_section = []
-            rest_lines = []
-            marker_found = False
-            
-            for line in lines:
-                if line.strip() == "---END IMAGE URL---":
-                    marker_found = True
-                    continue
-                if not marker_found:
-                    image_section.append(line.strip())
-                else:
-                    rest_lines.append(line)
-                    
-            if marker_found and image_section:
-                image_url = image_section[0] if image_section[0].startswith("http") else ""
-                alt_text = image_section[1] if len(image_section) > 1 else "Featured image"
-                
-                # Verify the image URL
-                if image_url:
-                    try:
-                        head_response = requests.head(image_url, timeout=5)
-                        if head_response.status_code != 200:
-                            image_url = ""
-                    except Exception as e:
-                        logger.warning(f"Error verifying image URL: {e}")
-                        image_url = ""
-                
-                if image_url:
-                    # Use proper CSS class instead of inline styling
-                    featured_image_html = (
-                        f'<div class="featured-image">'
-                        f'<img src="{image_url}" alt="{alt_text}">'
-                        f'<figcaption>{alt_text}</figcaption>'
-                        f'</div>'
-                    )
-                
-                # Use the remaining lines as the summary content
-                processed_summary = "\n".join(rest_lines)
-        
+        processed_summary = summary        
+                              
         # Extract HTML content properly
         clean_summary = ""
         if processed_summary and isinstance(processed_summary, str):
@@ -319,9 +281,11 @@ def save_as_html(article_id, title, url, content, summary, response_text, keywor
             if "```html" in processed_summary:
                 try:
                     processed_summary = processed_summary.split("```html")[1].split("```")[0].strip()
-                    logger.debug("Extracted HTML from code block")
+                    processed_summary = html.unescape(processed_summary)  # <-- This line added
+                    logger.debug("Extracted and unescaped HTML from code block")
                 except Exception as e:
                     logger.warning(f"Error extracting HTML from code block: {e}")
+
             
             # Remove any stray style-based list item formatting
             processed_summary = re.sub(r'<li style="[^>]*">', '<li>', processed_summary)
@@ -339,6 +303,8 @@ def save_as_html(article_id, title, url, content, summary, response_text, keywor
                 # Try to find HTML content in the API response
                 if response_text and "```html" in response_text:
                     html_content = response_text.split("```html")[1].split("```")[0].strip()
+                    html_content = html.unescape(html_content)  # <-- Add this line
+
                     if html_content:
                         clean_summary = clean_and_normalize_html(html_content)
                         logger.info("Successfully extracted HTML content from API response")
@@ -353,7 +319,8 @@ def save_as_html(article_id, title, url, content, summary, response_text, keywor
                 logger.error(f"Error extracting HTML from API response: {e}")
         
         # If we still don't have a featured image, try to get one from Wikimedia
-        if not featured_image_html and keywords and isinstance(keywords, list) and len(keywords) > 0:
+        if not featured_image_html and ((keywords and isinstance(keywords, list) and len(keywords) > 0) or (title and title.strip() != "")):
+
             # Create a sanitized base name for image filenames
             base_name = re.sub(r'[^\w\s-]', '', title if title else "Article")
             base_name = re.sub(r'\s+', '_', base_name)[:30]  # Limit length
@@ -397,7 +364,6 @@ def save_as_html(article_id, title, url, content, summary, response_text, keywor
                     num_images = max_images
                 
                 # Search for and download images from Wikimedia
-                from summarizer_image import search_and_download_images
                 images = search_and_download_images(image_query, article_id, base_name, num_images)
                 
                 logger.info(f"Found {len(images)} images for article {article_id}")
@@ -405,17 +371,22 @@ def save_as_html(article_id, title, url, content, summary, response_text, keywor
                 # Create featured image HTML if images were found
                 if images and len(images) > 0:
                     featured_image = images[0]  # Use first image as featured image
-                    
-                    # Make sure the image URL is properly formatted
-                    if not featured_image["url"].startswith(("http://", "https://", "/")):
-                        featured_image["url"] = "/" + featured_image["url"]
-                    
+
+                    featured_image_url = featured_image["url"].replace("\\", "/")
+
+
                     featured_image_html = (
                         f'<div class="featured-image">'
-                        f'<img src="{featured_image["url"]}" alt="{featured_image["caption"]}">'
+                        f'<img src="{featured_image_url}" alt="{featured_image["caption"]}">'
                         f'<figcaption>{featured_image["caption"]}</figcaption>'
                         f'</div>'
                     )
+
+                    logger.info(f"Featured image added to HTML: {featured_image_url}")
+                else:
+                    featured_image_html = ""
+                    logger.warning("No featured image available to add to HTML.")
+
         
         # Process any images in the summary, downloading them and updating src attributes
         if clean_summary and "<img" in clean_summary:
@@ -482,7 +453,7 @@ def save_as_html(article_id, title, url, content, summary, response_text, keywor
     
     <div class="summary">
         <h2>Summary</h2>
-        {clean_summary}
+        {clean_summary if clean_summary else '<div>No summary available</div>'}
         <div class="clearfix"></div>
     </div>
     
@@ -528,6 +499,19 @@ def save_as_html(article_id, title, url, content, summary, response_text, keywor
         with open(filepath, 'w', encoding='utf-8') as f:
             f.write(html_content)
             f.flush()
+
+        if os.path.exists(filepath):
+            logger.info(f"HTML file created successfully: {filepath} (Size: {os.path.getsize(filepath)} bytes)")
+        else:
+            logger.error(f"Failed to create HTML file: {filepath}")
+
+        # Additional debug: confirm featured image path is present in HTML
+        if featured_image_html:
+            if featured_image_url in html_content:
+                logger.debug(f"Confirmed featured image path '{featured_image_url}' is correctly embedded in HTML.")
+            else:
+                logger.error(f"Featured image path '{featured_image_url}' is missing in generated HTML.")
+
         
         # Verify file creation
         if os.path.exists(filepath):
