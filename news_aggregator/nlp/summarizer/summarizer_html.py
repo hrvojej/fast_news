@@ -1,4 +1,3 @@
-# summarizer_html.py
 """
 Module for HTML processing and file operations for the article summarization system.
 """
@@ -9,13 +8,29 @@ import html
 from urllib.parse import urlparse
 import requests
 from bs4 import BeautifulSoup, Tag, NavigableString
-
 from datetime import datetime
 
 from summarizer_logging import get_logger
 from summarizer_config import OUTPUT_HTML_DIR, ensure_output_directory
 from summarizer_image import IMAGES_DIR, process_images_in_html, search_and_download_images
 
+from jinja2 import Environment, FileSystemLoader, select_autoescape
+
+# Compute the base directory of your project (assumes summarizer_html.py is two levels deep in nlp/summarizer)
+BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
+# Define the template directory path relative to your project structure (note: no extra "web" folder)
+TEMPLATE_DIR = os.path.join(BASE_DIR, 'frontend', 'templates')
+
+jinja_env = Environment(
+    loader=FileSystemLoader(TEMPLATE_DIR),
+    autoescape=select_autoescape(['html', 'xml'])
+)
+
+# Define and register a static_url function for resolving static assets in templates
+def static_url(path):
+    return "../../static/" + path
+
+jinja_env.globals['static_url'] = static_url
 
 # Initialize logger
 logger = get_logger(__name__)
@@ -217,7 +232,6 @@ def clean_and_normalize_html(text):
         logger.error(f"Exception occurred during HTML cleaning: {e}", exc_info=True)
         return f"<div>{html.escape(text)}</div>"
 
-
 def create_filename_from_title(title, url, article_id):
     """
     Create a valid filename from the article title.
@@ -281,12 +295,11 @@ def save_as_html(article_id, title, url, content, summary, response_text, keywor
             if "```html" in processed_summary:
                 try:
                     processed_summary = processed_summary.split("```html")[1].split("```")[0].strip()
-                    processed_summary = html.unescape(processed_summary)  # <-- This line added
+                    processed_summary = html.unescape(processed_summary)
                     logger.debug("Extracted and unescaped HTML from code block")
                 except Exception as e:
                     logger.warning(f"Error extracting HTML from code block: {e}")
 
-            
             # Remove any stray style-based list item formatting
             processed_summary = re.sub(r'<li style="[^>]*">', '<li>', processed_summary)
             
@@ -295,7 +308,6 @@ def save_as_html(article_id, title, url, content, summary, response_text, keywor
         else:
             logger.warning(f"Invalid summary content: {type(processed_summary)}")
             clean_summary = "<div>No valid summary content available</div>"
-        
         
         # Attempt to extract Gemini-generated title from the cleaned summary HTML
         soup_summary = BeautifulSoup(clean_summary, 'html.parser')
@@ -306,24 +318,18 @@ def save_as_html(article_id, title, url, content, summary, response_text, keywor
         
         gemini_title_tag = soup_summary.find('h1', class_='article-title')
         gemini_title = gemini_title_tag.get_text(separator=' ', strip=True) if gemini_title_tag else title
-
-        
-        
         
         # If clean_summary is empty or just a placeholder, try with the API response
-        if not clean_summary or clean_summary == "<div>No content available</div>" or clean_summary == "<div>No valid summary content available</div>":
+        if not clean_summary or clean_summary in ("<div>No content available</div>", "<div>No valid summary content available</div>"):
             logger.warning("Processed summary is empty, attempting to extract from raw API response")
             try:
-                # Try to find HTML content in the API response
                 if response_text and "```html" in response_text:
                     html_content = response_text.split("```html")[1].split("```")[0].strip()
-                    html_content = html.unescape(html_content)  # <-- Add this line
-
+                    html_content = html.unescape(html_content)
                     if html_content:
                         clean_summary = clean_and_normalize_html(html_content)
                         logger.info("Successfully extracted HTML content from API response")
                 elif response_text and ("<html" in response_text or "<div" in response_text):
-                    # Try to extract HTML content using regex
                     html_match = re.search(r'(<div.*?>.*?</div>|<html.*?>.*?</html>)', response_text, re.DOTALL)
                     if html_match:
                         html_content = html_match.group(0)
@@ -334,26 +340,18 @@ def save_as_html(article_id, title, url, content, summary, response_text, keywor
         
         # If we still don't have a featured image, try to get one from Wikimedia
         if not featured_image_html and ((keywords and isinstance(keywords, list) and len(keywords) > 0) or (title and title.strip() != "")):
-
-            # Create a sanitized base name for image filenames
             base_name = re.sub(r'[^\w\s-]', '', title if title else "Article")
             base_name = re.sub(r'\s+', '_', base_name)[:30]  # Limit length
             
-            # Log available keywords for debugging
             logger.debug(f"Keywords for Wikimedia image search: {keywords}")
             
-            # Create search query using top keywords
             search_terms = keywords[:3] if keywords else []
-            
-            # If no keywords, try to use words from the title
             if not search_terms and title:
                 title_words = [word.lower() for word in re.findall(r'\b\w+\b', title) 
-                              if len(word) > 3 and word.lower() not in ['the', 'and', 'with', 'from', 'that', 'this']]
+                               if len(word) > 3 and word.lower() not in ['the', 'and', 'with', 'from', 'that', 'this']]
                 search_terms = title_words[:3]
             
             image_query = " ".join([term for term in search_terms if term])
-            
-            # If still no query, try additional contextual terms
             if not image_query:
                 if 'prison' in title.lower() or 'prison' in content.lower()[:500]:
                     image_query = "prison"
@@ -363,13 +361,12 @@ def save_as_html(article_id, title, url, content, summary, response_text, keywor
             if image_query:
                 logger.info(f"Using Wikimedia search query: '{image_query}'")
                 
-                # Calculate number of images to request based on content length
-                content_length = len(content) if content else 0
                 from summarizer_config import CONFIG, get_config_value
                 short_threshold = get_config_value(CONFIG, 'image_search', 'short_threshold', 3000)
                 medium_threshold = get_config_value(CONFIG, 'image_search', 'medium_threshold', 7000)
                 max_images = get_config_value(CONFIG, 'image_search', 'max_images', 3)
                 
+                content_length = len(content) if content else 0
                 if content_length < short_threshold:
                     num_images = 1
                 elif content_length < medium_threshold:
@@ -377,34 +374,23 @@ def save_as_html(article_id, title, url, content, summary, response_text, keywor
                 else:
                     num_images = max_images
                 
-                # Search for and download images from Wikimedia
                 images = search_and_download_images(image_query, article_id, base_name, num_images)
-                
                 logger.info(f"Found {len(images)} images for article {article_id}")
                 
-                # Create featured image HTML if images were found
                 if images and len(images) > 0:
-                    featured_image = images[0]  # Use first image as featured image
-
+                    featured_image = images[0]
                     featured_image_url = featured_image["url"].replace("\\", "/")
-
-
                     featured_image_html = (
                         f'<div class="featured-image">'
                         f'<img src="{featured_image_url}" alt="{featured_image["caption"]}">'
                         f'<figcaption>{featured_image["caption"]}</figcaption>'
                         f'</div>'
                     )
-
                     logger.info(f"Featured image added to HTML: {featured_image_url}")
                 else:
                     featured_image_html = ""
                     logger.warning("No featured image available to add to HTML.")
                     
-                        # -----------------------------------------------
-                # INSERT ADDITIONAL IMAGE SNIPPET HERE
-                # -----------------------------------------------
-                # If more than one image was fetched, insert the second image
                 if images and len(images) > 1:
                     second_image = images[1]
                     second_image_url = second_image["url"].replace("\\", "/")
@@ -414,16 +400,11 @@ def save_as_html(article_id, title, url, content, summary, response_text, keywor
                         f'<figcaption>{second_image["caption"]}</figcaption>'
                         f'</div>'
                     )
-                    # Parse the clean summary and locate the "Interesting Facts:" header
                     soup_summary = BeautifulSoup(clean_summary, 'html.parser')
                     interesting_facts = soup_summary.find(lambda tag: tag.name in ['strong', 'h3', 'h4'] and 'Interesting Facts:' in tag.get_text())
                     if interesting_facts:
-                        # Insert additional image HTML before the "Interesting Facts:" header
                         interesting_facts.insert_before(BeautifulSoup(additional_images_html, 'html.parser'))
                         clean_summary = str(soup_summary)
-                # -----------------------------------------------
-        # End of image search block
-
         
         # Process any images in the summary, downloading them and updating src attributes
         if clean_summary and "<img" in clean_summary:
@@ -431,54 +412,73 @@ def save_as_html(article_id, title, url, content, summary, response_text, keywor
         
         # Create filename and filepath
         filename = create_filename_from_title(gemini_title, url, article_id)
-
         filepath = os.path.join(OUTPUT_HTML_DIR, filename)
         logger.debug(f"Preparing to save HTML to: {filepath}")
         
         # Determine the correct relative path for static assets
         relative_static_path = "../../static"  # Two levels up from articles directory
         
-        # Create final HTML content (keep the rest of your existing HTML generation code)
-        html_content = f"""<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>{html.escape(gemini_title or f'Article {article_id}')}</title>
-    <link rel="stylesheet" href="{relative_static_path}/css/main.css">
-    <link rel="stylesheet" href="{relative_static_path}/css/article.css">
-</head>
-<body>  
-    <div class="container">        
-    <div class="summary">
-        {featured_image_html}
-        {clean_summary if clean_summary else '<div>No summary available</div>'}
-        <div class="clearfix"></div>
-    </div>
-    </div>
-    <script src="{relative_static_path}/js/main.js"></script>
-</body>
-</html>"""
+        # Create processed date and current year for footer
+        processed_date = datetime.now().strftime("%B %d, %Y %H:%M")
+        current_year = datetime.now().year
         
-        # Write the HTML file
+        # Prepare featured image and fetched images context
+        if 'images' in locals() and images:
+            featured_image_data = {
+                "url": images[0]["url"].replace("\\", "/"),
+                "alt": images[0].get("caption", "Featured image"),
+                "caption": images[0].get("caption", "")
+            }
+            fetched_images_data = []
+            if len(images) > 1:
+                for img in images[1:]:
+                    fetched_images_data.append({
+                        "url": img["url"].replace("\\", "/"),
+                        "alt": img.get("caption", "Article image"),
+                        "caption": img.get("caption", "")
+                    })
+        else:
+            featured_image_data = None
+            fetched_images_data = []
+        
+        # Prepare context data for the Jinja template
+        context = {
+            "title": gemini_title or f"Article {article_id}",
+            "article_id": article_id,
+            "url": url,
+            "processed_date": processed_date,
+            "featured_image": featured_image_data,
+            "summary": clean_summary if clean_summary else "<div>No summary available</div>",
+            "fetched_images": fetched_images_data,
+            "show_api_response": False,  # Change to True to display raw API response
+            "response_text": response_text,
+            "content": content,  # Original article content
+            "relative_static_path": relative_static_path,
+            "current_year": current_year,
+        }
+        
+        # Load the article template from the Jinja2 environment
+        template = jinja_env.get_template('article.html')
+        
+        # Render the final HTML using the template and the provided context
+        html_content = template.render(context)
+        
+        # Write the rendered HTML to the output file
         with open(filepath, 'w', encoding='utf-8') as f:
             f.write(html_content)
             f.flush()
-
+        
         if os.path.exists(filepath):
             logger.info(f"HTML file created successfully: {filepath} (Size: {os.path.getsize(filepath)} bytes)")
         else:
             logger.error(f"Failed to create HTML file: {filepath}")
-
-        # Additional debug: confirm featured image path is present in HTML
+        
         if featured_image_html:
             if featured_image_url in html_content:
                 logger.debug(f"Confirmed featured image path '{featured_image_url}' is correctly embedded in HTML.")
             else:
                 logger.error(f"Featured image path '{featured_image_url}' is missing in generated HTML.")
-
         
-        # Verify file creation
         if os.path.exists(filepath):
             file_size = os.path.getsize(filepath)
             logger.info(f"Successfully saved HTML output to {filepath} (size: {file_size} bytes)")
