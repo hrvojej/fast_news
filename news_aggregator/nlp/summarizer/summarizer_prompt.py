@@ -262,31 +262,11 @@ def create_prompt(content, article_length, include_images=True, enable_entity_li
             "10. End this section with EXACTLY: <div class=\"facts-divider\"></div>\n"
         )
 
-        # Add legend section
-        prompt += (
-            "LEGEND SECTION:\n"
-            "1. Create a legend section using this EXACT HTML pattern:\n"
-            "   <div class=\"legend-container\">\n"
-            "     <h4 class=\"legend-heading\">Entity Type Legend:</h4>\n"
-            "     <div class=\"legend-grid\">\n"
-            "       <div class=\"legend-item\"><strong class=\"named-individual\">Named Individual</strong></div>\n"
-            "       <div class=\"legend-item\"><strong class=\"roles-categories\">Role/Category</strong></div>\n"
-            "       <div class=\"legend-item\"><strong class=\"orgs-products\">Organization/Product</strong></div>\n"
-            "       <div class=\"legend-item\"><strong class=\"location\">Location</strong></div>\n"
-            "       <div class=\"legend-item\"><strong class=\"time-event\">Time Period/Event</strong></div>\n"
-            "       <div class=\"legend-item\"><strong class=\"artistic\">Artistic Concept</strong></div>\n"
-            "       <div class=\"legend-item\"><strong class=\"industry\">Industry Term</strong></div>\n"
-            "       <div class=\"legend-item\"><strong class=\"financial\">Financial Term</strong></div>\n"
-            "       <div class=\"legend-item\"><strong class=\"key-actions\">Key Action</strong></div>\n"
-            "     </div>\n"
-            "   </div>\n\n"
-            
-            "ARTICLE TEXT:\n" 
-            + content + "\n"
-        )
+        prompt += "\nARTICLE TEXT:\n" + content + "\n"
+
         
         # Return the complete prompt
-        return prompt
+        return prompt   
         
     except Exception as e:
         logger.error(f"Error creating prompt: {e}", exc_info=True)
@@ -300,6 +280,6 @@ if __name__ == "__main__":
         print("Successfully created prompt.")
         print(f"Prompt length: {len(test_prompt)} characters")
         print("Prompt preview:")
-        print(test_prompt[:500] + "...")
+        print(test_prompt[:50] + "...")
     else:
         print("Failed to create prompt.")

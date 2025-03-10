@@ -7,58 +7,138 @@
 {% endblock %}
 
 {% block content %}
-    <div class="article-container">
-        <!-- Main Article Title -->
-        <h1 class="article-title">{{ title }}</h1>
-        
-        <!-- Article Metadata -->
-        <div class="article-meta">
-            <p>Article ID: {{ article_id }}</p>
-            <p>URL: <a href="{{ url }}">{{ url }}</a></p>
-            <p>Processed: {{ processed_date }}</p>
-        </div>
-        
-        <!-- Featured Image -->
-        {% if featured_image %}
-        <div class="featured-image">
-            <img src="{{ featured_image.url }}" alt="{{ featured_image.alt|default('Featured image') }}">
-            {% if featured_image.caption %}
-            <figcaption>{{ featured_image.caption }}</figcaption>
-            {% endif %}
-        </div>
-        {% endif %}
-        
-        <!-- Article Summary -->
-        <div class="summary">
-            {{ summary|safe }}
-        </div>
-        
-        <!-- Additional Fetched Images -->
-        {% if fetched_images %}
-        <div class="additional-images">
-            {% for image in fetched_images %}
-                <figure class="article-image">
-                    <img src="{{ image.url }}" alt="{{ image.caption|default('Article image') }}">
-                    <figcaption>{{ image.caption }}</figcaption>
-                </figure>
-            {% endfor %}
-        </div>
-        {% endif %}
-        
-        <!-- API Response (if shown) -->
-        {% if show_api_response %}
-        <div class="api-response">
-            <h2>Raw API Response</h2>
-            <pre>{{ response_text }}</pre>
-        </div>
-        {% endif %}
-        
-        <!-- Original Content -->
-        <div class="article-content">
-            <h2>Original Article Content</h2>
-            <div>
-                {{ content|safe }}
-            </div>
+<div class="article-container">
+    <!-- Main Article Title -->
+    <h1 class="article-title">{{ title }}</h1>
+    
+    <!-- Article Metadata -->
+    <div class="article-meta">
+        <p>Article ID: {{ article_id }}</p>
+        <p>URL: <a href="{{ url }}">{{ url }}</a></p>
+        <p>Processed: {{ processed_date }}</p>
+    </div>
+    
+    <!-- Source Attribution -->
+    {% if source_attribution %}
+    <div class="source-attribution">
+        {{ source_attribution|safe }}
+    </div>
+    {% endif %}
+    
+    <!-- Keywords Section -->
+    {% if keywords %}
+    <div class="keywords-container">
+        <p class="keywords-heading"><strong>Keywords:</strong></p>
+        <div class="keywords-tags">
+          {% for keyword in keywords %}
+             <span class="keyword-pill">{{ keyword }}</span>
+          {% endfor %}
         </div>
     </div>
+    {% endif %}
+    
+    <!-- Entity Overview Section -->
+    {% if entity_overview %}
+    <div class="entity-overview">
+        <strong class="entity-overview-heading">Entity Overview:</strong>
+        <div class="entity-grid">
+          {% for entity in entity_overview %}
+            <div class="entity-category">
+               <h3 class="entity-category-title">{{ entity.category }}</h3>
+               <div class="entity-list">{{ entity.content|safe }}</div>
+            </div>
+          {% endfor %}
+        </div>
+    </div>
+    {% endif %}
+    
+    <!-- Featured Image (placed after Entity Overview) -->
+    {% if featured_image %}
+    <div class="featured-image">
+        <img src="{{ featured_image.url }}" alt="{{ featured_image.alt|default('Featured image') }}">
+        {% if featured_image.caption %}
+        <figcaption>{{ featured_image.caption }}</figcaption>
+        {% endif %}
+    </div>
+    {% endif %}
+    
+    <!-- Article Summary -->
+    <div class="summary">
+        {% if summary_paragraphs %}
+          {% for sp in summary_paragraphs %}
+             <div class="{{ sp.class }}">{{ sp.content|safe }}</div>
+          {% endfor %}
+        {% else %}
+           {{ summary|safe }}
+        {% endif %}
+    </div>
+    
+    <!-- Interesting Facts Section -->
+    {% if interesting_facts %}
+    <div class="interesting-facts">
+        <strong class="facts-heading">Interesting Facts:</strong>
+        <div class="facts-container">
+          <ul class="facts-list">
+            {% for fact in interesting_facts %}
+              <li class="{{ fact.class|join(' ') }}">{{ fact.content|safe }}</li>
+            {% endfor %}
+          </ul>
+        </div>
+    </div>
+    {% endif %}
+    
+    <!-- Original Article Content with Inline Second Image -->
+    <div class="article-content">
+        <h2>Original Article Content</h2>
+        {% set paragraphs = content|split('</p>') %}
+        {% if paragraphs|length > 2 and fetched_images and fetched_images|length > 0 %}
+            {# Output first two paragraphs (re-adding the closing tag) #}
+            {% for p in paragraphs[0:2] %}
+                {{ p|safe }}</p>
+            {% endfor %}
+            {# Insert inline second image using the first element from fetched_images #}
+            <div class="in-content-image">
+                <img src="{{ fetched_images[0].url }}" alt="{{ fetched_images[0].caption|default('Article image') }}">
+                {% if fetched_images[0].caption %}
+                <figcaption>{{ fetched_images[0].caption }}</figcaption>
+                {% endif %}
+            </div>
+            {# Output the remaining paragraphs #}
+            {% for p in paragraphs[2:] %}
+                {% if p|trim %}
+                    {{ p|safe }}</p>
+                {% endif %}
+            {% endfor %}
+        {% else %}
+            {{ content|safe }}
+        {% endif %}
+    </div>
+    
+    {# Additional Fetched Images (if more than one exists, show the rest) #}
+    {% if fetched_images and fetched_images|length > 1 %}
+    <div class="additional-images">
+        {% for image in fetched_images[1:] %}
+            <figure class="article-image">
+                <img src="{{ image.url }}" alt="{{ image.caption|default('Article image') }}">
+                <figcaption>{{ image.caption }}</figcaption>
+            </figure>
+        {% endfor %}
+    </div>
+    {% endif %}
+    
+    <!-- API Response (if shown) -->
+    {% if show_api_response %}
+    <div class="api-response">
+        <h2>Raw API Response</h2>
+        <pre>{{ response_text }}</pre>
+    </div>
+    {% endif %}
+    
+    {% if show_api_response %}
+    <div class="gemini-raw-response">
+        <h2>Full Gemini Raw Response</h2>
+        <pre>{{ response_text | e }}</pre>
+    </div>
+    {% endif %}
+</div>
 {% endblock %}

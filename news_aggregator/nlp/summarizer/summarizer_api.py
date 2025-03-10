@@ -43,7 +43,7 @@ def initialize_api():
 
 def get_model_for_content_length(content_length):
     # Always use the non-experimental model for image search capability
-    return 'gemini-2.0-pro-exp-02-05'
+    return 'gemini-2.0-flash'
 
 
 def create_safety_settings():
@@ -113,7 +113,7 @@ def call_gemini_api(prompt, article_id, content_length, retries=2):
     # Configure request
     # In the call_gemini_api function, update the config_kwargs dictionary:
     config_kwargs = {
-    "max_output_tokens": 8192 if content_length > 10000 else 5120,
+    "max_output_tokens": 8192,
     "temperature": 0.7,
     "top_p": 0.9,
     # Removed generation_config because it is not permitted in the current GenerateContentConfig
@@ -142,8 +142,10 @@ def call_gemini_api(prompt, article_id, content_length, retries=2):
             response = client.models.generate_content(
                 model=model,
                 contents=[{"role": "user", "parts": [{"text": prompt}]}],
-                config=config
+                config=config,
+                tools="google_search_retrieval"  # Enable search grounding
             )
+
             elapsed_time = time.time() - start_time
             
             logger.info(f"API call completed in {elapsed_time:.2f} seconds")

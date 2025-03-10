@@ -25,6 +25,9 @@ jinja_env = Environment(
     loader=FileSystemLoader(TEMPLATE_DIR),
     autoescape=select_autoescape(['html', 'xml'])
 )
+# Register custom filter "split" so the template can split strings
+jinja_env.filters['split'] = lambda s, delimiter: s.split(delimiter) if s else []
+
 
 # Define and register a static_url function for resolving static assets in templates
 def static_url(path):
@@ -232,6 +235,69 @@ def clean_and_normalize_html(text):
         logger.error(f"Exception occurred during HTML cleaning: {e}", exc_info=True)
         return f"<div>{html.escape(text)}</div>"
 
+def extract_summary_fields(clean_html):
+    """
+    Extract structured fields from the cleaned summary HTML.
+    
+    Returns a dictionary with:
+      - article_title: text from <h1 class="article-title">
+      - source_attribution: HTML from <p class="source-attribution">
+      - keywords: a list of strings from <span class="keyword-pill">
+      - entity_overview: a list of dicts, each with 'category' and 'content' (from entity sections)
+      - summary_paragraphs: a list of dicts for summary paragraphs (classes: summary-intro, supporting-point, transition-text, secondary-detail)
+      - interesting_facts: a list of dicts for each fact (with its classes and content)
+    """
+    soup = BeautifulSoup(clean_html, 'html.parser')
+    result = {}
+
+    # Article Title
+    title_tag = soup.find('h1', class_='article-title')
+    result['article_title'] = title_tag.get_text(strip=True) if title_tag else ''
+
+    # Source Attribution
+    source_tag = soup.find('p', class_='source-attribution')
+    result['source_attribution'] = str(source_tag) if source_tag else ''
+
+    # Keywords
+    keywords = []
+    keywords_container = soup.find('div', class_='keywords-container')
+    if keywords_container:
+        for span in keywords_container.find_all('span', class_='keyword-pill'):
+            keywords.append(span.get_text(strip=True))
+    result['keywords'] = keywords
+
+    # Entity Overview
+    entity_overview = []
+    entity_grid = soup.find('div', class_='entity-grid')
+    if entity_grid:
+        for category in entity_grid.find_all('div', class_='entity-category'):
+            category_title_tag = category.find(class_='entity-category-title')
+            category_title = category_title_tag.get_text(strip=True) if category_title_tag else ''
+            entity_list_tag = category.find('p', class_='entity-list')
+            entity_list = str(entity_list_tag) if entity_list_tag else ''
+            entity_overview.append({'category': category_title, 'content': entity_list})
+    result['entity_overview'] = entity_overview
+
+    # Summary Paragraphs
+    summary_paragraphs = []
+    for class_name in ['summary-intro', 'supporting-point', 'transition-text', 'secondary-detail']:
+        for p in soup.find_all('p', class_=class_name):
+            summary_paragraphs.append({'class': class_name, 'content': str(p)})
+    result['summary_paragraphs'] = summary_paragraphs
+
+    # Interesting Facts
+    facts = []
+    facts_container = soup.find('div', class_='facts-container')
+    if facts_container:
+        for li in facts_container.find_all('li'):
+            fact_class = li.get('class', [])
+            # Using decode_contents to get inner HTML without the outer <li> tag
+            facts.append({'class': fact_class, 'content': li.decode_contents()})
+    result['interesting_facts'] = facts
+
+    return result
+
+
 def create_filename_from_title(title, url, article_id):
     """
     Create a valid filename from the article title.
@@ -311,10 +377,10 @@ def save_as_html(article_id, title, url, content, summary, response_text, keywor
         
         # Attempt to extract Gemini-generated title from the cleaned summary HTML
         soup_summary = BeautifulSoup(clean_summary, 'html.parser')
-        legend_container = soup_summary.find('div', class_='legend-container')
-        if legend_container:
-            legend_container.decompose()  # removes the entire legend section
-        clean_summary = str(soup_summary)
+        # legend_container = soup_summary.find('div', class_='legend-container')
+        # if legend_container:
+        #     legend_container.decompose()  # removes the entire legend section
+        # clean_summary = str(soup_summary)
         
         gemini_title_tag = soup_summary.find('h1', class_='article-title')
         gemini_title = gemini_title_tag.get_text(separator=' ', strip=True) if gemini_title_tag else title
@@ -440,8 +506,10 @@ def save_as_html(article_id, title, url, content, summary, response_text, keywor
         else:
             featured_image_data = None
             fetched_images_data = []
-        
-        # Prepare context data for the Jinja template
+            
+        # After clean_summary has been computed
+        summary_fields = extract_summary_fields(clean_summary)
+
         context = {
             "title": gemini_title or f"Article {article_id}",
             "article_id": article_id,
@@ -450,12 +518,19 @@ def save_as_html(article_id, title, url, content, summary, response_text, keywor
             "featured_image": featured_image_data,
             "summary": clean_summary if clean_summary else "<div>No summary available</div>",
             "fetched_images": fetched_images_data,
-            "show_api_response": False,  # Change to True to display raw API response
+            "show_api_response": True,  # Change to True to display raw API response
             "response_text": response_text,
             "content": content,  # Original article content
             "relative_static_path": relative_static_path,
             "current_year": current_year,
+            # New detailed fields extracted from the summary
+            "source_attribution": summary_fields.get("source_attribution", ""),
+            "keywords": summary_fields.get("keywords", []),
+            "entity_overview": summary_fields.get("entity_overview", []),
+            "summary_paragraphs": summary_fields.get("summary_paragraphs", []),
+            "interesting_facts": summary_fields.get("interesting_facts", []),
         }
+
         
         # Load the article template from the Jinja2 environment
         template = jinja_env.get_template('article.html')
