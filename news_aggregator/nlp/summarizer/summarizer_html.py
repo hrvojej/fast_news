@@ -1,3 +1,4 @@
+# path: fast_news/news_aggregator/nlp/summarizer/summarizer_html.py
 """
 Module for HTML processing and file operations for the article summarization system.
 """
@@ -20,6 +21,8 @@ from jinja2 import Environment, FileSystemLoader, select_autoescape
 BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
 # Define the template directory path relative to your project structure (note: no extra "web" folder)
 TEMPLATE_DIR = os.path.join(BASE_DIR, 'frontend', 'templates')
+IMAGES_DIR = os.path.join(BASE_DIR, 'frontend', 'static', 'images')
+
 
 jinja_env = Environment(
     loader=FileSystemLoader(TEMPLATE_DIR),
@@ -58,6 +61,45 @@ def is_valid_html(text):
         logger.error(f"HTML validation error: {e}")
         return False
     
+def get_subfolder_from_url(url):
+    """
+    Extracts subfolder(s) from the URL.
+    Returns a relative path like "us/politics" or "briefing" based on URL segments.
+    """
+    from urllib.parse import urlparse
+    try:
+        parsed = urlparse(url)
+        # Get non-empty path segments
+        segments = [seg for seg in parsed.path.split('/') if seg]
+        base_index = 0
+        # Look for the date segments.
+        # Standard pattern: [year, month, day, ...] or [lang, year, month, day, ...]
+        if len(segments) >= 3 and segments[0].isdigit() and len(segments[0]) == 4 \
+           and segments[1].isdigit() and len(segments[1]) == 2 \
+           and segments[2].isdigit() and len(segments[2]) == 2:
+            base_index = 3
+        elif len(segments) >= 4 and segments[0].isalpha() \
+             and segments[1].isdigit() and len(segments[1]) == 4 \
+             and segments[2].isdigit() and len(segments[2]) == 2 \
+             and segments[3].isdigit() and len(segments[3]) == 2:
+            base_index = 4
+        else:
+            # If pattern doesn't match, return empty string
+            return ""
+        # Folder parts are those between the date and the final article slug
+        folder_parts = segments[base_index:-1]
+        if len(folder_parts) >= 2:
+            # Only use the first two segments
+            return os.path.join(folder_parts[0], folder_parts[1])
+        elif len(folder_parts) == 1:
+            return folder_parts[0]
+        else:
+            return ""
+    except Exception as e:
+        logger.error(f"Error extracting subfolder from URL: {e}")
+        return ""
+
+    
 
 def ensure_proper_classes(soup):
     """
@@ -82,7 +124,7 @@ def ensure_proper_classes(soup):
         
         # Summary elements
         'summary-heading', 'summary-intro', 'key-sentence', 'supporting-point', 
-        'secondary-detail', 'crucial-fact',
+        'transition-text', 'secondary-detail', 'crucial-fact',
         
         # Interesting facts
         'facts-heading', 'facts-container', 'facts-list', 'fact-primary', 
@@ -93,8 +135,12 @@ def ensure_proper_classes(soup):
         
         # Separators and misc elements
         'separator', 'divider', 'gradient-divider', 'facts-divider',
-        'entity-spacing', 'transition-text', 'date-numeric', 'number-numeric'
+        'entity-spacing', 'transition-text', 'date-numeric', 'number-numeric',
+        
+        # Sentiment analysis classes (new!)
+         'entity-sentiment', 'entity-name', 'entity-sentiment-details', 'sentiment-positive', 'sentiment-negative','entity-summary', 'entity-keywords'
     ]
+
     
     # Check for elements with classes not in the allowed list
     for element in soup.find_all(class_=True):
@@ -294,6 +340,48 @@ def extract_summary_fields(clean_html):
             # Using decode_contents to get inner HTML without the outer <li> tag
             facts.append({'class': fact_class, 'content': li.decode_contents()})
     result['interesting_facts'] = facts
+    
+    # Sentiment Analysis Extraction (updated)
+    sentiment_data = []
+    for div in soup.find_all('div', class_='entity-sentiment'):
+        # Get entity name
+        entity_name_tag = div.find('h4', class_='entity-name')
+        entity_name = entity_name_tag.get_text(strip=True) if entity_name_tag else ''
+        
+        # Get positive/negative counts
+        sentiment_details_tag = div.find('p', class_='entity-sentiment-details')
+        positive = ''
+        negative = ''
+        if sentiment_details_tag:
+            positive_tag = sentiment_details_tag.find('span', class_='sentiment-positive')
+            negative_tag = sentiment_details_tag.find('span', class_='sentiment-negative')
+            positive = positive_tag.get_text(strip=True) if positive_tag else ''
+            negative = negative_tag.get_text(strip=True) if negative_tag else ''
+        
+        # Extract additional sentiment info
+        entity_summary_tag = div.find('p', class_='entity-summary')
+        entity_summary = entity_summary_tag.get_text(strip=True) if entity_summary_tag else ''
+        
+        # Extract keywords properly as a list
+        entity_keywords = []
+        entity_keywords_tag = div.find('p', class_='entity-keywords')
+        if entity_keywords_tag:
+            keywords_text = entity_keywords_tag.get_text(separator=' ', strip=True)
+            # Remove prefix "Keywords:" if it exists
+            prefix = "Keywords:"
+            if keywords_text.lower().startswith(prefix.lower()):
+                keywords_text = keywords_text[len(prefix):].strip()
+            # Split the string into a list by comma and trim each keyword
+            entity_keywords = [kw.strip() for kw in keywords_text.split(',') if kw.strip()]
+        
+        sentiment_data.append({
+            'entity': entity_name,
+            'positive': positive,
+            'negative': negative,
+            'summary': entity_summary,
+            'keywords': entity_keywords
+        })
+        result['sentiment_analysis'] = sentiment_data
 
     return result
 
@@ -434,9 +522,9 @@ def save_as_html(article_id, title, url, content, summary, response_text, keywor
                 
                 content_length = len(content) if content else 0
                 if content_length < short_threshold:
-                    num_images = 1
-                elif content_length < medium_threshold:
                     num_images = 2
+                elif content_length < medium_threshold:
+                    num_images = 3
                 else:
                     num_images = max_images
                 
@@ -457,20 +545,6 @@ def save_as_html(article_id, title, url, content, summary, response_text, keywor
                     featured_image_html = ""
                     logger.warning("No featured image available to add to HTML.")
                     
-                if images and len(images) > 1:
-                    second_image = images[1]
-                    second_image_url = second_image["url"].replace("\\", "/")
-                    additional_images_html = (
-                        f'<div class="featured-image">'
-                        f'<img src="{second_image_url}" alt="{second_image["caption"]}">'
-                        f'<figcaption>{second_image["caption"]}</figcaption>'
-                        f'</div>'
-                    )
-                    soup_summary = BeautifulSoup(clean_summary, 'html.parser')
-                    interesting_facts = soup_summary.find(lambda tag: tag.name in ['strong', 'h3', 'h4'] and 'Interesting Facts:' in tag.get_text())
-                    if interesting_facts:
-                        interesting_facts.insert_before(BeautifulSoup(additional_images_html, 'html.parser'))
-                        clean_summary = str(soup_summary)
         
         # Process any images in the summary, downloading them and updating src attributes
         if clean_summary and "<img" in clean_summary:
@@ -478,31 +552,43 @@ def save_as_html(article_id, title, url, content, summary, response_text, keywor
         
         # Create filename and filepath
         filename = create_filename_from_title(gemini_title, url, article_id)
-        filepath = os.path.join(OUTPUT_HTML_DIR, filename)
+
+        # Determine subfolder(s) based on URL
+        subfolder = get_subfolder_from_url(url)
+        if subfolder:
+            target_dir = os.path.join(OUTPUT_HTML_DIR, subfolder)
+            os.makedirs(target_dir, exist_ok=True)
+        else:
+            target_dir = OUTPUT_HTML_DIR
+
+        filepath = os.path.join(target_dir, filename)
         logger.debug(f"Preparing to save HTML to: {filepath}")
-        
+
+        # Compute relative path for static assets based on the depth of the target directory.
+        # Base case: when file is in OUTPUT_HTML_DIR, relative path is "../../static".
+        # For each additional subfolder level, add one "../".
+        depth = subfolder.count(os.sep) + 1 if subfolder else 0
+        relative_static_path = "../" * (2 + depth) + "static"
         # Determine the correct relative path for static assets
-        relative_static_path = "../../static"  # Two levels up from articles directory
         
         # Create processed date and current year for footer
         processed_date = datetime.now().strftime("%B %d, %Y %H:%M")
         current_year = datetime.now().year
         
         # Prepare featured image and fetched images context
-        if 'images' in locals() and images:
+        # Instead of using the first image exclusively as featured_image,
+        # pass all images to fetched_images_data.
+        if images and len(images) > 0:
             featured_image_data = {
-                "url": images[0]["url"].replace("\\", "/"),
-                "alt": images[0].get("caption", "Featured image"),
+                "url": os.path.basename(images[0]["url"]),
+                "alt": images[0].get("caption", "Article image"),
                 "caption": images[0].get("caption", "")
             }
-            fetched_images_data = []
-            if len(images) > 1:
-                for img in images[1:]:
-                    fetched_images_data.append({
-                        "url": img["url"].replace("\\", "/"),
-                        "alt": img.get("caption", "Article image"),
-                        "caption": img.get("caption", "")
-                    })
+            fetched_images_data = [{
+                "url": os.path.basename(img["url"]),
+                "alt": img.get("caption", "Article image"),
+                "caption": img.get("caption", "")
+            } for img in images]
         else:
             featured_image_data = None
             fetched_images_data = []
@@ -529,6 +615,7 @@ def save_as_html(article_id, title, url, content, summary, response_text, keywor
             "entity_overview": summary_fields.get("entity_overview", []),
             "summary_paragraphs": summary_fields.get("summary_paragraphs", []),
             "interesting_facts": summary_fields.get("interesting_facts", []),
+            "sentiment_analysis": summary_fields.get("sentiment_analysis", []),
         }
 
         

@@ -100,8 +100,10 @@ def fetch_html_pychrome(url, logger):
         tab.Runtime.enable()
 
         tab.Page.navigate(url=url)
-        # Wait for the page to load (now 2 seconds)
-        time.sleep(2)
+        # **Increase sleep time to allow full page load**
+        load_wait_time = random.uniform(4, 6)  # Wait between 4 to 6 seconds
+        logger.info(f"Waiting {load_wait_time:.2f} seconds for page to load.")
+        time.sleep(load_wait_time)
 
         clean_html_js = """
         function cleanHTML() {

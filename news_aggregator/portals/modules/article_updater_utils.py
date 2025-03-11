@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+# Full module name: fast_news.news_aggregator.portals.modules.article_updater_utils
 """
 Utility functions for the Article Updater.
 
@@ -92,25 +92,25 @@ def fetch_html(url, logger, sleep_func=random_sleep, context=None, max_attempts=
     return None, last_error_type if last_error_type else "NET"
 
 def update_status_error(session, status_model, url, fetched_at, pub_date, error_type, status_id=None, logger=None):
-    """
-    Update or create a status record in the database for error scenarios.
-
-    For network errors (error_type "NET"), the parsed_at field is left as None to force a retry.
-
-    Args:
-        session: Database session.
-        status_model: The SQLAlchemy model for article status.
-        url (str): The URL of the article.
-        fetched_at (datetime): The time when the HTML was fetched.
-        pub_date (datetime): The publication date of the article.
-        error_type (str): The error type string (e.g., "HTTP403", "NO_DIV", "EMPTY_CONTENT").
-        status_id: Optional status record identifier.
-        logger: Optional logger for logging.
-    """
     parsed_at = None if error_type == "NET" else datetime.now(timezone.utc)
     if logger:
         logger.info(f"Updating status for {url} with error {error_type}.")
 
+    # Truncate or map error_type to ensure it's no longer than 10 characters.
+    # Option 1: Simple truncation:
+    if len(error_type) > 10:
+        error_type = error_type[:10]
+    
+    # Option 2: Use a mapping (uncomment and adjust as needed):
+    # error_mapping = {
+    #     "User abort, call stop() when calling Runtime.evaluate": "USR_ABORT",
+    #     "HTTP403": "HTTP403",
+    #     "HTTP404": "HTTP404",
+    #     "NO_CONTENT": "NO_CONTENT",
+    #     # add additional mappings as necessary
+    # }
+    # error_type = error_mapping.get(error_type, error_type[:10])
+    
     if status_id:
         status_obj = session.query(status_model).filter(status_model.status_id == status_id).first()
         if status_obj:
@@ -141,6 +141,8 @@ def update_status_error(session, status_model, url, fetched_at, pub_date, error_
             status_type=error_type
         )
         session.add(new_status)
+
+
 
 def update_status_success(session, status_model, url, fetched_at, parsed_at, pub_date, status_id=None, logger=None):
     """

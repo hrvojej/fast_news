@@ -3,6 +3,9 @@ Below is an updated version of your README with the necessary changes. In this v
 ---
 # venv
 C:\Users\Korisnik\Desktop\TLDR\venv\Scripts\Activate.ps1
+cd C:\Users\Korisnik\Desktop\TLDR\fast_news\news_aggregator\nlp\summarizer
+python main.py --schema pt_nyt --env dev --article-id "0078e4d3-5782-4c73-a6ae-d791e7d8e914"
+
 
 ```markdown
 # Article Summarization System

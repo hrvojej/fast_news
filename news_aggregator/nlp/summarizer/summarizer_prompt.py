@@ -32,7 +32,7 @@ def create_prompt(content, article_length, include_images=True, enable_entity_li
     try:
         # Base prompt with main topic identification
         prompt = (
-            "Create a focused, visually enhanced summary of the main topic from the following text using these guidelines:\n\n"
+            "Create a visually enhanced and focused summary of the main topic from the following text. The summary must be at least 1500 words in total. Additionally, perform a web search to retrieve extra sensational, dramatic, intriguing and compelling information related to the article’s title, and incorporate these interesting facts both within the summary and in a dedicated 'Interesting Facts' section.:\n\n"
             
             "MAIN TOPIC IDENTIFICATION:\n"
             "1. Determine the central topic by analyzing the article title, introductory paragraphs, and recurring themes or keywords.\n"
@@ -55,11 +55,13 @@ def create_prompt(content, article_length, include_images=True, enable_entity_li
                 "   - For interesting facts: 'facts-container', 'facts-list', 'fact-primary', 'fact-secondary', 'fact-conclusion'\n"
                 "   - For separators: 'separator', 'divider', 'gradient-divider', 'facts-divider'\n"
                 "   - For entity structure: 'entity-overview-heading', 'entity-grid', 'entity-category', 'entity-category-title', 'entity-list', 'no-entity'\n"
+                "   - For sentiment analysis: 'entity-sentiment', 'entity-name', 'entity-sentiment-details', 'sentiment-positive', 'sentiment-negative'\n"
                 "   - For miscellaneous elements: 'entity-spacing', 'transition-text', 'date-numeric', 'number-numeric', 'fact-bullet', 'fact-bullet-secondary'\n"
                 "2. NEVER include any inline styles (style attribute) or custom classes not listed above.\n"
                 "3. Always wrap your entire response in a single <div> element.\n"
                 "4. Use EXACTLY these class names with no variations, additions, or modifications.\n\n"
             )
+
         
         # Add format restrictions for longer articles
         if article_length > 5000:
@@ -73,6 +75,7 @@ def create_prompt(content, article_length, include_images=True, enable_entity_li
                 "6. Never use 'The article discusses the' or similar phrases to start your response. Just give summary without relating to source.\n" 
                 "7. NEVER use inline styles (style attributes) in any element - use ONLY the specified CSS classes.\n"
                 "Example: <div><h1 class=\"article-title\">Example Title</h1><p>Content here...</p></div>\n\n"
+                "8. All paragraphs must be wrapped in <p> tags,  do not use just plain text with newlines.\n"
             )
 
         # Add title formatting instructions
@@ -80,7 +83,7 @@ def create_prompt(content, article_length, include_images=True, enable_entity_li
             "ENGAGING TITLE:\n"
             "1. Create a visually distinctive title using: '<h1 class=\"article-title\">[Title text]</h1>'\n"
             "2. The title should directly relate to the central issue or conflict in the article.\n"
-            "3. Make it compelling and descriptive; it can be longer if needed and does not have to be in question format.\n"
+            "3. Make it sensational, dramatic, intriguing, compelling, and descriptive, so that it motivates the user to discover something. It may be extended if necessary.\n"
             "4. For emphasis on key words in the title, use: '<span class=\"emphasis-keyword\">[key word]</span>'\n"
             "5. ALWAYS use the exact class name \"article-title\" for the h1 element and \"emphasis-keyword\" for emphasis spans - no variations.\n"
             "Example: <h1 class=\"article-title\">The <span class=\"emphasis-keyword\">Rise</span> and <span class=\"emphasis-keyword\">Fall</span> of a Tech Giant: A Story of Innovation and Intrigue</h1>\n\n"
@@ -165,14 +168,14 @@ def create_prompt(content, article_length, include_images=True, enable_entity_li
        # Add entity linking instructions based on setting
         if enable_entity_links:
             prompt += (
-                "5. For each entity, create hyperlinks to external reference sources using EXACTLY these formats:\n"
-                "   - For NAMED INDIVIDUALS: <strong class=\"named-individual\"><u><a href=\"https://en.wikipedia.org/wiki/[Entity_Name_Formatted]\" target=\"_blank\">[Entity Name]</a></u></strong>\n"
-                "   - For ORGANIZATIONS & PRODUCTS: <strong class=\"orgs-products\"><a href=\"https://en.wikipedia.org/wiki/[Entity_Name_Formatted]\" target=\"_blank\">[Entity Name]</a></strong>\n"
-                "   - For LOCATIONS: <strong class=\"location\"><a href=\"https://en.wikipedia.org/wiki/[Entity_Name_Formatted]\" target=\"_blank\">[Entity Name]</a></strong>\n"
-                "   - When formatting Wikipedia URLs, replace spaces with underscores and handle special characters appropriately\n"
-                "   - For entities unlikely to have dedicated Wikipedia pages, use appropriate alternative references or omit hyperlinks\n"
-                "   - All other entity types must use the standard styling formats listed below WITHOUT hyperlinks\n"
-            )
+                "5. Create Google search hyperlinks for all of the entities mentioned in 'ENTITY OVERVIEW SECTION:' using EXACTLY these formats:\n"
+                        "   - For NAMED INDIVIDUALS: <strong class=\"named-individual\"><u><a href=\"https://www.google.com/search?q=[Entity_Name_Formatted]\" target=\"_blank\">[Entity Name]</a></u></strong>\n"
+                        "   - For ORGANIZATIONS & PRODUCTS: <strong class=\"orgs-products\"><a href=\"https://www.google.com/search?q=[Entity_Name_Formatted]\" target=\"_blank\">[Entity Name]</a></strong>\n"
+                        "   - For LOCATIONS: <strong class=\"location\"><a href=\"https://www.google.com/search?q=[Entity_Name_Formatted]\" target=\"_blank\">[Entity Name]</a></strong>\n"
+                        "   - When formatting Google search URLs, replace spaces with '+' characters and handle special characters appropriately\n"
+                        "   - For entities unlikely to return verifiable results, omit hyperlinks\n"
+                        "   - All other entity types must use the standard styling formats listed below WITHOUT hyperlinks\n"
+                        )
         else:
             prompt += (
                 "5. Format EACH entity type using ONLY these EXACT HTML structures:\n"
@@ -207,8 +210,8 @@ def create_prompt(content, article_length, include_images=True, enable_entity_li
             
             "SUMMARY CREATION:\n"
             "1. Create a section with EXACTLY this heading: '<strong class=\"summary-heading\">Summary:</strong>'\n"
-            "2. Write a comprehensive, detailed, and extended summary that thoroughly covers the central topic. Expand on key points with multiple paragraphs, elaborate supporting details, and extensive analysis..\n"
-            "3. Structure your summary with these EXACT classes:\n"
+            "2. Write a sensational, dramatic, intriguing, compelling and comprehensive, detailed, and extended summary that thoroughly covers the central topic. Expand on key points with multiple paragraphs, elaborate supporting details, and extensive analysis..\n"
+            "3. Structure your summary with these EXACT classes. You ABSOLUTELY MUST use all of these classes while creating article.You ABSOLUTELY MUST!!!! :\n"
             "   - First paragraph must use: <p class=\"summary-intro\">First paragraph content...</p>\n"
             "   - For key sentences: <span class=\"key-sentence\">Important sentence</span>\n"
             "   - For supporting points: <p class=\"supporting-point\">Supporting content...</p>\n"
@@ -243,24 +246,59 @@ def create_prompt(content, article_length, include_images=True, enable_entity_li
         # Add interesting facts section
         prompt += (
             "INTERESTING FACTS SECTION:\n"
-            "1. Create a section with EXACTLY this heading: '<strong class=\"facts-heading\">Interesting Facts:</strong>'\n"
+            "1. Create a section with EXACTLY this heading:\n"
+            "   '<strong class=\"facts-heading\">Interesting Facts:</strong>'\n\n"
             "2. Structure the facts section using this EXACT HTML pattern:\n"
             "   <div class=\"facts-container\">\n"
             "     <ul class=\"facts-list\">\n"
-            "       <li class=\"fact-primary\"><span class=\"fact-bullet\">●</span>First fact content...</li>\n"
-            "       <li class=\"fact-secondary\"><span class=\"fact-bullet-secondary\">○</span>Second fact content...</li>\n"
-            "       <li class=\"fact-conclusion\"><span class=\"fact-bullet\">●</span>Final important fact...</li>\n"
+            "       <li class=\"fact-primary\">\n"
+            "         <span class=\"fact-bullet\">●</span>First fact content...\n"
+            "       </li>\n"
+            "       <li class=\"fact-secondary\">\n"
+            "         <span class=\"fact-bullet-secondary\">○</span>Second fact content...\n"
+            "       </li>\n"
+            "       <li class=\"fact-conclusion\">\n"
+            "         <span class=\"fact-bullet\">●</span>Final important fact...\n"
+            "       </li>\n"
             "     </ul>\n"
-            "   </div>\n"
+            "   </div>\n\n"
             "3. Include 5-10 additional interesting facts about the subject matter.\n"
-            "4. For each fact, alternate between the classes 'fact-primary' and 'fact-secondary', with the last fact using 'fact-conclusion'.\n"
-            "5. Format all entity mentions using the EXACT same HTML patterns and class names as in the summary section.\n"
-            "6. For dates, use: <span class=\"date-numeric\">date</span>\n"
-            "7. For numbers and statistics, use: <span class=\"number-numeric\">number</span>\n"
+            "4. For each fact, alternate between the classes 'fact-primary' and 'fact-secondary', with the last fact using 'fact-conclusion'.\n\n"
+            "5. Format all entity mentions using the EXACT same HTML patterns and class names as in the summary section.\n\n"
+            "6. For dates, use:\n"
+            "   <span class=\"date-numeric\">date</span>\n\n"
+            "7. For numbers and statistics, use:\n"
+            "   <span class=\"number-numeric\">number</span>\n\n"
             "8. CRITICAL: NEVER reference the source material. Present each fact as a direct statement about the subject matter.\n"
-            "9. IMPORTANT: Only include facts that are directly relevant to the core topic.\n"
-            "10. End this section with EXACTLY: <div class=\"facts-divider\"></div>\n"
+            "9. IMPORTANT: Only include facts that are directly relevant to the core topic.\n\n"
+            "10. End this section with EXACTLY:\n"
+            "    <div class=\"facts-divider\"></div>\n"
         )
+        
+        # Add sentiment analysis section
+        prompt += (
+            "SENTIMENT ANALYSIS SECTION:\n"
+            "1. Perform a comprehensive web search to retrieve recent and relevant user comments related to this topic. Use the article title and key entities as search queries to find diverse public opinions, criticisms, and praises. Consider comments from free news portals and include those with visible vote counts (likes/upvotes or dislikes) if available.\n" 
+            "2. For each key entity mentioned in the article, extract all comments that clearly reference the entity by name or unambiguous context. Determine whether each comment is positive or negative in sentiment.\n"
+            "3. Along with sentiment classification, extract any associated vote counts from the comment (e.g., upvotes for positive comments or dislikes/upvotes for negative comments). If a vote count is not provided, count the comment as a single vote.\n"
+            "4. Aggregate the sentiment data for each key entity by summing the vote counts for positive and negative comments separately, thereby producing a robust positive score and a negative score for that entity. If there is insufficient comment data for an entity, search additional sources (e.g., social media or discussion forums) or note that the available data is minimal.\n"
+            "5. Generate a brief summary (one to two sentences) for each key entity that encapsulates the overall sentiment and common themes found in the analyzed comments.\n"
+            "6. Identify and list the most important words or phrases mentioned in relation to each entity in the analyzed comments. This list should capture key aspects or repeated terms from the discussion.\n"
+            "7. Present the sentiment overview for each key entity using the following HTML structure:\n"
+            "   <div class=\"entity-sentiment\">\n"
+            "     <h4 class=\"entity-name\">[Entity Name]</h4>\n"
+            "     <p class=\"entity-sentiment-details\">\n"
+            "       Positive: <span class=\"sentiment-positive\">[Positive Count]</span> | Negative: <span class=\"sentiment-negative\">[Negative Count]</span>\n"
+            "     </p>\n"
+            "     <p class=\"entity-summary\">[Summary of comments]</p>\n"
+            "     <p class=\"entity-keywords\">Key words/phrases: [Keywords and phrases]</p>\n"
+            "   </div>\n"
+            "8. Apply visual styling so that numbers within the class 'sentiment-positive' appear in green, and those in 'sentiment-negative' appear in red.\n"
+            "9. Ensure that this entire section adheres to the overall formatting rules: it must be wrapped within a single <div> container and use only the specified CSS classes without any inline styles.\n\n"
+        )
+
+
+
 
         prompt += "\nARTICLE TEXT:\n" + content + "\n"
 

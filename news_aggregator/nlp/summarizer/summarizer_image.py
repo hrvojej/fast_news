@@ -19,7 +19,8 @@ from summarizer_config import OUTPUT_HTML_DIR, get_config_value, CONFIG
 logger = get_logger(__name__)
 
 # Directory for storing images
-IMAGES_DIR = os.path.join(OUTPUT_HTML_DIR, "images")
+BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
+IMAGES_DIR = os.path.join(BASE_DIR, 'frontend', 'static', 'images')
 
 # Standard class names for images
 IMAGE_CLASSES = {
@@ -138,15 +139,15 @@ def download_image(url, article_id, base_name=None, counter=None):
         # Verify file existence explicitly
         if os.path.exists(filepath):
             file_size = os.path.getsize(filepath)
-            relative_path = os.path.join("images", filename)
+            # Just store the filename, not the full path with "images/"
             logger.info(f"Downloaded image successfully:\n"
                         f"    Original URL: {url}\n"
-                        f"    Local path: {relative_path}\n"
+                        f"    Local path: {filename}\n"
                         f"    Absolute path: {filepath}\n"
                         f"    Size: {file_size} bytes, Content-Type: {content_type}")
 
             return {
-                "path": relative_path,
+                "path": filename,  # JUST THE FILENAME, NOT THE PATH
                 "filename": filename,
                 "original_url": url,
                 "content_type": content_type,

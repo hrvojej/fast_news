@@ -1,22 +1,30 @@
+<!-- Add this at the beginning of your template for debugging -->
+{% if fetched_images %}
+<div style="background-color: #ffeeee; padding: 10px; border: 1px solid red; margin-bottom: 10px;">
+    <p>Debug: Found {{ fetched_images|length }} fetched images</p>
+    {% for img in fetched_images %}
+        <p>Image {{ loop.index0 }}: {{ img.url }}</p>
+    {% endfor %}
+    <p>Relative static path: {{ relative_static_path }}</p>
+</div>
+{% else %}
+<div style="background-color: #ffeeee; padding: 10px; border: 1px solid red; margin-bottom: 10px;">
+    <p>Debug: No fetched images available</p>
+</div>
+{% endif %}
+
 {% extends "base.html" %}
 
 {% block title %}{{ title or "Article Summary" }}{% endblock %}
 
 {% block extra_css %}
-    <link rel="stylesheet" href="{{ static_url('css/article.css') }}">
+    <link rel="stylesheet" href="{{ relative_static_path }}/css/article.css">
 {% endblock %}
 
 {% block content %}
 <div class="article-container">
     <!-- Main Article Title -->
     <h1 class="article-title">{{ title }}</h1>
-    
-    <!-- Article Metadata -->
-    <div class="article-meta">
-        <p>Article ID: {{ article_id }}</p>
-        <p>URL: <a href="{{ url }}">{{ url }}</a></p>
-        <p>Processed: {{ processed_date }}</p>
-    </div>
     
     <!-- Source Attribution -->
     {% if source_attribution %}
@@ -51,26 +59,90 @@
         </div>
     </div>
     {% endif %}
-    
+
+    <!-- Sentiment Analysis Section -->
+    {% if sentiment_analysis %}
+    <div class="sentiment-analysis">
+        <strong class="summary-heading">Sentiment Analysis:</strong>
+        {% for sentiment in sentiment_analysis %}
+            <div class="entity-sentiment">
+                <h4 class="entity-name">{{ sentiment.entity }}</h4>
+                <p class="entity-sentiment-details">
+                    Positive: <span class="sentiment-positive">{{ sentiment.positive }}</span> | Negative: <span class="sentiment-negative">{{ sentiment.negative }}</span>
+                </p>
+                <p class="entity-summary">Summary: {{ sentiment.summary }}</p>
+                <p class="entity-keywords">
+                    {% if sentiment.keywords %}
+                        {% for keyword in sentiment.keywords %}
+                            <span class="keyword">{{ keyword }}</span>{% if not loop.last %}, {% endif %}
+                        {% endfor %}
+                    {% else %}
+                        None
+                    {% endif %}
+                </p>
+            </div>
+        {% endfor %}
+    </div>
+    {% endif %}
+
+
     <!-- Featured Image (placed after Entity Overview) -->
     {% if featured_image %}
     <div class="featured-image">
-        <img src="{{ featured_image.url }}" alt="{{ featured_image.alt|default('Featured image') }}">
+        <img src="{{ relative_static_path }}/images/{{ featured_image.url }}" alt="{{ featured_image.alt|default('Featured image') }}">
         {% if featured_image.caption %}
         <figcaption>{{ featured_image.caption }}</figcaption>
         {% endif %}
     </div>
     {% endif %}
-    
-    <!-- Article Summary -->
+
+    <!-- Debug: List classes of summary paragraphs -->
+    <div style="background-color: #eef; padding: 5px; margin-bottom: 10px; font-size: 12px;">
+        <p>Classes: 
+        {% for paragraph in summary_paragraphs %}
+            {{ paragraph.class }}, 
+        {% endfor %}
+        </p>
+    </div>
+
+    <!-- Render summary paragraphs with images inserted at fixed positions -->
     <div class="summary">
-        {% if summary_paragraphs %}
-          {% for sp in summary_paragraphs %}
-             <div class="{{ sp.class }}">{{ sp.content|safe }}</div>
-          {% endfor %}
-        {% else %}
-           {{ summary|safe }}
-        {% endif %}
+        {% set supporting_point_count = namespace(value=0) %}
+        {% for paragraph in summary_paragraphs %}
+            <div class="{{ paragraph.class }}">{{ paragraph.content|safe }}</div>
+            
+            {% if paragraph.class == 'supporting-point' %}
+                {% set supporting_point_count.value = supporting_point_count.value + 1 %}
+                
+                {# Insert the second image after the 2nd supporting-point #}
+                {% if supporting_point_count.value == 2 and fetched_images and fetched_images|length > 1 %}
+                    <div class="extra-image" style="margin: 20px 0; border: 1px solid #ddd; padding: 10px;">
+                        <img src="{{ relative_static_path }}/images/{{ fetched_images[1].url }}" alt="{{ fetched_images[1].caption|default('Article image') }}" style="max-width:100%;">
+                        {% if fetched_images[1].caption %}
+                            <figcaption>{{ fetched_images[1].caption }}</figcaption>
+                        {% endif %}
+                    </div>
+                {% endif %}
+                
+                {# Insert the third image after the 4th supporting-point #}
+                {% if supporting_point_count.value == 4 %}
+                    <div class="extra-image" style="margin: 20px 0; border: 1px solid #ddd; padding: 10px;">
+                        {% if fetched_images and fetched_images|length > 2 %}
+                            <img src="{{ relative_static_path }}/images/{{ fetched_images[2].url }}" alt="{{ fetched_images[2].caption|default('Article image') }}" style="max-width:100%;">
+                            {% if fetched_images[2].caption %}
+                                <figcaption>{{ fetched_images[2].caption }}</figcaption>
+                            {% endif %}
+                        {% elif featured_image %}
+                            {# Fallback to featured image if a third fetched image isn’t available #}
+                            <img src="{{ relative_static_path }}/images/{{ featured_image.url }}" alt="{{ featured_image.caption|default('Featured image') }}" style="max-width:100%;">
+                            {% if featured_image.caption %}
+                                <figcaption>{{ featured_image.caption }}</figcaption>
+                            {% endif %}
+                        {% endif %}
+                    </div>
+                {% endif %}
+            {% endif %}
+        {% endfor %}
     </div>
     
     <!-- Interesting Facts Section -->
@@ -87,58 +159,26 @@
     </div>
     {% endif %}
     
-    <!-- Original Article Content with Inline Second Image -->
-    <div class="article-content">
-        <h2>Original Article Content</h2>
-        {% set paragraphs = content|split('</p>') %}
-        {% if paragraphs|length > 2 and fetched_images and fetched_images|length > 0 %}
-            {# Output first two paragraphs (re-adding the closing tag) #}
-            {% for p in paragraphs[0:2] %}
-                {{ p|safe }}</p>
-            {% endfor %}
-            {# Insert inline second image using the first element from fetched_images #}
-            <div class="in-content-image">
-                <img src="{{ fetched_images[0].url }}" alt="{{ fetched_images[0].caption|default('Article image') }}">
-                {% if fetched_images[0].caption %}
-                <figcaption>{{ fetched_images[0].caption }}</figcaption>
-                {% endif %}
-            </div>
-            {# Output the remaining paragraphs #}
-            {% for p in paragraphs[2:] %}
-                {% if p|trim %}
-                    {{ p|safe }}</p>
-                {% endif %}
-            {% endfor %}
-        {% else %}
-            {{ content|safe }}
+    {# The "Original Article Content" section and its inline image have been removed #}
+        <!-- Debug: Raw Gemini API Output -->
+        {% if response_text %}
+        <div style="background-color: #eeffee; padding: 10px; border: 1px solid green; margin-top: 10px;">
+            <p>Debug: Raw Gemini API Output</p>
+            <pre>{{ response_text|safe }}</pre>
+        </div>
         {% endif %}
-    </div>
     
-    {# Additional Fetched Images (if more than one exists, show the rest) #}
-    {% if fetched_images and fetched_images|length > 1 %}
-    <div class="additional-images">
-        {% for image in fetched_images[1:] %}
-            <figure class="article-image">
-                <img src="{{ image.url }}" alt="{{ image.caption|default('Article image') }}">
-                <figcaption>{{ image.caption }}</figcaption>
-            </figure>
-        {% endfor %}
-    </div>
-    {% endif %}
+        <!-- Debug: Sentiment Analysis Data -->
+        {% if sentiment_analysis %}
+        <div style="background-color: #ffffee; padding: 10px; border: 1px solid orange; margin-top: 10px;">
+            <p>Debug: Sentiment Analysis Data</p>
+            <pre>{{ sentiment_analysis|safe }}</pre>
+        </div>
+        {% else %}
+        <div style="background-color: #ffffee; padding: 10px; border: 1px solid orange; margin-top: 10px;">
+            <p>Debug: No Sentiment Analysis Data Available</p>
+        </div>
+        {% endif %}
     
-    <!-- API Response (if shown) -->
-    {% if show_api_response %}
-    <div class="api-response">
-        <h2>Raw API Response</h2>
-        <pre>{{ response_text }}</pre>
-    </div>
-    {% endif %}
-    
-    {% if show_api_response %}
-    <div class="gemini-raw-response">
-        <h2>Full Gemini Raw Response</h2>
-        <pre>{{ response_text | e }}</pre>
-    </div>
-    {% endif %}
 </div>
 {% endblock %}

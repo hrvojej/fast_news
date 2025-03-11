@@ -9,8 +9,11 @@ import time
 
 from google import genai
 from google.genai import types
+from google.genai.types import Tool, GenerateContentConfig, GoogleSearch
+
 
 from summarizer_logging import get_logger
+
 
 # Initialize logger
 logger = get_logger(__name__)
@@ -43,7 +46,7 @@ def initialize_api():
 
 def get_model_for_content_length(content_length):
     # Always use the non-experimental model for image search capability
-    return 'gemini-2.0-flash'
+    return 'gemini-2.0-pro-exp-02-05'
 
 
 def create_safety_settings():
@@ -139,12 +142,18 @@ def call_gemini_api(prompt, article_id, content_length, retries=2):
             logger.info(f"Calling Gemini API for article ID {article_id} (attempt {attempt+1}/{retries+1})")
             
             start_time = time.time()
+
+            google_search_tool = Tool(google_search=GoogleSearch())
+
             response = client.models.generate_content(
                 model=model,
                 contents=[{"role": "user", "parts": [{"text": prompt}]}],
-                config=config,
-                tools="google_search_retrieval"  # Enable search grounding
+                config=GenerateContentConfig(
+                    tools=[google_search_tool],
+                    response_modalities=["TEXT"],
+                )
             )
+
 
             elapsed_time = time.time() - start_time
             
