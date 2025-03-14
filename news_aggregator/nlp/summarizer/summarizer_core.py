@@ -65,15 +65,26 @@ class ArticleSummarizer:
     def summarize_article(self, article_info):
         try:
             # Extract article information
-            content = article_info.get('content', '').strip()
+            content = article_info.get('content', '')
             article_id = article_info.get('article_id')
             title = article_info.get('title', '')
             url = article_info.get('url', '')
             
             # Validate input
             if not content or not isinstance(content, str):
-                logger.info(f"No valid content to summarize for article ID: {article_id}")
+                content_length = len(content) if content else 0
+                logger.error(
+                    f"Invalid content for article ID: {article_id}. "
+                    f"Type: {type(content)}, Length: {content_length}. "
+                    f"Content snippet: {content[:200] if isinstance(content, str) else 'N/A'}"
+                )
                 return False
+            else:
+                # Also log a debug snippet if in debug mode
+                logger.debug(f"Article ID {article_id} content length: {len(content)}. Preview: {content[:200]}")
+            
+            # Ensure we strip whitespace after validating type
+            content = content.strip()
             
             logger.info(f"=== START ARTICLE ID: {article_id} ===")
             logger.info(f"ARTICLE CONTENT LENGTH: {len(content)} characters")
@@ -118,10 +129,13 @@ class ArticleSummarizer:
                     return False
             
             # Save as HTML, now passing keywords from the database to enable image search
+            # Save as HTML, now passing the schema along with keywords
             html_saved = save_as_html(
-                article_id, title, url, content, summary_text, raw_response_text,
-                keywords=article_info.get('keywords')
+                article_id, title, url, content, summary_text, raw_response_text, self.schema,
+                keywords=article_info.get('keywords'),
+                existing_gemini_title=article_info.get('summary_article_gemini_title')
             )
+
             if not html_saved:
                 logger.error(f"Failed to save HTML output for article ID: {article_id}")
                 return False
@@ -145,7 +159,7 @@ class ArticleSummarizer:
         
         try:
             # Get articles
-            articles = get_articles(self.db_context, self.schema, limit)
+            articles = get_articles(self.db_context, self.schema, limit, recent_timeout_hours=getattr(self, 'recent_timeout', None))
             article_count = len(articles)
             logger.info(f"Found {article_count} articles to process")
             

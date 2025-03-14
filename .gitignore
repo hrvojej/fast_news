@@ -174,3 +174,7 @@ cython_debug/
 log/
 dagster_home/
 .db
+images/
+articles/
+categories/
+node_modules/

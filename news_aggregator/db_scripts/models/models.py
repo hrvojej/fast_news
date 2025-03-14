@@ -91,8 +91,8 @@ def create_portal_article_model(schema: str):
             'description': sa.Column(sa.Text),
             'content': sa.Column(sa.Text),
             'author': sa.Column(ARRAY(sa.Text)),
-            'pub_date': sa.Column(TIMESTAMP(timezone=True)),            
-            'category_id': sa.Column(UUID(as_uuid=True), nullable=False),            
+            'pub_date': sa.Column(TIMESTAMP(timezone=True)),
+            'category_id': sa.Column(UUID(as_uuid=True), nullable=False),
             'keywords': sa.Column(ARRAY(sa.Text)),
             'reading_time_minutes': sa.Column(sa.Integer),
             'language_code': sa.Column(sa.String(10)),
@@ -101,16 +101,22 @@ def create_portal_article_model(schema: str):
             'share_count': sa.Column(sa.Integer, server_default=sa.text("0")),
             'view_count': sa.Column(sa.Integer, server_default=sa.text("0")),
             'comment_count': sa.Column(sa.Integer, server_default=sa.text("0")),
-            # New NLP columns from migration 0012
+            # NLP columns from migration 0012
             'summary': sa.Column(sa.Text),
             'tldr': sa.Column(sa.Text),
             'topics': sa.Column(sa.JSON),
             'entities': sa.Column(sa.JSON),
             'relations': sa.Column(sa.JSON),
             'sentiment_label': sa.Column(sa.Text),
-            'nlp_updated_at': sa.Column(TIMESTAMP(timezone=True))
+            'nlp_updated_at': sa.Column(TIMESTAMP(timezone=True)),
+            # New summary columns from migration 0013
+            'summary_generated_at': sa.Column(TIMESTAMP(timezone=True)),
+            'summary_article_gemini_title': sa.Column(sa.Text),
+            'summary_featured_image': sa.Column(sa.Text),
+            'summary_first_paragraph': sa.Column(sa.Text),
         }
     )
+
 # ────────────────────────────────────────────── Dynamic Portal Model (Article Status) ───────────────────────────────────────────────
 
 def create_portal_article_status_model(schema: str):

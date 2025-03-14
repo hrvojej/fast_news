@@ -71,6 +71,9 @@ def parse_arguments():
                         help="Interval in seconds between continuous runs (default: 3600)")
     parser.add_argument('--verbose', action='store_true',
                         help="Enable verbose logging")
+    parser.add_argument('--recent-timeout', type=int, default=6,
+                        help="Do not process articles that have been processed within the last specified number of hours (default: 6)")
+
     
     return parser.parse_args()
 
@@ -118,7 +121,8 @@ def process_single_article(args, summarizer):
     try:
         with DatabaseContext.get_instance(args.env).session() as session:
             from sqlalchemy import text
-            query = text("SELECT article_id, title, url, content FROM {}.articles WHERE article_id = :article_id".format(args.schema))
+            query = text("SELECT article_id, title, url, content, summary_article_gemini_title FROM {}.articles WHERE article_id = :article_id".format(args.schema))
+
             article = session.execute(query, {"article_id": args.article_id}).fetchone()
 
             if article:
@@ -264,6 +268,10 @@ def main():
             env=args.env,
             debug_mode=args.debug
         )
+        
+        # Set the recent timeout (in hours) so that articles processed within this time window are skipped.
+        summarizer.recent_timeout = args.recent_timeout
+        logger.info(f"Skipping articles processed in the last {args.recent_timeout} hours")
         
         # Process based on mode
         if args.article_id:

@@ -20,7 +20,8 @@ logger = get_logger(__name__)
 
 # Directory for storing images
 BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
-IMAGES_DIR = os.path.join(BASE_DIR, 'frontend', 'static', 'images')
+IMAGES_DIR = os.path.join(BASE_DIR, 'frontend', 'web', 'static', 'images')
+
 
 # Standard class names for images
 IMAGE_CLASSES = {

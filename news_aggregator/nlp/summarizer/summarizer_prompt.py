@@ -32,7 +32,7 @@ def create_prompt(content, article_length, include_images=True, enable_entity_li
     try:
         # Base prompt with main topic identification
         prompt = (
-            "Create a visually enhanced and focused summary of the main topic from the following text. The summary must be at least 1500 words in total. Additionally, perform a web search to retrieve extra sensational, dramatic, intriguing and compelling information related to the article’s title, and incorporate these interesting facts both within the summary and in a dedicated 'Interesting Facts' section.:\n\n"
+            "Create a visually enhanced and focused summary of the main topic from the following text. The summary must be at least 800 words in total. Additionally, perform a web search to retrieve extra sensational, dramatic, intriguing and compelling information related to the article’s title, and incorporate these interesting facts both within the summary and in a dedicated 'Interesting Facts' section.:\n\n"
             
             "MAIN TOPIC IDENTIFICATION:\n"
             "1. Determine the central topic by analyzing the article title, introductory paragraphs, and recurring themes or keywords.\n"
@@ -106,11 +106,8 @@ def create_prompt(content, article_length, include_images=True, enable_entity_li
             "7. For the original source, apply these STRICT guidelines:\n"
             "   - NEVER attribute to any news portals, websites, news organizations, or media outlets (such as The New York Times, BBC, PBS, etc.)\n"
             "   - NEVER attribute to photography sources, photographers, or image credits\n"
-            "   - When source is known, attribute to the specific originating organization\n"
-            "   - When source is unknown, attribute to ALL organizations mentioned in the title (separated by commas)\n"
-            "   - If no organizations appear in the title, attribute to up to THREE most important organizations from the article body\n"
             "   - For government sources, ALWAYS specify which government (e.g., 'U.S. Department of Treasury' not just 'Government')\n"
-            "   - Valid sources include: specific companies, named government agencies, industry associations, research institutions, regulatory bodies\n"
+            "   - Valid sources include: professionals, specific companies, named government agencies, industry associations, research institutions, regulatory bodies\n"
             "8. For the date:\n"
             "   - Use the format 'Month DD, YYYY' if the exact date is available\n"
             "   - If only the month and year are known, use 'Month YYYY'\n"
@@ -122,8 +119,16 @@ def create_prompt(content, article_length, include_images=True, enable_entity_li
             "   - Source: The New York Times | Published: April 26, 2024 (✗ - news portal)\n"
             "   - Source: Government Review | Published: February 28, 2024 (✗ - non-specific government)\n"
             "   - Source: James Lester Photography | Published: 2024 (✗ - photography source)\n\n"
+            "11. For finding the online author of the text, adhere to the following guidelines:\n"
+            "   - Conduct a thorough search using reputable and verifiable online sources to identify the author.\n"
+            "   - Prioritize sources that are professional, specific companies, named government agencies, industry associations, research institutions, or regulatory bodies.\n"
+            "   - Verify the author's identity by cross-referencing at least two authoritative sources before final attribution.\n"
+            "   - If the online author is reliably identified, include the full name as provided by the source.\n"
+            "   - If multiple potential authors are found, choose the one that most clearly aligns with the text content based on context.\n"
+            "   - If the author cannot be determined or verified, state 'Author: Unknown' instead of making an attribution.\n"
+            "   - Always provide citation details and, if applicable, a URL for the source where the author was confirmed.\n"
         )
-        
+
         
        
         # Add keywords section
@@ -252,13 +257,13 @@ def create_prompt(content, article_length, include_images=True, enable_entity_li
             "   <div class=\"facts-container\">\n"
             "     <ul class=\"facts-list\">\n"
             "       <li class=\"fact-primary\">\n"
-            "         <span class=\"fact-bullet\">●</span>First fact content...\n"
+            "        First fact content...\n"
             "       </li>\n"
             "       <li class=\"fact-secondary\">\n"
-            "         <span class=\"fact-bullet-secondary\">○</span>Second fact content...\n"
+            "        Second fact content...\n"
             "       </li>\n"
             "       <li class=\"fact-conclusion\">\n"
-            "         <span class=\"fact-bullet\">●</span>Final important fact...\n"
+            "        Final important fact...\n"
             "       </li>\n"
             "     </ul>\n"
             "   </div>\n\n"

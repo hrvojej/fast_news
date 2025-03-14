@@ -14,6 +14,10 @@ from datetime import datetime
 from summarizer_logging import get_logger
 from summarizer_config import OUTPUT_HTML_DIR, ensure_output_directory
 from summarizer_image import IMAGES_DIR, process_images_in_html, search_and_download_images
+from summarizer_db import update_article_summary_details
+from db_scripts.db_context import DatabaseContext
+
+
 
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
@@ -21,7 +25,7 @@ from jinja2 import Environment, FileSystemLoader, select_autoescape
 BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
 # Define the template directory path relative to your project structure (note: no extra "web" folder)
 TEMPLATE_DIR = os.path.join(BASE_DIR, 'frontend', 'templates')
-IMAGES_DIR = os.path.join(BASE_DIR, 'frontend', 'static', 'images')
+IMAGES_DIR = os.path.join(BASE_DIR, 'frontend', 'web', 'static', 'images')
 
 
 jinja_env = Environment(
@@ -367,12 +371,13 @@ def extract_summary_fields(clean_html):
         entity_keywords_tag = div.find('p', class_='entity-keywords')
         if entity_keywords_tag:
             keywords_text = entity_keywords_tag.get_text(separator=' ', strip=True)
-            # Remove prefix "Keywords:" if it exists
-            prefix = "Keywords:"
-            if keywords_text.lower().startswith(prefix.lower()):
-                keywords_text = keywords_text[len(prefix):].strip()
+            # Remove common prefixes if they exist
+            for prefix in ["Keywords:", "Key words/phrases:"]:
+                if keywords_text.lower().startswith(prefix.lower()):
+                    keywords_text = keywords_text[len(prefix):].strip()
             # Split the string into a list by comma and trim each keyword
             entity_keywords = [kw.strip() for kw in keywords_text.split(',') if kw.strip()]
+
         
         sentiment_data.append({
             'entity': entity_name,
@@ -414,7 +419,8 @@ def create_filename_from_title(title, url, article_id):
     filename = filename[:50]                    # Limit length
     return f"{filename}.html"
 
-def save_as_html(article_id, title, url, content, summary, response_text, keywords=None):
+def save_as_html(article_id, title, url, content, summary, response_text, schema, keywords=None, existing_gemini_title=None):
+
     """
     Save the article and its summary as an HTML file, with images from Wikimedia based on keywords.
     
@@ -463,15 +469,19 @@ def save_as_html(article_id, title, url, content, summary, response_text, keywor
             logger.warning(f"Invalid summary content: {type(processed_summary)}")
             clean_summary = "<div>No valid summary content available</div>"
         
-        # Attempt to extract Gemini-generated title from the cleaned summary HTML
+        # Attempt to extract Gemini-generated title from the cleaned summary HTML.
+        # If an existing Gemini title is provided (from a prior summary), use it.
         soup_summary = BeautifulSoup(clean_summary, 'html.parser')
-        # legend_container = soup_summary.find('div', class_='legend-container')
-        # if legend_container:
-        #     legend_container.decompose()  # removes the entire legend section
-        # clean_summary = str(soup_summary)
-        
         gemini_title_tag = soup_summary.find('h1', class_='article-title')
-        gemini_title = gemini_title_tag.get_text(separator=' ', strip=True) if gemini_title_tag else title
+        generated_title = gemini_title_tag.get_text(separator=' ', strip=True) if gemini_title_tag else title
+        gemini_title = existing_gemini_title if existing_gemini_title is not None else generated_title
+
+        if existing_gemini_title is not None:
+            logger.info(f"Existing Gemini title found in DB for article {article_id}: '{existing_gemini_title}'. Title unchanged.")
+        else:
+            logger.info(f"New Gemini title generated for article {article_id}: '{generated_title}'.")
+
+
         
         # If clean_summary is empty or just a placeholder, try with the API response
         if not clean_summary or clean_summary in ("<div>No content available</div>", "<div>No valid summary content available</div>"):
@@ -569,6 +579,7 @@ def save_as_html(article_id, title, url, content, summary, response_text, keywor
         # For each additional subfolder level, add one "../".
         depth = subfolder.count(os.sep) + 1 if subfolder else 0
         relative_static_path = "../" * (2 + depth) + "static"
+
         # Determine the correct relative path for static assets
         
         # Create processed date and current year for footer
@@ -616,6 +627,8 @@ def save_as_html(article_id, title, url, content, summary, response_text, keywor
             "summary_paragraphs": summary_fields.get("summary_paragraphs", []),
             "interesting_facts": summary_fields.get("interesting_facts", []),
             "sentiment_analysis": summary_fields.get("sentiment_analysis", []),
+            "schema": schema  # <-- Added schema here,
+
         }
 
         
@@ -644,6 +657,14 @@ def save_as_html(article_id, title, url, content, summary, response_text, keywor
         if os.path.exists(filepath):
             file_size = os.path.getsize(filepath)
             logger.info(f"Successfully saved HTML output to {filepath} (size: {file_size} bytes)")
+            # Update additional summary fields in the database.
+            db_context = DatabaseContext()
+            schema = context.get("schema", "pt_nyt")
+            update_success = update_article_summary_details(db_context, schema, article_id, context)
+            if update_success:
+                logger.info("Database summary details updated successfully.")
+            else:
+                logger.error("Failed to update database summary details.")
             return True
         else:
             logger.error(f"File wasn't created despite no errors: {filepath}")

@@ -1,0 +1,15 @@
+{
+	"$schema": "node_modules/wrangler/config-schema.json",
+	"name": "fastnews",
+	"main": "src/index.js",
+	"compatibility_date": "2025-03-12",
+	"observability": {
+		"enabled": true
+	},
+	"r2_buckets": [
+		{
+			"binding": "STATIC_BUCKET",
+			"bucket_name": "fast-news-static"
+		}
+	]
+}

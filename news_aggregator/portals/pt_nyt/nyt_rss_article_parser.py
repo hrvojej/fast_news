@@ -73,6 +73,10 @@ class NYTRSSParser(BaseRSSParser):
 
         link_tag = item.find('link')
         link = link_tag.text.strip() if link_tag else 'https://www.nytimes.com'
+        if "https://www.nytimes.com/video/" in link:
+            logger.info(f"Skipping video article with URL: {link}")
+            return None
+
 
         guid_tag = item.find('guid')
         guid = guid_tag.text.strip() if guid_tag else link  # Fallback to link

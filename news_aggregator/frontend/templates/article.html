@@ -1,5 +1,5 @@
 <!-- Add this at the beginning of your template for debugging -->
-{% if fetched_images %}
+<!-- {% if fetched_images %}
 <div style="background-color: #ffeeee; padding: 10px; border: 1px solid red; margin-bottom: 10px;">
     <p>Debug: Found {{ fetched_images|length }} fetched images</p>
     {% for img in fetched_images %}
@@ -11,11 +11,11 @@
 <div style="background-color: #ffeeee; padding: 10px; border: 1px solid red; margin-bottom: 10px;">
     <p>Debug: No fetched images available</p>
 </div>
-{% endif %}
+{% endif %} -->
 
 {% extends "base.html" %}
 
-{% block title %}{{ title or "Article Summary" }}{% endblock %}
+{% block title %}{{ title or "Fast News" }}{% endblock %}
 
 {% block extra_css %}
     <link rel="stylesheet" href="{{ relative_static_path }}/css/article.css">
@@ -60,30 +60,6 @@
     </div>
     {% endif %}
 
-    <!-- Sentiment Analysis Section -->
-    {% if sentiment_analysis %}
-    <div class="sentiment-analysis">
-        <strong class="summary-heading">Sentiment Analysis:</strong>
-        {% for sentiment in sentiment_analysis %}
-            <div class="entity-sentiment">
-                <h4 class="entity-name">{{ sentiment.entity }}</h4>
-                <p class="entity-sentiment-details">
-                    Positive: <span class="sentiment-positive">{{ sentiment.positive }}</span> | Negative: <span class="sentiment-negative">{{ sentiment.negative }}</span>
-                </p>
-                <p class="entity-summary">Summary: {{ sentiment.summary }}</p>
-                <p class="entity-keywords">
-                    {% if sentiment.keywords %}
-                        {% for keyword in sentiment.keywords %}
-                            <span class="keyword">{{ keyword }}</span>{% if not loop.last %}, {% endif %}
-                        {% endfor %}
-                    {% else %}
-                        None
-                    {% endif %}
-                </p>
-            </div>
-        {% endfor %}
-    </div>
-    {% endif %}
 
 
     <!-- Featured Image (placed after Entity Overview) -->
@@ -97,13 +73,13 @@
     {% endif %}
 
     <!-- Debug: List classes of summary paragraphs -->
-    <div style="background-color: #eef; padding: 5px; margin-bottom: 10px; font-size: 12px;">
+<!--     <div style="background-color: #eef; padding: 5px; margin-bottom: 10px; font-size: 12px;">
         <p>Classes: 
         {% for paragraph in summary_paragraphs %}
             {{ paragraph.class }}, 
         {% endfor %}
         </p>
-    </div>
+    </div> -->
 
     <!-- Render summary paragraphs with images inserted at fixed positions -->
     <div class="summary">
@@ -144,6 +120,33 @@
             {% endif %}
         {% endfor %}
     </div>
+
+        <!-- Sentiment Analysis Section -->
+        {% if sentiment_analysis %}
+        <div class="sentiment-analysis">
+            <strong class="summary-heading">Sentiment Analysis:</strong>
+            {% for sentiment in sentiment_analysis %}
+                <div class="entity-sentiment">
+                    <h4 class="entity-name">{{ sentiment.entity }}</h4>
+                    <p class="entity-sentiment-details">
+                        Positive: <span class="sentiment-positive">{{ sentiment.positive }}</span> | Negative: <span class="sentiment-negative">{{ sentiment.negative }}</span>
+                    </p>
+                    <p class="entity-summary">Summary: {{ sentiment.summary }}</p>
+                    <p class="entity-keywords">
+                        Keywords: 
+                        {% if sentiment.keywords %}
+                            {% for keyword in sentiment.keywords %}
+                                <span class="keyword">{{ keyword }}</span>{% if not loop.last %}, {% endif %}
+                            {% endfor %}
+                        {% else %}
+                            None
+                        {% endif %}
+                    </p>
+                </div>
+            {% endfor %}
+        </div>
+        {% endif %}
+    
     
     <!-- Interesting Facts Section -->
     {% if interesting_facts %}
@@ -161,15 +164,15 @@
     
     {# The "Original Article Content" section and its inline image have been removed #}
         <!-- Debug: Raw Gemini API Output -->
-        {% if response_text %}
+<!--         {% if response_text %}
         <div style="background-color: #eeffee; padding: 10px; border: 1px solid green; margin-top: 10px;">
             <p>Debug: Raw Gemini API Output</p>
             <pre>{{ response_text|safe }}</pre>
         </div>
-        {% endif %}
+        {% endif %} -->
     
         <!-- Debug: Sentiment Analysis Data -->
-        {% if sentiment_analysis %}
+<!--         {% if sentiment_analysis %}
         <div style="background-color: #ffffee; padding: 10px; border: 1px solid orange; margin-top: 10px;">
             <p>Debug: Sentiment Analysis Data</p>
             <pre>{{ sentiment_analysis|safe }}</pre>
@@ -178,7 +181,7 @@
         <div style="background-color: #ffffee; padding: 10px; border: 1px solid orange; margin-top: 10px;">
             <p>Debug: No Sentiment Analysis Data Available</p>
         </div>
-        {% endif %}
+        {% endif %} -->
     
 </div>
 {% endblock %}

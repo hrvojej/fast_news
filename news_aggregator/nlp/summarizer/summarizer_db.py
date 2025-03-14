@@ -6,7 +6,8 @@ Module for database operations for the article summarization system.
 import os
 import sys
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
+
 from sqlalchemy import text
 
 # Add the proper path to locate db_scripts
@@ -21,7 +22,8 @@ from summarizer_logging import get_logger
 # Initialize logger
 logger = get_logger(__name__)
 
-def get_articles(db_context, schema, limit=None):
+def get_articles(db_context, schema, limit=None, recent_timeout_hours=None):
+
     """
     Get articles from the database to be processed.
     
@@ -36,19 +38,31 @@ def get_articles(db_context, schema, limit=None):
     try:
         with db_context.session() as session:
             # Build query
-            query = f"SELECT article_id, title,keywords, url, content FROM {schema}.articles"
-            
-            # Add conditions to filter out articles that already have summaries
-            # Uncomment this if you want to only process articles without summaries
-            # query += " WHERE summary IS NULL OR summary = ''"
+            # query = f"SELECT article_id, title,keywords, url, content FROM {schema}.articles" #  processing again even if summary is not null
+            # Build query
+            # Build query
+            query = f"""
+                SELECT article_id, title, keywords, url, content 
+                FROM {schema}.articles 
+                WHERE summary IS NULL OR summary = ''
+            """
+            if recent_timeout_hours is not None:
+                cutoff_time = datetime.now(timezone.utc) - timedelta(hours=recent_timeout_hours)
+                query += " AND (summary_generated_at IS NULL OR summary_generated_at < :cutoff_time)"
             
             # Add limit if specified
             if limit and isinstance(limit, int) and limit > 0:
                 query += f" LIMIT {limit}"
             
+            # Build parameters dictionary
+            params = {}
+            if recent_timeout_hours is not None:
+                params["cutoff_time"] = cutoff_time
+            
             # Execute query
-            result = session.execute(text(query))
+            result = session.execute(text(query), params)
             articles = result.fetchall()
+
             
             logger.info(f"Retrieved {len(articles)} articles from database")
             return articles
@@ -229,3 +243,81 @@ def get_summarization_stats(db_context, schema):
             "completion_percentage": 0,
             "error": str(e)
         }
+        
+def update_article_summary_details(db_context, schema, article_id, context):
+    """
+    Update additional summary fields for an article in the database.
+
+    Args:
+        db_context: Database context for session management.
+        schema (str): Database schema name.
+        article_id: The ID of the article to update.
+        context (dict): Dictionary containing additional summary fields:
+            - processed_date: Date string for summary_generated_at.
+            - title: Gemini title for summary_article_gemini_title.
+            - featured_image: Dictionary with image data for summary_featured_image.
+            - summary_paragraphs: List of dictionaries; the first paragraph's content is used
+                                  for summary_first_paragraph.
+
+    Returns:
+        bool: True if update successful, False otherwise.
+    """
+    try:
+        with db_context.session() as session:
+            # Convert article_id to UUID if needed
+            if isinstance(article_id, str):
+                try:
+                    import uuid
+                    article_id = uuid.UUID(article_id)
+                except ValueError as e:
+                    logger.error(f"Invalid article_id format: {article_id} - {e}")
+                    return False
+
+            # Extract fields from context
+            processed_date = context.get("processed_date")
+            gemini_title = context.get("title")
+            featured_image_data = context.get("featured_image")
+            if featured_image_data is not None:
+                import json
+                featured_image_data = json.dumps(featured_image_data)
+            summary_paragraphs = context.get("summary_paragraphs", [])
+            summary_first_paragraph = (
+                summary_paragraphs[0]['content'] if summary_paragraphs else None
+            )
+
+            query = text(f"""
+                UPDATE {schema}.articles
+                SET summary_generated_at = :processed_date,
+                    summary_article_gemini_title = :gemini_title,
+                    summary_featured_image = :featured_image,
+                    summary_first_paragraph = :first_paragraph,
+                    nlp_updated_at = :updated_at
+                WHERE article_id = :article_id
+            """)
+
+            params = {
+                "processed_date": processed_date,
+                "gemini_title": gemini_title,
+                "featured_image": featured_image_data,
+                "first_paragraph": summary_first_paragraph,
+                "updated_at": datetime.now(timezone.utc),
+                "article_id": article_id
+            }
+
+            result = session.execute(query, params)
+            session.commit()
+            rows_affected = result.rowcount
+
+            if rows_affected > 0:
+                logger.info(f"Article ID {article_id} additional summary details updated successfully.")
+                return True
+            else:
+                logger.error(f"Article ID {article_id} not found when updating summary details.")
+                return False
+
+    except Exception as e:
+        logger.error(f"Error updating article summary details for article ID {article_id}: {e}", exc_info=True)
+        if 'session' in locals():
+            session.rollback()
+        return False
+

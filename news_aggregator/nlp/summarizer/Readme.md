@@ -5,7 +5,12 @@ Below is an updated version of your README with the necessary changes. In this v
 C:\Users\Korisnik\Desktop\TLDR\venv\Scripts\Activate.ps1
 cd C:\Users\Korisnik\Desktop\TLDR\fast_news\news_aggregator\nlp\summarizer
 python main.py --schema pt_nyt --env dev --article-id "0078e4d3-5782-4c73-a6ae-d791e7d8e914"
+python main.py --schema pt_nyt --env dev --limit 100
 
+
+# Update change in local frontend to CloudFlare
+cd C:\Users\Korisnik\Desktop\TLDR\fast_news\news_aggregator\frontend
+pwsh -ExecutionPolicy Bypass -File update-site.ps1
 
 ```markdown
 # Article Summarization System
@@ -137,6 +142,8 @@ Process a specified number of articles in a single run:
 ```bash
 # Process 20 articles
 python main.py --schema pt_nyt --env dev --limit 20
+python main.py --schema pt_nyt --env dev --limit 100
+
 
 # This will:
 # - Retrieve up to 20 articles from the database
@@ -336,3 +343,11 @@ The image-related functionality is fully decoupled from the text summarization p
 ---
 
 This updated README clarifies that text summarization is handled by the Gemini API while image retrieval is now performed via the Wikimedia Commons API. Let me know if you need further changes or additional sections!
+
+
+#### 14. Skip Recently Processed Articles
+
+To avoid re‑processing articles that have been summarized recently, you can specify a timeout (in hours):
+
+```bash
+python main.py --schema pt_nyt --env dev --limit 20 --recent-timeout 6
