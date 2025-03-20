@@ -109,6 +109,7 @@ def create_portal_article_model(schema: str):
             'relations': sa.Column(sa.JSON),
             'sentiment_label': sa.Column(sa.Text),
             'nlp_updated_at': sa.Column(TIMESTAMP(timezone=True)),
+            'popularity_score': sa.Column(sa.Integer, server_default=sa.text("0")),
             # New summary columns from migration 0013
             'summary_generated_at': sa.Column(TIMESTAMP(timezone=True)),
             'summary_article_gemini_title': sa.Column(sa.Text),

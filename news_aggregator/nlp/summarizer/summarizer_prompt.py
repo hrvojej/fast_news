@@ -57,6 +57,7 @@ def create_prompt(content, article_length, include_images=True, enable_entity_li
                 "   - For entity structure: 'entity-overview-heading', 'entity-grid', 'entity-category', 'entity-category-title', 'entity-list', 'no-entity'\n"
                 "   - For sentiment analysis: 'entity-sentiment', 'entity-name', 'entity-sentiment-details', 'sentiment-positive', 'sentiment-negative'\n"
                 "   - For miscellaneous elements: 'entity-spacing', 'transition-text', 'date-numeric', 'number-numeric', 'fact-bullet', 'fact-bullet-secondary'\n"
+                "   - For topic popularity score elements: 'popularity-container', 'popularity-title', 'popularity-score', 'popularity-number', 'popularity-description'\n"
                 "2. NEVER include any inline styles (style attribute) or custom classes not listed above.\n"
                 "3. Always wrap your entire response in a single <div> element.\n"
                 "4. Use EXACTLY these class names with no variations, additions, or modifications.\n\n"
@@ -304,6 +305,22 @@ def create_prompt(content, article_length, include_images=True, enable_entity_li
 
 
 
+        prompt += (
+            "TOPIC POPULARITY SCORE:\n"
+            "1. Utilize the identified main topic and relevant keywords to conduct a comprehensive web search aimed at gauging the topic's popularity across news and events.\n"
+            "2. Aggregate data from multiple reputable sources (e.g., Google Trends, social media metrics, major news outlets) to determine the topic's current public interest level.\n"
+            "3. Compute a numeric popularity score on a standardized scale from 0 to 100, where 0 represents no interest and 100 represents maximum interest.\n"
+            "4. Accompany this score with a concise one-sentence description that contextualizes the score, for example: 'The topic is trending with high public engagement.'\n"
+            "5. Format the output using the EXACT following HTML structure:\n"
+            "   <div class=\"popularity-container\">\n"
+            "      <h2 class=\"popularity-title\">Popularity</h2>\n"
+            "      <div class=\"popularity-score\">\n"
+            "         <div class=\"popularity-number\">YOUR_SCORE</div>\n"
+            "         <div class=\"popularity-description\">YOUR_DESCRIPTION</div>\n"
+            "      </div>\n"
+            "   </div>\n"
+            "6. Ensure that these instructions are followed without any inline styles or additional classes beyond those specified.\n\n"
+        )
 
         prompt += "\nARTICLE TEXT:\n" + content + "\n"
 

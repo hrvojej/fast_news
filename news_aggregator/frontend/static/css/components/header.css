@@ -183,3 +183,9 @@
         cursor: pointer;
     }
 }
+
+.more > a {
+    font-weight: bold;
+    padding: 6px 0;
+}
+

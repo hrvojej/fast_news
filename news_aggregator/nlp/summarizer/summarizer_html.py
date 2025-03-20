@@ -141,8 +141,11 @@ def ensure_proper_classes(soup):
         'separator', 'divider', 'gradient-divider', 'facts-divider',
         'entity-spacing', 'transition-text', 'date-numeric', 'number-numeric',
         
-        # Sentiment analysis classes (new!)
-         'entity-sentiment', 'entity-name', 'entity-sentiment-details', 'sentiment-positive', 'sentiment-negative','entity-summary', 'entity-keywords'
+        # Sentiment analysis classes
+        'entity-sentiment', 'entity-name', 'entity-sentiment-details', 'sentiment-positive', 'sentiment-negative','entity-summary', 'entity-keywords',
+        
+        # Topic popularity score elements
+        'popularity-container', 'popularity-title', 'popularity-score', 'popularity-number', 'popularity-description',
     ]
 
     
@@ -344,6 +347,16 @@ def extract_summary_fields(clean_html):
             # Using decode_contents to get inner HTML without the outer <li> tag
             facts.append({'class': fact_class, 'content': li.decode_contents()})
     result['interesting_facts'] = facts
+    
+    # Topic Popularity Score Extraction
+    topic_popularity = {}
+    popularity_container = soup.find('div', class_='popularity-container')
+    if popularity_container:
+        popularity_number = popularity_container.find(class_='popularity-number')
+        popularity_description = popularity_container.find(class_='popularity-description')
+        topic_popularity['number'] = popularity_number.get_text(strip=True) if popularity_number else ''
+        topic_popularity['description'] = popularity_description.get_text(strip=True) if popularity_description else ''
+    result['topic_popularity'] = topic_popularity
     
     # Sentiment Analysis Extraction (updated)
     sentiment_data = []
@@ -578,7 +591,7 @@ def save_as_html(article_id, title, url, content, summary, response_text, schema
         # Base case: when file is in OUTPUT_HTML_DIR, relative path is "../../static".
         # For each additional subfolder level, add one "../".
         depth = subfolder.count(os.sep) + 1 if subfolder else 0
-        relative_static_path = "../" * (2 + depth) + "static"
+        relative_static_path = "../" * (1 + depth) + "static"
 
         # Determine the correct relative path for static assets
         
@@ -599,7 +612,7 @@ def save_as_html(article_id, title, url, content, summary, response_text, schema
                 "url": os.path.basename(img["url"]),
                 "alt": img.get("caption", "Article image"),
                 "caption": img.get("caption", "")
-            } for img in images]
+            } for img in images[1:]]
         else:
             featured_image_data = None
             fetched_images_data = []
@@ -627,10 +640,9 @@ def save_as_html(article_id, title, url, content, summary, response_text, schema
             "summary_paragraphs": summary_fields.get("summary_paragraphs", []),
             "interesting_facts": summary_fields.get("interesting_facts", []),
             "sentiment_analysis": summary_fields.get("sentiment_analysis", []),
+            "topic_popularity": summary_fields.get("topic_popularity", {}),  # <-- New topic popularity data
             "schema": schema  # <-- Added schema here,
-
         }
-
         
         # Load the article template from the Jinja2 environment
         template = jinja_env.get_template('article.html')

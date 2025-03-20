@@ -36,7 +36,7 @@
     <!-- Keywords Section -->
     {% if keywords %}
     <div class="keywords-container">
-        <p class="keywords-heading"><strong>Keywords:</strong></p>
+        <h3 class="keywords-heading">Keywords:</h3>
         <div class="keywords-tags">
           {% for keyword in keywords %}
              <span class="keyword-pill">{{ keyword }}</span>
@@ -44,7 +44,21 @@
         </div>
     </div>
     {% endif %}
-    
+
+    <!-- Topic Popularity Score Section -->
+    {% if topic_popularity and topic_popularity.number %}
+    <div class="popularity-container">
+        <h3 class="popularity-title">
+            Popularity score: <span class="popularity-number">{{ topic_popularity.number }}</span>
+        </h3>
+        <div class="popularity-score">
+            <div class="popularity-description">{{ topic_popularity.description }}</div>
+        </div>
+    </div>
+    {% endif %}
+
+
+
     <!-- Entity Overview Section -->
     {% if entity_overview %}
     <div class="entity-overview">
@@ -93,7 +107,7 @@
                 {# Insert the second image after the 2nd supporting-point #}
                 {% if supporting_point_count.value == 2 and fetched_images and fetched_images|length > 1 %}
                     <div class="extra-image" style="margin: 20px 0; border: 1px solid #ddd; padding: 10px;">
-                        <img src="{{ relative_static_path }}/images/{{ fetched_images[1].url }}" alt="{{ fetched_images[1].caption|default('Article image') }}" style="max-width:100%;">
+                        <img src="{{ relative_static_path }}/images/{{ fetched_images[0].url }}" alt="{{ fetched_images[1].caption|default('Article image') }}" style="max-width:100%;">
                         {% if fetched_images[1].caption %}
                             <figcaption>{{ fetched_images[1].caption }}</figcaption>
                         {% endif %}
@@ -101,22 +115,15 @@
                 {% endif %}
                 
                 {# Insert the third image after the 4th supporting-point #}
-                {% if supporting_point_count.value == 4 %}
-                    <div class="extra-image" style="margin: 20px 0; border: 1px solid #ddd; padding: 10px;">
-                        {% if fetched_images and fetched_images|length > 2 %}
-                            <img src="{{ relative_static_path }}/images/{{ fetched_images[2].url }}" alt="{{ fetched_images[2].caption|default('Article image') }}" style="max-width:100%;">
-                            {% if fetched_images[2].caption %}
-                                <figcaption>{{ fetched_images[2].caption }}</figcaption>
-                            {% endif %}
-                        {% elif featured_image %}
-                            {# Fallback to featured image if a third fetched image isn’t available #}
-                            <img src="{{ relative_static_path }}/images/{{ featured_image.url }}" alt="{{ featured_image.caption|default('Featured image') }}" style="max-width:100%;">
-                            {% if featured_image.caption %}
-                                <figcaption>{{ featured_image.caption }}</figcaption>
-                            {% endif %}
-                        {% endif %}
-                    </div>
-                {% endif %}
+                {% if supporting_point_count.value == 4 and fetched_images and fetched_images|length > 2 %}
+                <div class="extra-image" style="margin: 20px 0; border: 1px solid #ddd; padding: 10px;">
+                    <img src="{{ relative_static_path }}/images/{{ fetched_images[1].url }}" alt="{{ fetched_images[2].caption|default('Article image') }}" style="max-width:100%;">
+                    {% if fetched_images[2].caption %}
+                        <figcaption>{{ fetched_images[2].caption }}</figcaption>
+                    {% endif %}
+                </div>
+            {% endif %}
+            
             {% endif %}
         {% endfor %}
     </div>
@@ -164,12 +171,12 @@
     
     {# The "Original Article Content" section and its inline image have been removed #}
         <!-- Debug: Raw Gemini API Output -->
-<!--         {% if response_text %}
+        {% if response_text %}
         <div style="background-color: #eeffee; padding: 10px; border: 1px solid green; margin-top: 10px;">
             <p>Debug: Raw Gemini API Output</p>
             <pre>{{ response_text|safe }}</pre>
         </div>
-        {% endif %} -->
+        {% endif %}
     
         <!-- Debug: Sentiment Analysis Data -->
 <!--         {% if sentiment_analysis %}

@@ -258,6 +258,7 @@ def update_article_summary_details(db_context, schema, article_id, context):
             - featured_image: Dictionary with image data for summary_featured_image.
             - summary_paragraphs: List of dictionaries; the first paragraph's content is used
                                   for summary_first_paragraph.
+            - popularity_score: Integer value for the article's popularity score.
 
     Returns:
         bool: True if update successful, False otherwise.
@@ -284,6 +285,7 @@ def update_article_summary_details(db_context, schema, article_id, context):
             summary_first_paragraph = (
                 summary_paragraphs[0]['content'] if summary_paragraphs else None
             )
+            popularity_score = context.get("popularity_score", 0)
 
             query = text(f"""
                 UPDATE {schema}.articles
@@ -291,7 +293,8 @@ def update_article_summary_details(db_context, schema, article_id, context):
                     summary_article_gemini_title = :gemini_title,
                     summary_featured_image = :featured_image,
                     summary_first_paragraph = :first_paragraph,
-                    nlp_updated_at = :updated_at
+                    nlp_updated_at = :updated_at,
+                    popularity_score = :popularity_score
                 WHERE article_id = :article_id
             """)
 
@@ -301,6 +304,7 @@ def update_article_summary_details(db_context, schema, article_id, context):
                 "featured_image": featured_image_data,
                 "first_paragraph": summary_first_paragraph,
                 "updated_at": datetime.now(timezone.utc),
+                "popularity_score": popularity_score,
                 "article_id": article_id
             }
 
@@ -320,4 +324,3 @@ def update_article_summary_details(db_context, schema, article_id, context):
         if 'session' in locals():
             session.rollback()
         return False
-

@@ -1,4 +1,3 @@
-/* Production News Website Styles */
 
 /* Base typography and layout */
 body {
@@ -723,5 +722,40 @@ figcaption {
 /* Center all figcaptions */
 figcaption {
     text-align: center;
+}
+
+.popularity-container {
+    margin: 10px 0;
+    padding: 10px;
+    background-color: #f0f8ff;
+    border: 1px solid #cce;
+    border-radius: 4px;
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+}
+.popularity-score {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap; /* Allow wrapping if the description is too long */
+}
+.popularity-number {
+    font-size: 1.0em;
+    font-weight: bold;
+    color: #0066cc;
+    flex: 0 0 auto; /* Keep the numeric element at its intrinsic size */
+}
+.popularity-description {
+    font-size: 1em;
+    color: #333;
+    margin: 0;
+    flex: 1 1 auto; /* Let the description take the remaining space */
+    display: block; /* Ensure block-level for flex behavior */
+}
+.popularity-title {
+    margin: 0 0 0 0;
+    font-weight: bold;
+    letter-spacing: 0.03em;
 }
 

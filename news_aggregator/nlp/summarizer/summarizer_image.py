@@ -148,7 +148,7 @@ def download_image(url, article_id, base_name=None, counter=None):
                         f"    Size: {file_size} bytes, Content-Type: {content_type}")
 
             return {
-                "path": filename,  # JUST THE FILENAME, NOT THE PATH
+                "path": "/static/images/" + filename,
                 "filename": filename,
                 "original_url": url,
                 "content_type": content_type,
@@ -250,7 +250,7 @@ def extract_search_terms(query, title, content=None, entity_list=None):
         search_terms.append(query.split()[0])
     
     # Generic fallback
-    search_terms.append("news")
+    # search_terms.append("news")
     
     # Remove duplicates while preserving order
     unique_terms = []
