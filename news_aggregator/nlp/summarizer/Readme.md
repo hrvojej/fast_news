@@ -11,7 +11,7 @@ cd C:\Users\Korisnik\Desktop\TLDR\fast_news\news_aggregator\nlp\summarizer
 python main.py --schema pt_nyt --env dev --article-id "0078e4d3-5782-4c73-a6ae-d791e7d8e914"
 python main.py --schema pt_nyt --env dev --limit 200
 
-
+mo
 # Update change in local frontend to CloudFlare
 cd C:\Users\Korisnik\Desktop\TLDR\fast_news\news_aggregator\frontend
 pwsh -ExecutionPolicy Bypass -File update-site.ps1

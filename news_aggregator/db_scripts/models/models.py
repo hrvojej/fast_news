@@ -115,6 +115,8 @@ def create_portal_article_model(schema: str):
             'summary_article_gemini_title': sa.Column(sa.Text),
             'summary_featured_image': sa.Column(sa.Text),
             'summary_first_paragraph': sa.Column(sa.Text),
+            'article_html_file_location': sa.Column(sa.Text(collation='pg_catalog."default"')),
+
         }
     )
 

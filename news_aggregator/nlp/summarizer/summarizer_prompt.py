@@ -322,7 +322,21 @@ def create_prompt(content, article_length, include_images=True, enable_entity_li
             "6. Ensure that these instructions are followed without any inline styles or additional classes beyond those specified.\n\n"
         )
 
-        prompt += "\nARTICLE TEXT:\n" + content + "\n"
+        prompt += (
+            "\nIMAGE EXTRACTION SECTION:\n"
+            "1. Use the original article title to perform a Google Images search and retrieve exactly 3 free-to-use images.\n"
+            "2. Ensure each image URL is a direct link ending with .jpg, .jpeg, or .png.\n"
+            "3. Only include images that have a width between 300 and 600 pixels.\n"
+            "4. Format the output in the following HTML structure:\n"
+            "   <div class=\"images-container\">\n"
+            "      <img src=\"IMAGE_URL1\" alt=\"Image 1\">\n"
+            "      <img src=\"IMAGE_URL2\" alt=\"Image 2\">\n"
+            "      <img src=\"IMAGE_URL3\" alt=\"Image 3\">\n"
+            "   </div>\n"
+            "5. Do not include any additional text or commentary in this section.\n"
+            "\nARTICLE TEXT:\n" + content + "\n"
+        )
+
 
         
         # Return the complete prompt

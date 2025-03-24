@@ -620,6 +620,12 @@ def save_as_html(article_id, title, url, content, summary, response_text, schema
         # After clean_summary has been computed
         summary_fields = extract_summary_fields(clean_summary)
 
+        # Compute relative file location for the saved HTML file
+        if subfolder:
+            relative_file_location = os.path.join(subfolder, filename)
+        else:
+            relative_file_location = filename
+
         context = {
             "title": gemini_title or f"Article {article_id}",
             "article_id": article_id,
@@ -641,8 +647,12 @@ def save_as_html(article_id, title, url, content, summary, response_text, schema
             "interesting_facts": summary_fields.get("interesting_facts", []),
             "sentiment_analysis": summary_fields.get("sentiment_analysis", []),
             "topic_popularity": summary_fields.get("topic_popularity", {}),  # <-- New topic popularity data
-            "schema": schema  # <-- Added schema here,
+            "popularity_score": int(summary_fields.get("topic_popularity", {}).get("number", "0") or 0),  # <-- New popularity score field
+            "schema": schema,  # <-- Added schema here,
+            "article_html_file_location": relative_file_location  # <-- New field added
         }
+
+
         
         # Load the article template from the Jinja2 environment
         template = jinja_env.get_template('article.html')

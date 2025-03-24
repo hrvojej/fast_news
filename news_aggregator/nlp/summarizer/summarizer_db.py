@@ -294,7 +294,8 @@ def update_article_summary_details(db_context, schema, article_id, context):
                     summary_featured_image = :featured_image,
                     summary_first_paragraph = :first_paragraph,
                     nlp_updated_at = :updated_at,
-                    popularity_score = :popularity_score
+                    popularity_score = :popularity_score,
+                    article_html_file_location = :article_html_file_location
                 WHERE article_id = :article_id
             """)
 
@@ -305,8 +306,10 @@ def update_article_summary_details(db_context, schema, article_id, context):
                 "first_paragraph": summary_first_paragraph,
                 "updated_at": datetime.now(timezone.utc),
                 "popularity_score": popularity_score,
+                "article_html_file_location": context.get("article_html_file_location"),
                 "article_id": article_id
             }
+
 
             result = session.execute(query, params)
             session.commit()
