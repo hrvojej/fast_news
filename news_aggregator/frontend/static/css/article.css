@@ -276,9 +276,6 @@ body {
 }
 
 /* Interesting Facts Section */
-/* Modernized styling for Interesting Facts */
-/* --- Interesting Facts Section --- */
-/* --- Interesting Facts Section --- */
 .interesting-facts {
     margin: 20px 0;
 }
@@ -760,3 +757,93 @@ figcaption {
     letter-spacing: 0.03em;
 }
 
+
+/* More on topic and related terminology Section */
+.more-on-topic {
+    margin: 20px 0;
+    padding: 15px;
+    background-color: #f7f9fc;
+    border: 1px solid #cce5ff;
+    border-radius: 8px;
+}
+.more-on-topic-heading {
+    font-size: 1.3em;
+    font-weight: bold;
+    margin-bottom: 10px;
+    text-align: center;
+    letter-spacing: 0.05em;
+    color: #333;
+}
+.more-on-topic-container {
+    padding: 10px;
+}
+.related-terminology-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+}
+.terminology-item {
+    padding: 10px;
+    margin-bottom: 10px;
+    background-color: #ffffff;
+    border: 1px solid #eaeaea;
+    border-radius: 6px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+}
+.resource-link {
+    font-weight: bold;
+    color: #0066cc;
+    text-decoration: none;
+}
+.resource-link:hover {
+    text-decoration: underline;
+}
+.resource-description {
+    font-size: 0.9em;
+    color: #555;
+    margin-left: 5px;
+}
+.more-topic-divider {
+    height: 2px;
+    border: none;
+    background: linear-gradient(to right, #ffffff, #e0e0e0, #ffffff);
+    margin: 15px 0;
+}
+
+/* New: Related Articles Section */
+.related-articles {
+    margin: 20px 0;
+    padding: 15px;
+    background-color: #f7f9fc;
+    border: 1px solid #cce5ff;
+    border-radius: 8px;
+}
+.related-articles-heading {
+    font-size: 1.3em;
+    font-weight: bold;
+    margin-bottom: 10px;
+    text-align: center;
+    letter-spacing: 0.05em;
+    color: #333;
+}
+.related-articles-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+}
+.related-article-item {
+    padding: 10px;
+    margin-bottom: 10px;
+    background-color: #ffffff;
+    border: 1px solid #eaeaea;
+    border-radius: 6px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+}
+.related-article-link {
+    font-weight: bold;
+    color: #0066cc;
+    text-decoration: none;
+}
+.related-article-link:hover {
+    text-decoration: underline;
+}

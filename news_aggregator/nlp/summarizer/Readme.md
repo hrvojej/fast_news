@@ -1,5 +1,9 @@
 Below is an updated version of your README with the necessary changes. In this version, we explicitly state that the summarization is done via the Gemini API while image retrieval is now handled using the Wikimedia Commons API. We removed any misleading references to image fetching via Gemini API and adjusted the key features and documentation accordingly.
 
+# Pexel api key
+https://www.pexels.com/
+BaBjXpyAZtZlfZ2fy1CAr3PUcfXmK0yeSx7Za876llNcIuEqaNhEMgLB
+
 # Remove all items in curret folder:
 Remove-Item -Path * -Recurse -Force
 

@@ -162,12 +162,47 @@
         <div class="facts-container">
           <ul class="facts-list">
             {% for fact in interesting_facts %}
-              <li class="{{ fact.class|join(' ') }}">{{ fact.content|safe }}</li>
+              <li class="{{ fact.class|join(' ') }}">{{ fact.content|safe|replace('<span class="fact-bullet">●</span>', '') }}</li>
             {% endfor %}
           </ul>
         </div>
     </div>
     {% endif %}
+
+
+    <!-- Related Articles Section -->
+    {% if related_articles_list %}
+    <div class="related-articles">
+        <strong class="related-articles-heading">Related Articles:</strong>
+        <ul class="related-articles-list">
+            {% for article in related_articles_list %}
+            <li class="related-article-item">
+                <a class="related-article-link" href="{{ article.link }}" target="_blank">{{ article.title }}</a>
+            </li>
+            {% endfor %}
+        </ul>
+    </div>
+    {% endif %}
+
+
+    <!-- More on topic and related terminology Section -->
+    {% if related_resources %}
+    <div class="more-on-topic">
+        <strong class="more-on-topic-heading">More on topic and related terminology:</strong>
+        <div class="more-on-topic-container">
+            <ul class="related-terminology-list">
+                {% for resource in related_resources %}
+                <li class="terminology-item">
+                    <a class="resource-link" href="{{ resource.url }}" target="_blank">{{ resource.title }}</a> - <span class="resource-description">{{ resource.description }}</span>
+                </li>
+                {% endfor %}
+            </ul>
+            <div class="more-topic-divider"></div>
+        </div>
+    </div>
+    {% endif %}
+
+
     
     {# The "Original Article Content" section and its inline image have been removed #}
         <!-- Debug: Raw Gemini API Output -->
@@ -182,7 +217,7 @@
 <!--         {% if sentiment_analysis %}
         <div style="background-color: #ffffee; padding: 10px; border: 1px solid orange; margin-top: 10px;">
             <p>Debug: Sentiment Analysis Data</p>
-            <pre>{{ sentiment_analysis|safe }}</pre>
+            <pre>{{ sentiment_analysis|safe }}</pre >
         </div>
         {% else %}
         <div style="background-color: #ffffee; padding: 10px; border: 1px solid orange; margin-top: 10px;">

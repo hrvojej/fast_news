@@ -14,7 +14,8 @@ from datetime import datetime
 from summarizer_logging import get_logger
 from summarizer_config import OUTPUT_HTML_DIR, ensure_output_directory
 from summarizer_image import IMAGES_DIR, process_images_in_html, search_and_download_images
-from summarizer_db import update_article_summary_details
+from summarizer_db import update_article_summary_details, get_related_articles
+
 from db_scripts.db_context import DatabaseContext
 
 
@@ -110,42 +111,44 @@ def ensure_proper_classes(soup):
     Ensure that only approved classes are used and elements have appropriate classes.
     This is a validation step to catch any inconsistencies from the Gemini response.
     """
-    # Complete list of allowed classes from your CSS
     allowed_classes = [
-        # Article structure
-        'article-title', 'emphasis-keyword', 'source-attribution', 'label',
-        
-        # Keywords section
-        'keywords-container', 'keywords-heading', 'keywords-tags', 'keyword-pill',
-        
-        # Entity types
-        'named-individual', 'roles-categories', 'orgs-products', 'location', 
-        'time-event', 'artistic', 'industry', 'financial', 'key-actions',
-        
-        # Entity structure
-        'entity-overview-heading', 'entity-grid', 'entity-category', 
-        'entity-category-title', 'entity-list', 'no-entity',
-        
-        # Summary elements
-        'summary-heading', 'summary-intro', 'key-sentence', 'supporting-point', 
-        'transition-text', 'secondary-detail', 'crucial-fact',
-        
-        # Interesting facts
-        'facts-heading', 'facts-container', 'facts-list', 'fact-primary', 
-        'fact-secondary', 'fact-conclusion', 'fact-bullet', 'fact-bullet-secondary',
-        
-        # Legend
-        'legend-container', 'legend-heading', 'legend-grid', 'legend-item',
-        
-        # Separators and misc elements
-        'separator', 'divider', 'gradient-divider', 'facts-divider',
-        'entity-spacing', 'transition-text', 'date-numeric', 'number-numeric',
-        
-        # Sentiment analysis classes
-        'entity-sentiment', 'entity-name', 'entity-sentiment-details', 'sentiment-positive', 'sentiment-negative','entity-summary', 'entity-keywords',
-        
-        # Topic popularity score elements
-        'popularity-container', 'popularity-title', 'popularity-score', 'popularity-number', 'popularity-description',
+    # Article structure
+    'article-title', 'emphasis-keyword', 'source-attribution', 'label',
+    
+    # Keywords section
+    'keywords-container', 'keywords-heading', 'keywords-tags', 'keyword-pill',
+    
+    # Entity types
+    'named-individual', 'roles-categories', 'orgs-products', 'location', 
+    'time-event', 'artistic', 'industry', 'financial', 'key-actions',
+    
+    # Entity structure
+    'entity-overview-heading', 'entity-grid', 'entity-category', 
+    'entity-category-title', 'entity-list', 'no-entity',
+    
+    # Summary elements
+    'summary-heading', 'summary-intro', 'key-sentence', 'supporting-point', 
+    'transition-text', 'secondary-detail', 'crucial-fact',
+    
+    # Interesting facts
+    'facts-heading', 'facts-container', 'facts-list', 'fact-primary', 
+    'fact-secondary', 'fact-conclusion', 'fact-bullet', 'fact-bullet-secondary',
+    
+    # Legend
+    'legend-container', 'legend-heading', 'legend-grid', 'legend-item',
+    
+    # Separators and misc elements
+    'separator', 'divider', 'gradient-divider', 'facts-divider',
+    'entity-spacing', 'transition-text', 'date-numeric', 'number-numeric',
+    
+    # Sentiment analysis classes
+    'entity-sentiment', 'entity-name', 'entity-sentiment-details', 'sentiment-positive', 'sentiment-negative', 'entity-summary', 'entity-keywords',
+    
+    # Topic popularity score elements
+    'popularity-container', 'popularity-title', 'popularity-score', 'popularity-number', 'popularity-description',
+
+    # More on topic and related terminology section
+    'more-on-topic-heading', 'more-on-topic-container', 'related-terminology-list', 'terminology-item', 'resource-link', 'resource-description', 'more-topic-divider'
     ]
 
     
@@ -348,6 +351,25 @@ def extract_summary_fields(clean_html):
             facts.append({'class': fact_class, 'content': li.decode_contents()})
     result['interesting_facts'] = facts
     
+    # More on topic and related terminology extraction
+    related_resources = []
+    more_topic_container = soup.find('div', class_='more-on-topic-container')
+    if more_topic_container:
+        ul = more_topic_container.find('ul', class_='related-terminology-list')
+        if ul:
+            for li in ul.find_all('li', class_='terminology-item'):
+                resource = {}
+                a_tag = li.find('a', class_='resource-link')
+                if a_tag:
+                    resource['title'] = a_tag.get_text(strip=True)
+                    resource['url'] = a_tag.get('href', '')
+                span_desc = li.find('span', class_='resource-description')
+                if span_desc:
+                    resource['description'] = span_desc.get_text(strip=True)
+                if resource:
+                    related_resources.append(resource)
+    result['related_resources'] = related_resources
+    
     # Topic Popularity Score Extraction
     topic_popularity = {}
     popularity_container = soup.find('div', class_='popularity-container')
@@ -402,7 +424,6 @@ def extract_summary_fields(clean_html):
         result['sentiment_analysis'] = sentiment_data
 
     return result
-
 
 def create_filename_from_title(title, url, article_id):
     """
@@ -520,15 +541,77 @@ def save_as_html(article_id, title, url, content, summary, response_text, schema
             base_name = re.sub(r'[^\w\s-]', '', title if title else "Article")
             base_name = re.sub(r'\s+', '_', base_name)[:30]  # Limit length
             
-            logger.debug(f"Keywords for Wikimedia image search: {keywords}")
+            core_org_entities = []
+            core_named_entities = []
+            core_key_actions_entities = []
+            core_industry_terminology = []
+            soup_entities = BeautifulSoup(clean_summary, 'html.parser')
+            entity_grid = soup_entities.find('div', class_='entity-grid')
+            if entity_grid:
+                for category in entity_grid.find_all('div', class_='entity-category'):
+                    cat_title_tag = category.find(class_='entity-category-title')
+                    cat_title = cat_title_tag.get_text(strip=True).upper() if cat_title_tag else ""
+                    entity_list_tag = category.find('p', class_='entity-list')
+                    if entity_list_tag:
+                        entities_text = entity_list_tag.get_text(separator=',').strip()
+                        entities = [e.strip() for e in entities_text.split(',') if e.strip()]
+                        if cat_title.startswith("ORGANIZATIONS & PRODUCTS"):
+                            core_org_entities.extend(entities)
+                        elif cat_title.startswith("NAMED INDIVIDUALS"):
+                            core_named_entities.extend(entities)
+                        elif cat_title.startswith("KEY ACTIONS & RELATIONSHIPS"):
+                            core_key_actions_entities.extend(entities)
+                        elif cat_title.startswith("INDUSTRY TERMINOLOGY"):
+                            core_industry_terminology.extend(entities)
+            # Remove duplicates while preserving order
+            core_org_entities = list(dict.fromkeys(core_org_entities))
+            core_named_entities = list(dict.fromkeys(core_named_entities))
+            core_key_actions_entities = list(dict.fromkeys(core_key_actions_entities))
+            core_industry_terminology = list(dict.fromkeys(core_industry_terminology))
             
-            search_terms = keywords[:3] if keywords else []
-            if not search_terms and title:
-                title_words = [word.lower() for word in re.findall(r'\b\w+\b', title) 
+            # Combine ORGANIZATIONS & PRODUCTS with KEY ACTIONS & RELATIONSHIPS for more contextual results
+            combined_org_key = list(dict.fromkeys(core_org_entities + core_key_actions_entities))
+            
+            # Build candidate list in a round-robin fashion using combined_org_key, NAMED INDIVIDUALS, and INDUSTRY TERMINOLOGY
+            candidates = []
+            index = 0
+            while True:
+                added = False
+                if index < len(combined_org_key):
+                    candidates.append(combined_org_key[index])
+                    added = True
+                if index < len(core_named_entities):
+                    candidates.append(core_named_entities[index])
+                    added = True
+                if index < len(core_industry_terminology):
+                    candidates.append(core_industry_terminology[index])
+                    added = True
+                if not added:
+                    break
+                index += 1
+
+            # Prioritize candidates that appear in the article title
+            article_title_lower = (gemini_title if gemini_title else title).lower()
+            prioritized_candidates = []
+            non_prioritized_candidates = []
+            for candidate in candidates:
+                if candidate.lower() in article_title_lower:
+                    prioritized_candidates.append(candidate)
+                else:
+                    non_prioritized_candidates.append(candidate)
+            candidates = prioritized_candidates + non_prioritized_candidates
+
+            if not candidates and title:
+                title_words = [word.lower() for word in re.findall(r'\b\w+\b', title)
                                if len(word) > 3 and word.lower() not in ['the', 'and', 'with', 'from', 'that', 'this']]
-                search_terms = title_words[:3]
+                candidates = title_words[:6]
+
+            image_query = " ".join(candidates)
+            logger.debug(f"Entities for Wikimedia image search: {candidates}")
+
+
             
-            image_query = " ".join([term for term in search_terms if term])
+            
             if not image_query:
                 if 'prison' in title.lower() or 'prison' in content.lower()[:500]:
                     image_query = "prison"
@@ -626,6 +709,16 @@ def save_as_html(article_id, title, url, content, summary, response_text, schema
         else:
             relative_file_location = filename
 
+
+        from db_scripts.db_context import DatabaseContext
+        db_context = DatabaseContext()
+        keywords = summary_fields.get("keywords", [])
+        if keywords:
+            related_articles_list = get_related_articles(db_context, schema, article_id, keywords, limit=5)
+        else:
+            related_articles_list = []
+
+                
         context = {
             "title": gemini_title or f"Article {article_id}",
             "article_id": article_id,
@@ -634,24 +727,24 @@ def save_as_html(article_id, title, url, content, summary, response_text, schema
             "featured_image": featured_image_data,
             "summary": clean_summary if clean_summary else "<div>No summary available</div>",
             "fetched_images": fetched_images_data,
-            "show_api_response": True,  # Change to True to display raw API response
+            "show_api_response": True,
             "response_text": response_text,
-            "content": content,  # Original article content
+            "content": content,
             "relative_static_path": relative_static_path,
             "current_year": current_year,
-            # New detailed fields extracted from the summary
             "source_attribution": summary_fields.get("source_attribution", ""),
             "keywords": summary_fields.get("keywords", []),
             "entity_overview": summary_fields.get("entity_overview", []),
             "summary_paragraphs": summary_fields.get("summary_paragraphs", []),
             "interesting_facts": summary_fields.get("interesting_facts", []),
+            "related_resources": summary_fields.get("related_resources", []),
             "sentiment_analysis": summary_fields.get("sentiment_analysis", []),
-            "topic_popularity": summary_fields.get("topic_popularity", {}),  # <-- New topic popularity data
-            "popularity_score": int(summary_fields.get("topic_popularity", {}).get("number", "0") or 0),  # <-- New popularity score field
-            "schema": schema,  # <-- Added schema here,
-            "article_html_file_location": relative_file_location  # <-- New field added
+            "topic_popularity": summary_fields.get("topic_popularity", {}),
+            "popularity_score": int(summary_fields.get("topic_popularity", {}).get("number", "0") or 0),
+            "related_articles_list": related_articles_list,
+            "schema": schema,
+            "article_html_file_location": relative_file_location
         }
-
 
         
         # Load the article template from the Jinja2 environment
@@ -680,7 +773,6 @@ def save_as_html(article_id, title, url, content, summary, response_text, schema
             file_size = os.path.getsize(filepath)
             logger.info(f"Successfully saved HTML output to {filepath} (size: {file_size} bytes)")
             # Update additional summary fields in the database.
-            db_context = DatabaseContext()
             schema = context.get("schema", "pt_nyt")
             update_success = update_article_summary_details(db_context, schema, article_id, context)
             if update_success:

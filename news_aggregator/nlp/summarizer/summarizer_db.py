@@ -327,3 +327,75 @@ def update_article_summary_details(db_context, schema, article_id, context):
         if 'session' in locals():
             session.rollback()
         return False
+    
+    
+def get_related_articles(db_context, schema, current_article_id, current_keywords, limit=5):
+    """
+    Retrieve related articles based on matching keywords, popularity, and recency.
+
+    Args:
+        db_context: Database context for session management.
+        schema (str): Database schema name.
+        current_article_id: ID of the current article to exclude.
+        current_keywords (list): List of keywords from the current article.
+        limit (int, optional): Number of related articles to return (default: 5).
+
+    Returns:
+        list: List of dictionaries with keys 'title' and 'link' for related articles.
+    """
+    from datetime import datetime, timezone, timedelta
+    from sqlalchemy import text
+
+    cutoff_time = datetime.now(timezone.utc) - timedelta(days=60)
+    query = text(f"""
+        SELECT article_id, summary_article_gemini_title, article_html_file_location, keywords, summary_generated_at, popularity_score 
+        FROM {schema}.articles
+        WHERE summary_generated_at IS NOT NULL 
+          AND summary_generated_at >= :cutoff_time
+    """)
+    params = {"cutoff_time": cutoff_time}
+
+    try:
+        with db_context.session() as session:
+            result = session.execute(query, params)
+            articles = result.fetchall()
+    except Exception as e:
+        logger.error(f"Error retrieving related articles: {e}", exc_info=True)
+        return []
+
+    candidates = []
+    for row in articles:
+        # Exclude the current article
+        if str(row.article_id) == str(current_article_id):
+            continue
+        # Ensure required fields are not empty
+        if not row.summary_article_gemini_title or not row.article_html_file_location:
+            continue
+
+        # Process keywords (handle both comma-separated string and list formats)
+        candidate_keywords = []
+        if row.keywords:
+            if isinstance(row.keywords, list):
+                candidate_keywords = [str(kw).strip().lower() for kw in row.keywords if str(kw).strip()]
+            elif isinstance(row.keywords, str):
+                candidate_keywords = [kw.strip().lower() for kw in row.keywords.split(',') if kw.strip()]
+        
+        matching_keywords = set([kw.lower() for kw in current_keywords]).intersection(set(candidate_keywords))
+        matching_count = len(matching_keywords)
+        
+        candidate = {
+            "article_id": row.article_id,
+            "title": row.summary_article_gemini_title,
+            "link": row.article_html_file_location,
+            "matching_count": matching_count,
+            "popularity_score": row.popularity_score if row.popularity_score is not None else 0,
+            "summary_generated_at": row.summary_generated_at
+        }
+        candidates.append(candidate)
+
+    
+    # Sort candidates by matching_count, then popularity_score, then recency (all descending)
+    sorted_candidates = sorted(candidates, key=lambda x: (x["matching_count"], x["popularity_score"], x["summary_generated_at"]), reverse=True)
+    related_articles = [{"title": cand["title"], "link": cand["link"]} for cand in sorted_candidates[:limit]]
+    return related_articles
+

@@ -32,7 +32,7 @@ def create_prompt(content, article_length, include_images=True, enable_entity_li
     try:
         # Base prompt with main topic identification
         prompt = (
-            "Create a visually enhanced and focused summary of the main topic from the following text. The summary must be at least 800 words in total. Additionally, perform a web search to retrieve extra sensational, dramatic, intriguing and compelling information related to the article’s title, and incorporate these interesting facts both within the summary and in a dedicated 'Interesting Facts' section.:\n\n"
+            "Create a visually enhanced and focused summary of the main topic from the following text. The summary must be at least 800 words in total. Additionally, perform a web search to retrieve not less than 10 relevant and recent original web resources based on article topic that provide sensational, dramatic, intriguing and compelling information related to the article’s topic, and incorporate these interesting facts both within the summary and in a dedicated 'Interesting Facts' section. Add all resources to " "MORE ON TOPIC AND RELATED TERMINOLOGY:\n"" section. Use links that open the “search snippets” (sometimes called the “snippet” or “meta description snippet”) that Google displays underneath each search result to summarize the page’s content.:\n\n"
             
             "MAIN TOPIC IDENTIFICATION:\n"
             "1. Determine the central topic by analyzing the article title, introductory paragraphs, and recurring themes or keywords.\n"
@@ -40,10 +40,10 @@ def create_prompt(content, article_length, include_images=True, enable_entity_li
             "3. Pay attention to structural indicators that signal the end of the main article content.\n"
             "4. IMPORTANT: Only extract and include entities that are directly relevant to the core topic. DO NOT include entities that are merely mentioned in passing, appear in sidebar content, or are irrelevant to the main narrative.\n"
             "5. When writing the summary, NEVER refer to the source material using phrases like \"The article discusses...\" or \"The text explains...\" - instead, present information directly as facts about the subject matter.\n"
-            "Example: Instead of identifying 'company's financial turnaround as discussed in the article', simply identify 'company's financial turnaround' as the central topic.\n\n"
+            "6. Ensure that the web search retrieves as many relevant and recent original web resources as possible that are directly related to the article’s title and topic. Prioritize original, authoritative sources and include references to these resources within the summary and in the 'Interesting Facts' section.\n\n"
         )
+
         
-            # Add global HTML class requirements
         prompt += (
                 "HTML CLASS REQUIREMENTS:\n"
                 "1. Use ONLY the following specific CSS classes for each element - no variations or inline styles allowed:\n"
@@ -58,10 +58,12 @@ def create_prompt(content, article_length, include_images=True, enable_entity_li
                 "   - For sentiment analysis: 'entity-sentiment', 'entity-name', 'entity-sentiment-details', 'sentiment-positive', 'sentiment-negative'\n"
                 "   - For miscellaneous elements: 'entity-spacing', 'transition-text', 'date-numeric', 'number-numeric', 'fact-bullet', 'fact-bullet-secondary'\n"
                 "   - For topic popularity score elements: 'popularity-container', 'popularity-title', 'popularity-score', 'popularity-number', 'popularity-description'\n"
+                "   - For related topic resources: 'more-on-topic-heading', 'more-on-topic-container', 'related-terminology-list', 'terminology-item', 'resource-link', 'resource-description', 'more-topic-divider'\n"
                 "2. NEVER include any inline styles (style attribute) or custom classes not listed above.\n"
                 "3. Always wrap your entire response in a single <div> element.\n"
                 "4. Use EXACTLY these class names with no variations, additions, or modifications.\n\n"
             )
+
 
         
         # Add format restrictions for longer articles
@@ -304,7 +306,6 @@ def create_prompt(content, article_length, include_images=True, enable_entity_li
         )
 
 
-
         prompt += (
             "TOPIC POPULARITY SCORE:\n"
             "1. Utilize the identified main topic and relevant keywords to conduct a comprehensive web search aimed at gauging the topic's popularity across news and events.\n"
@@ -323,19 +324,39 @@ def create_prompt(content, article_length, include_images=True, enable_entity_li
         )
 
         prompt += (
-            "\nIMAGE EXTRACTION SECTION:\n"
-            "1. Use the original article title to perform a Google Images search and retrieve exactly 3 free-to-use images.\n"
-            "2. Ensure each image URL is a direct link ending with .jpg, .jpeg, or .png.\n"
-            "3. Only include images that have a width between 300 and 600 pixels.\n"
-            "4. Format the output in the following HTML structure:\n"
-            "   <div class=\"images-container\">\n"
-            "      <img src=\"IMAGE_URL1\" alt=\"Image 1\">\n"
-            "      <img src=\"IMAGE_URL2\" alt=\"Image 2\">\n"
-            "      <img src=\"IMAGE_URL3\" alt=\"Image 3\">\n"
+            "MORE ON TOPIC AND RELATED TERMINOLOGY:\n"
+            "1. Create a section with EXACTLY this heading: '<strong class=\"more-on-topic-heading\">More on topic and related terminology:</strong>'\n"
+            "2. Structure the section using this EXACT HTML pattern:\n"
+            "   <div class=\"more-on-topic-container\">\n"
+            "     <ul class=\"related-terminology-list\">\n"
+            "       <li class=\"terminology-item\">\n"
+            "         <a class=\"resource-link\" href=\"[URL]\" target=\"_blank\">Resource Title</a> - <span class=\"resource-description\">Brief description of the resource</span>\n"
+            "       </li>\n"
+            "       <!-- Repeat for each resource -->\n"
+            "     </ul>\n"
             "   </div>\n"
-            "5. Do not include any additional text or commentary in this section.\n"
+            "3. End this section with EXACTLY: '<div class=\"more-topic-divider\"></div>'\n\n"
+        )
+        if include_images:
+            prompt += (
+                "IMAGE INSTRUCTIONS:\n"
+                "1. Perform a web search to retrieve 3 relevant images from Google Images based on the main topic derived from the article content. Ensure these images are recent, original, and contextually appropriate.\n"
+                "2. Output exactly 3 independent <img> HTML elements—one for each image—using the unique CSS classes specified below.\n"
+                "   - The first image must use the CSS class 'article-image-top'\n"
+                "   - The second image must use the CSS class 'article-image-middle'\n"
+                "   - The third image must use the CSS class 'article-image-bottom'\n"
+                "3. Each image element must be in the exact format:\n"
+                "   <img class=\"[CSS_CLASS]\" src=\"[IMAGE_URL]\" alt=\"[Image description]\">\n"
+                "4. Ensure that no additional image elements are included in the response.\n"
+            )
+
+        prompt += (
             "\nARTICLE TEXT:\n" + content + "\n"
         )
+
+
+
+
 
 
         
