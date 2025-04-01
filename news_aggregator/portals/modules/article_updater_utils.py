@@ -311,3 +311,35 @@ def log_update_summary(logger, counters, error_counts):
     logger.info("Error Summary:")
     for err_type, count in error_counts.items():
         logger.info(f"  {err_type}: {count}")
+        
+        
+def get_articles_for_google_images(session, articles_table, logger):
+    """
+    Retrieves articles that have non-empty content, for use in Google Images search.
+    
+    Args:
+        session: Database session.
+        articles_table (str): Fully qualified articles table name.
+        logger: Logger instance.
+        
+    Returns:
+        List of dictionaries for articles including: article_id, url, pub_date, and title.
+    """
+    query = text(f"""
+        SELECT article_id, url, pub_date, title
+        FROM {articles_table}
+        WHERE content IS NOT NULL AND content <> ''
+    """)
+    articles = session.execute(query).fetchall()
+    logger.info(f"Found {len(articles)} articles with non-empty content.")
+    result = []
+    for article in articles:
+        result.append({
+            "article_id": article.article_id,
+            "url": article.url,
+            "pub_date": article.pub_date,
+            "title": article.title
+        })
+    return result
+
+

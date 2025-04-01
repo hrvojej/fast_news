@@ -1,0 +1,91 @@
+{% extends "base.html" %}
+
+{% block title %}Category - {{ category.name }}{% endblock %}
+
+{% block extra_css %}
+    <!-- Link to category-specific CSS -->
+    <link rel="stylesheet" href="{{ relative_static_path }}/css/category.css">
+{% endblock %}
+
+{% block content %}
+<div class="category-container">
+    <h1>{{ category.name }}</h1>
+    
+    <!-- Featured Articles Section -->
+    <div class="featured-section">
+      <h2>Featured Articles</h2>
+      <div class="featured-grid">
+        {% for article in featured_articles %}
+          <div class="featured-article">
+            <a href="{{ relative_articles_path }}{{ article.article_html_file_location }}">
+              {% if article.summary_featured_image_large and article.summary_featured_image_large.url %}
+              <img src="{{ relative_category_images_path }}/{{ article.summary_featured_image_large.url }}" alt="{{ article.summary_featured_image_large.alt }}">
+            {% else %}
+              <img src="path/to/default/image.jpg" alt="No image available">
+            {% endif %}              
+              <h3>{{ article.summary_article_gemini_title }}</h3>
+            </a>
+          </div>
+        {% endfor %}
+      </div>
+    </div>
+    
+    
+    <!-- Subcategories Section -->
+    <div class="subcategories-section">
+      <h2>Subcategories</h2>
+      {% for subcat, articles in subcategories.items() %}
+         <div class="subcategory">
+           <h3>{{ subcat | capitalize }}</h3>
+           <hr>
+           <!-- Featured articles in subcategory (first 2 with image) -->
+           <div class="subcategory-featured-grid">
+            {% for article in articles.featured %}
+              <div class="subcategory-featured-article">
+                <a href="{{ relative_articles_path }}{{ article.article_html_file_location }}">
+                  {% if article.summary_featured_image_small and article.summary_featured_image_small.url %}
+                    <img src="{{ relative_category_images_path }}/{{ article.summary_featured_image_small.url }}" alt="{{ article.summary_featured_image_small.alt }}">
+                  {% else %}
+                    <img src="path/to/default/small_image.jpg" alt="No image available">
+                  {% endif %}
+                  <h4>{{ article.summary_article_gemini_title }}</h4>
+                </a>
+              </div>
+            {% endfor %}
+          </div>
+          
+          
+          
+          
+           <!-- Remaining articles as list -->
+           <ul class="subcategory-article-list">
+             {% for article in articles.others %}
+               <li>
+                 <a href="{{ relative_articles_path }}{{ article.article_html_file_location }}">
+                   {{ article.summary_article_gemini_title }}
+                 </a>
+               </li>
+             {% endfor %}
+           </ul>
+         </div>
+      {% endfor %}
+    </div>
+    
+    
+    <!-- Additional Articles Section -->
+    <div class="additional-articles-section">
+      <h2>More Articles</h2>
+      <ul class="additional-article-list">
+        {% for article in additional_articles %}
+           <li>
+             <a href="{{ relative_articles_path }}{{ article.article_html_file_location }}">
+               {{ article.summary_article_gemini_title }}
+             </a>
+           </li>
+        {% endfor %}
+      </ul>
+    </div>
+    
+</div>
+
+{% endblock %}

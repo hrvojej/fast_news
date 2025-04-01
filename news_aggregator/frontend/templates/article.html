@@ -162,25 +162,10 @@
         <div class="facts-container">
           <ul class="facts-list">
             {% for fact in interesting_facts %}
-              <li class="{{ fact.class|join(' ') }}">{{ fact.content|safe|replace('<span class="fact-bullet">●</span>', '') }}</li>
+              <li class="{{ fact.class|join(' ') }}">{{ fact.content|safe|replace('<span class="fact-bullet">•</span>', '') }}</li>
             {% endfor %}
           </ul>
         </div>
-    </div>
-    {% endif %}
-
-
-    <!-- Related Articles Section -->
-    {% if related_articles_list %}
-    <div class="related-articles">
-        <strong class="related-articles-heading">Related Articles:</strong>
-        <ul class="related-articles-list">
-            {% for article in related_articles_list %}
-            <li class="related-article-item">
-                <a class="related-article-link" href="{{ article.link }}" target="_blank">{{ article.title }}</a>
-            </li>
-            {% endfor %}
-        </ul>
     </div>
     {% endif %}
 
@@ -201,6 +186,21 @@
         </div>
     </div>
     {% endif %}
+
+
+        <!-- Related Articles Section -->
+        {% if related_articles_list %}
+        <div class="related-articles">
+            <strong class="related-articles-heading">Related Articles:</strong>
+            <ul class="related-articles-list">
+                {% for article in related_articles_list %}
+                <li class="related-article-item">
+                    <a class="related-article-link" href="{{ article.link }}" target="_blank">{{ article.title }}</a>
+                </li>
+                {% endfor %}
+            </ul>
+        </div>
+        {% endif %}
 
 
     

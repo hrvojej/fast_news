@@ -590,8 +590,8 @@ def save_as_html(article_id, title, url, content, summary, response_text, schema
                     break
                 index += 1
 
-            # Prioritize candidates that appear in the article title
-            article_title_lower = (gemini_title if gemini_title else title).lower()
+            # Prioritize candidates that appear in the original article title
+            article_title_lower = title.lower()
             prioritized_candidates = []
             non_prioritized_candidates = []
             for candidate in candidates:
@@ -599,7 +599,10 @@ def save_as_html(article_id, title, url, content, summary, response_text, schema
                     prioritized_candidates.append(candidate)
                 else:
                     non_prioritized_candidates.append(candidate)
-            candidates = prioritized_candidates + non_prioritized_candidates
+            candidates = prioritized_candidates + non_prioritized_candidates           
+            
+            
+            
 
             if not candidates and title:
                 title_words = [word.lower() for word in re.findall(r'\b\w+\b', title)
@@ -607,19 +610,11 @@ def save_as_html(article_id, title, url, content, summary, response_text, schema
                 candidates = title_words[:6]
 
             image_query = " ".join(candidates)
-            logger.debug(f"Entities for Wikimedia image search: {candidates}")
-
-
-            
-            
-            if not image_query:
-                if 'prison' in title.lower() or 'prison' in content.lower()[:500]:
-                    image_query = "prison"
-                elif 'strike' in title.lower() or 'strike' in content.lower()[:500]:
-                    image_query = "strike protest"
+            logger.debug(f"Entities for Wikimedia image search: {candidates}")                    
+                    
             
             if image_query:
-                logger.info(f"Using Wikimedia search query: '{image_query}'")
+                logger.info("Using Wikimedia search query based on the original title for image search.")
                 
                 from summarizer_config import CONFIG, get_config_value
                 short_threshold = get_config_value(CONFIG, 'image_search', 'short_threshold', 3000)
@@ -634,7 +629,10 @@ def save_as_html(article_id, title, url, content, summary, response_text, schema
                 else:
                     num_images = max_images
                 
-                images = search_and_download_images(image_query, article_id, base_name, num_images)
+                images = search_and_download_images("", article_id, base_name, num_images, title=title)               
+                
+                
+                
                 logger.info(f"Found {len(images)} images for article {article_id}")
                 
                 if images and len(images) > 0:
@@ -703,12 +701,11 @@ def save_as_html(article_id, title, url, content, summary, response_text, schema
         # After clean_summary has been computed
         summary_fields = extract_summary_fields(clean_summary)
 
-        # Compute relative file location for the saved HTML file
+        # Compute relative file location for the saved HTML file with forward slashes
         if subfolder:
-            relative_file_location = os.path.join(subfolder, filename)
+            relative_file_location = os.path.join(subfolder, filename).replace(os.sep, '/')
         else:
-            relative_file_location = filename
-
+            relative_file_location = filename.replace(os.sep, '/')
 
         from db_scripts.db_context import DatabaseContext
         db_context = DatabaseContext()

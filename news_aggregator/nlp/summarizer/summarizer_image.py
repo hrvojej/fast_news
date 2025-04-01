@@ -12,16 +12,22 @@ import uuid
 import shutil
 from urllib.parse import urlparse
 from bs4 import BeautifulSoup
+import sys
 
 from summarizer_logging import get_logger
 from summarizer_config import OUTPUT_HTML_DIR, get_config_value, CONFIG
+
+# Add package root to path
+current_dir = os.path.dirname(os.path.abspath(__file__))
+package_root = os.path.abspath(os.path.join(current_dir, "../../"))
+if package_root not in sys.path:
+    sys.path.insert(0, package_root)
 
 logger = get_logger(__name__)
 
 # Directory for storing images
 BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
 IMAGES_DIR = os.path.join(BASE_DIR, 'frontend', 'web', 'static', 'images')
-
 
 # Standard class names for images
 IMAGE_CLASSES = {
@@ -63,9 +69,8 @@ def ensure_images_directory():
     """
     logger.debug(f"Ensuring images directory exists at: {IMAGES_DIR}")
     try:
-        if not os.path.exists(IMAGES_DIR):
-            os.makedirs(IMAGES_DIR)
-            logger.info(f"Created images directory: {IMAGES_DIR}")
+        os.makedirs(IMAGES_DIR, exist_ok=True)
+        logger.info(f"Ensured images directory: {IMAGES_DIR}")
         
         # Test write access
         test_file = os.path.join(IMAGES_DIR, "test_write.txt")
@@ -116,11 +121,14 @@ def download_image(url, article_id, base_name=None, counter=None):
     logger.debug(f"Attempting to download image from {url} to {filepath}")
 
     try:
+        user_agent = get_config_value("USER_AGENT", "MySummarizer/1.0 (your.email@example.com)")
+        timeout_value = get_config_value("REQUEST_TIMEOUT", 10)
         headers = {
-            'User-Agent': 'MySummarizer/1.0 (your.email@example.com)'
+            'User-Agent': user_agent
         }
-        response = requests.get(url, headers=headers, stream=True, timeout=10)
+        response = requests.get(url, headers=headers, stream=True, timeout=timeout_value)
         logger.debug(f"Image download response status: {response.status_code}")
+        response.raise_for_status()
 
         # Check if the response contains an image
         content_type = response.headers.get('Content-Type', '')
@@ -128,19 +136,12 @@ def download_image(url, article_id, base_name=None, counter=None):
             logger.error(f"URL did not return image content: {url} (Content-Type: {content_type})")
             return None
 
-        if response.status_code == 200:
-            # Write the image to file once
-            with open(filepath, 'wb') as f:
-                response.raw.decode_content = True
-                shutil.copyfileobj(response.raw, f)
-        else:
-            logger.error(f"Response status code {response.status_code} for URL: {url}")
-            return None
+        with open(filepath, 'wb') as f:
+            response.raw.decode_content = True
+            shutil.copyfileobj(response.raw, f)
 
-        # Verify file existence explicitly
         if os.path.exists(filepath):
             file_size = os.path.getsize(filepath)
-            # Just store the filename, not the full path with "images/"
             logger.info(f"Downloaded image successfully:\n"
                         f"    Original URL: {url}\n"
                         f"    Local path: {filename}\n"
@@ -166,99 +167,70 @@ def download_image(url, article_id, base_name=None, counter=None):
         return None
 
 def extract_search_terms(query, title, content=None, entity_list=None):
+    import logging
+    logger = logging.getLogger(__name__)
+    
+    search_text = title if title else query
+    if not search_text:
+        logger.info("No title or query provided; cannot extract search terms.")
+        return []
+    
+    from portals.modules.keyword_extractor import KeywordExtractor
+    extractor = KeywordExtractor()
+    
+    candidates = []
+    # Try extracting keywords with decreasing max_keywords: 5, then 4, then 3, then 2
+    for max_kw in [5, 4, 3, 2]:
+        logger.info(f"Attempting to extract keywords with max_keywords = {max_kw}")
+        keywords = extractor.extract_keywords(search_text, max_keywords=max_kw)
+        logger.info(f"Extracted keywords with max_keywords={max_kw}: {keywords}")
+        if keywords:
+            nlp_query = " ".join(keywords)
+            logger.info(f"Using NLP search term: {nlp_query}")
+            candidates.append(nlp_query)
+    
+    if not candidates:
+        logger.info("Failed to extract any keywords using NLP.")
+    return candidates
+
+def is_relevant(caption, query):
     """
-    Extract better search terms from the query, title, and entity list.
+    Check if the image caption is relevant to the search query.
     
     Args:
-        query (str): Original search query
-        title (str): Article title
-        content (str, optional): Article content for context
-        entity_list (list, optional): List of named entities from the article
-        
+        caption (str): The caption or description of the image.
+        query (str): The search query.
+    
     Returns:
-        list: Prioritized list of search terms to try
+        bool: True if at least one word from the query is found in the caption.
     """
-    search_terms = []
-    
-    # Start with the original query
-    if query:
-        search_terms.append(query)
-    
-    # Add entity-based search terms if available
-    if entity_list and isinstance(entity_list, list):
-        # Prioritize named entities (people, organizations, locations)
-        named_entities = [entity for entity in entity_list 
-                         if isinstance(entity, dict) and entity.get('type') in 
-                         ['PERSON', 'ORGANIZATION', 'LOCATION', 'GPE']]
-        
-        if named_entities:
-            top_entities = [entity.get('text') for entity in sorted(named_entities, 
-                                              key=lambda x: x.get('count', 0), 
-                                              reverse=True)[:3]]
-            entity_query = " ".join(top_entities)
-            if entity_query and entity_query not in search_terms:
-                search_terms.append(entity_query)
-    
-    # Add title-based search terms
-    if title:
-        # Full title if it's short enough
-        if len(title.split()) <= 5 and title not in search_terms:
-            search_terms.append(title)
-        
-        # First half of the title (typically contains the main subject)
-        title_words = title.split()
-        if len(title_words) > 3:
-            first_half = " ".join(title_words[:len(title_words)//2])
-            if first_half not in search_terms:
-                search_terms.append(first_half)
-        
-        # Extract significant words from title (excluding common words)
-        common_words = ['the', 'a', 'an', 'in', 'on', 'at', 'of', 'to', 'and', 'or', 'for', 'with', 'by']
-        significant_words = [word.lower() for word in re.findall(r'\b\w+\b', title) 
-                            if len(word) > 3 and word.lower() not in common_words]
-        
-        if significant_words:
-            sig_query = " ".join(significant_words[:3])
-            if sig_query not in search_terms:
-                search_terms.append(sig_query)
-    
-    # Add context-based fallback search terms
-    if query or title or (content and isinstance(content, str)):
-        # Check for certain topics and add specialized terms
-        text_to_check = ((query or "") + " " + (title or "") + " " + ((content or "")[:500])).lower()
+    if not caption:
+        return False
+    caption_lower = caption.lower()
+    query_words = query.lower().split()
+    matches = sum(1 for word in query_words if word in caption_lower)
+    return matches > 0
 
-        context_terms = [
-            ("prison", ["prison", "jail", "incarceration"]),
-            ("protest", ["protest", "demonstration", "march"]),
-            ("strike", ["strike", "labor action", "work stoppage"]),
-            ("war", ["conflict", "battlefield", "military operation"]),
-            ("election", ["voting", "campaign", "ballot"]),
-            ("climate", ["environment", "global warming", "sustainability"]),
-            ("health", ["medicine", "healthcare", "medical treatment"]),
-            ("technology", ["innovation", "digital", "computer"]),
-            ("business", ["company", "corporate", "industry"])
-        ]
-        
-        for keyword, related_terms in context_terms:
-            if keyword in text_to_check:
-                for term in related_terms:
-                    if term not in search_terms:
-                        search_terms.append(term)
-        
-    # Add first word of query as fallback
-    if query and " " in query and query.split()[0] not in search_terms:
-        search_terms.append(query.split()[0])
+def wrap_image_in_figure(soup, img):
+    """
+    Wrap an img tag in a figure element with the standard article image class
+    and add a figcaption if the alt text is available.
     
-    # Generic fallback
-    # search_terms.append("news")
+    Args:
+        soup (BeautifulSoup): The BeautifulSoup object.
+        img (Tag): The image tag to wrap.
     
-    # Remove duplicates while preserving order
-    unique_terms = []
-    for term in search_terms:
-        if term and term not in unique_terms:
-            unique_terms.append(term)
-    
-    return unique_terms
+    Returns:
+        Tag: The new figure element.
+    """
+    figure = soup.new_tag('figure', **{'class': IMAGE_CLASSES["article"]})
+    img_copy = img.extract()
+    figure.append(img_copy)
+    if img_copy.get('alt') and img_copy.get('alt') != 'Image':
+        figcaption = soup.new_tag('figcaption')
+        figcaption.string = img_copy.get('alt')
+        figure.append(figcaption)
+    return figure
 
 def search_and_download_images(query, article_id, base_name, num_images, title=None, entity_list=None, content=None, requested_width=600):
     """
@@ -277,8 +249,14 @@ def search_and_download_images(query, article_id, base_name, num_images, title=N
     Returns:
         list: A list of dictionaries, each containing 'url', 'caption', and 'alt'.
     """
-    # Get a prioritized list of search terms
-    search_queries = extract_search_terms(query, title, content, entity_list)
+    # Get a prioritized list of search terms using the original title if provided
+    if title:
+        search_queries = extract_search_terms("", title, content, entity_list)
+    else:
+        search_queries = extract_search_terms(query, title, content, entity_list)
+    if not search_queries:
+        logger.info("No keywords extracted using NLP; falling back to original title.")
+        search_queries = [title]
     logger.debug(f"Will try these search queries in order: {search_queries}")
 
     logger.info("Using Wikimedia Commons search for images.")
@@ -290,7 +268,8 @@ def search_and_download_images(query, article_id, base_name, num_images, title=N
             "action": "query",
             "format": "json",
             "generator": "search",
-            "gsrsearch": f"filetype:bitmap {current_query}",
+            "gsrsearch": current_query,
+            "gsrwhat": "text",
             "gsrnamespace": 6,
             "gsrlimit": num_images * 3,
             "prop": "imageinfo",
@@ -299,10 +278,12 @@ def search_and_download_images(query, article_id, base_name, num_images, title=N
         }
         logger.debug(f"Searching Wikimedia Commons with query: '{current_query}' and params: {params}")
         try:
+            user_agent = get_config_value("USER_AGENT", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36 (your.email@example.com)")
+            timeout_value = get_config_value("REQUEST_TIMEOUT", 10)
             headers = {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36 (your.email@example.com)'
+                'User-Agent': user_agent
             }
-            response = requests.get(api_url, headers=headers, params=params, timeout=10)
+            response = requests.get(api_url, headers=headers, params=params, timeout=timeout_value)
             logger.debug(f"Wikimedia API Request URL: {response.url}")
             logger.debug(f"Wikimedia API Response status: {response.status_code}")
             if response.status_code != 200:
@@ -317,7 +298,8 @@ def search_and_download_images(query, article_id, base_name, num_images, title=N
             if 'query' not in json_response or 'pages' not in json_response['query']:
                 logger.info(f"No images found in Wikimedia response for query '{current_query}'")
                 continue
-            time.sleep(1)
+            sleep_duration = get_config_value("WIKIMEDIA_SLEEP_DURATION", 1)
+            time.sleep(sleep_duration)
             images = []
             pages = json_response["query"]["pages"]
             sorted_pages = sorted(pages.values(), key=lambda p: int(p.get("pageid", 0)))
@@ -344,6 +326,10 @@ def search_and_download_images(query, article_id, base_name, num_images, title=N
                         caption = BeautifulSoup(caption, 'html.parser').get_text()
                 if not caption:
                     caption = page.get("title", "Image").replace("File:", "").replace("_", " ")
+                # Check relevance using the new helper function
+                if not is_relevant(caption, current_query):
+                    logger.debug(f"Skipping image '{page.get('title', 'Unknown')}' due to low relevance with query '{current_query}'.")
+                    continue
                 image_data = download_image(image_url, article_id, base_name=base_name, counter=idx)
                 if image_data:
                     images.append({
@@ -361,7 +347,6 @@ def search_and_download_images(query, article_id, base_name, num_images, title=N
     
     logger.warning("All queries failed to find images. No images will be included.")
     return []
-
 
 def create_standardized_image_html(url, caption=None, alt=None, is_featured=False):
     """
@@ -412,8 +397,7 @@ def process_images_in_html(html_content, article_id):
         soup = BeautifulSoup(html_content, 'html.parser')
         
         # Process standalone img tags
-        standalone_imgs = [img for img in soup.find_all('img') if img.parent.name != 'figure' and 
-                          (not img.parent.get('class') or IMAGE_CLASSES["featured"] not in img.parent.get('class', []))]
+        standalone_imgs = [img for img in soup.find_all('img') if img.parent.name not in ['figure', 'div'] or (img.parent.name == 'div' and IMAGE_CLASSES["featured"] not in img.parent.get('class', []))]
         
         for img in standalone_imgs:
             src = img.get('src')
@@ -423,35 +407,17 @@ def process_images_in_html(html_content, article_id):
                     img['src'] = image_data["path"]
                     img['data-original-src'] = src
                     
-                    # If the image isn't in a proper container, wrap it in one
                     if img.parent.name not in ['div', 'figure'] or not img.parent.get('class'):
-                        # Create a figure container
-                        figure = soup.new_tag('figure')
-                        figure['class'] = IMAGE_CLASSES["article"]
-                        
-                        # Create a figcaption if alt text exists
-                        if img.get('alt') and img.get('alt') != 'Image':
-                            figcaption = soup.new_tag('figcaption')
-                            figcaption.string = img.get('alt')
-                            
-                            # Replace the img with the new structure
-                            img_copy = img.copy()
-                            img.replace_with(figure)
-                            figure.append(img_copy)
-                            figure.append(figcaption)
-                        else:
-                            # Just wrap the image without a caption
-                            img_copy = img.copy()
-                            img.replace_with(figure)
-                            figure.append(img_copy)
+                        new_figure = wrap_image_in_figure(soup, img)
+                        img.insert_after(new_figure)
+                        img.decompose()
                 else:
                     img['alt'] = f"{img.get('alt', 'Image')} (failed to download)"
                     img['title'] = f"Failed to download: {src}"
         
         # Process images in figures or featured-image divs
         for container in soup.find_all(['figure', 'div']):
-            if container.name == 'div' and (not container.get('class') or 
-                                            IMAGE_CLASSES["featured"] not in container.get('class', [])):
+            if container.name == 'div' and (not container.get('class') or IMAGE_CLASSES["featured"] not in container.get('class', [])):
                 continue
                 
             img = container.find('img')
@@ -468,11 +434,9 @@ def process_images_in_html(html_content, article_id):
                     img['alt'] = f"{img.get('alt', 'Image')} (failed to download)"
                     img['title'] = f"Failed to download: {src}"
             
-            # Ensure the container has the proper class
             if container.name == 'figure' and not container.get('class'):
                 container['class'] = IMAGE_CLASSES["article"]
             
-            # Ensure it has a figcaption if needed
             if container.name == 'figure' and not container.find('figcaption') and img.get('alt'):
                 figcaption = soup.new_tag('figcaption')
                 figcaption.string = img.get('alt')
@@ -515,14 +479,15 @@ def test_image_download():
     """
     test_url = "https://upload.wikimedia.org/wikipedia/commons/thumb/c/c3/Python-logo-notext.svg/800px-Python-logo-notext.svg.png"
     test_article_id = "test_article_123"
+    user_agent = get_config_value("USER_AGENT", "MySummarizerTest/1.0 (your.email@example.com) requests/2.25.1")
     headers = {
-        'User-Agent': 'MySummarizerTest/1.0 (your.email@example.com) requests/2.25.1'
+        'User-Agent': user_agent
     }
 
     logger.debug(f"Testing image download with URL: {test_url}")
     
     try:
-        response = requests.get(test_url, headers=headers, stream=True, timeout=10)
+        response = requests.get(test_url, headers=headers, stream=True, timeout=get_config_value("REQUEST_TIMEOUT", 10))
         logger.debug(f"Test image download response status: {response.status_code}")
 
         if response.status_code == 200:

@@ -1,21 +1,16 @@
 Below is an updated version of your README with the necessary changes. In this version, we explicitly state that the summarization is done via the Gemini API while image retrieval is now handled using the Wikimedia Commons API. We removed any misleading references to image fetching via Gemini API and adjusted the key features and documentation accordingly.
 
-# Pexel api key
-https://www.pexels.com/
-BaBjXpyAZtZlfZ2fy1CAr3PUcfXmK0yeSx7Za876llNcIuEqaNhEMgLB
+# venv
+C:\Users\Korisnik\Desktop\TLDR\venv\Scripts\Activate.ps1
+cd C:\Users\Korisnik\Desktop\TLDR\fast_news\news_aggregator\nlp\summarizer
+
+python main.py --schema pt_nyt --env dev --article-id "0078e4d3-5782-4c73-a6ae-d791e7d8e914"
+python main.py --schema pt_nyt --env dev --limit 10
 
 # Remove all items in curret folder:
 Remove-Item -Path * -Recurse -Force
 
 
----
-# venv
-C:\Users\Korisnik\Desktop\TLDR\venv\Scripts\Activate.ps1
-cd C:\Users\Korisnik\Desktop\TLDR\fast_news\news_aggregator\nlp\summarizer
-python main.py --schema pt_nyt --env dev --article-id "0078e4d3-5782-4c73-a6ae-d791e7d8e914"
-python main.py --schema pt_nyt --env dev --limit 200
-
-mo
 # Update change in local frontend to CloudFlare
 cd C:\Users\Korisnik\Desktop\TLDR\fast_news\news_aggregator\frontend
 pwsh -ExecutionPolicy Bypass -File update-site.ps1
