@@ -13,15 +13,68 @@ import shutil
 from urllib.parse import urlparse
 from bs4 import BeautifulSoup
 import sys
+import unicodedata
 
 from summarizer_logging import get_logger
 from summarizer_config import OUTPUT_HTML_DIR, get_config_value, CONFIG
 
-# Add package root to path
-current_dir = os.path.dirname(os.path.abspath(__file__))
-package_root = os.path.abspath(os.path.join(current_dir, "../../"))
-if package_root not in sys.path:
-    sys.path.insert(0, package_root)
+def sanitize_query(query):
+    """
+    Sanitize the query string by normalizing and removing non-alphanumeric characters.
+    Only ASCII letters, numbers, and whitespace will be kept.
+    
+    Args:
+        query (str): The search query to sanitize.
+    
+    Returns:
+        str: The sanitized query containing only ASCII letters, numbers, and whitespace.
+    """
+    if not query:
+        return query
+    normalized = unicodedata.normalize('NFKD', query)
+    ascii_str = normalized.encode('ascii', 'ignore').decode('ascii')
+    sanitized = re.sub(r'[^A-Za-z0-9\s]', '', ascii_str)
+    return sanitized
+
+def get_relevance_score(caption, query):
+    """
+    Compute a relevance score based on how many query words appear in the caption.
+    
+    Args:
+        caption (str): The image caption or title.
+        query (str): The search query.
+    
+    Returns:
+        int: The number of query words found in the caption.
+    """
+    if not caption or not query:
+        return 0
+    caption_lower = caption.lower()
+    query_words = query.lower().split()
+    score = sum(1 for word in query_words if word in caption_lower)
+    return score
+
+def generate_keyword_combinations(keywords, max_terms=5):
+    """
+    Generate candidate search queries by combining the first n keywords,
+    starting with n = min(max_terms, len(keywords)) and then decrementing to 1.
+    
+    Args:
+        keywords (list): List of keyword phrases.
+        max_terms (int): Maximum number of terms to try together.
+    
+    Returns:
+        list: A list of candidate queries (strings) in descending order.
+    """
+    candidates = []
+    n = min(max_terms, len(keywords))
+    while n > 0:
+        query = " ".join(keywords[:n])
+        # Sanitize the query in case individual keywords include unwanted characters
+        query = sanitize_query(query)
+        candidates.append(query)
+        n -= 1
+    return candidates
 
 logger = get_logger(__name__)
 
@@ -121,8 +174,8 @@ def download_image(url, article_id, base_name=None, counter=None):
     logger.debug(f"Attempting to download image from {url} to {filepath}")
 
     try:
-        user_agent = get_config_value("USER_AGENT", "MySummarizer/1.0 (your.email@example.com)")
-        timeout_value = get_config_value("REQUEST_TIMEOUT", 10)
+        user_agent = get_config_value(CONFIG, "USER_AGENT", "MySummarizer/1.0 (your.email@example.com)")
+        timeout_value = get_config_value(CONFIG, "REQUEST_TIMEOUT", 10)
         headers = {
             'User-Agent': user_agent
         }
@@ -186,30 +239,12 @@ def extract_search_terms(query, title, content=None, entity_list=None):
         logger.info(f"Extracted keywords with max_keywords={max_kw}: {keywords}")
         if keywords:
             nlp_query = " ".join(keywords)
+            nlp_query = sanitize_query(nlp_query)
             logger.info(f"Using NLP search term: {nlp_query}")
             candidates.append(nlp_query)
-    
     if not candidates:
         logger.info("Failed to extract any keywords using NLP.")
     return candidates
-
-def is_relevant(caption, query):
-    """
-    Check if the image caption is relevant to the search query.
-    
-    Args:
-        caption (str): The caption or description of the image.
-        query (str): The search query.
-    
-    Returns:
-        bool: True if at least one word from the query is found in the caption.
-    """
-    if not caption:
-        return False
-    caption_lower = caption.lower()
-    query_words = query.lower().split()
-    matches = sum(1 for word in query_words if word in caption_lower)
-    return matches > 0
 
 def wrap_image_in_figure(soup, img):
     """
@@ -232,12 +267,12 @@ def wrap_image_in_figure(soup, img):
         figure.append(figcaption)
     return figure
 
-def search_and_download_images(query, article_id, base_name, num_images, title=None, entity_list=None, content=None, requested_width=600):
+def search_and_download_images(query, article_id, base_name, num_images, title=None, entity_list=None, content=None, requested_width=600, search_keywords=None):
     """
     Search for images using Wikimedia Commons.
     
     Args:
-        query (str): Search query (derived from article keywords or title).
+        query (str): Search query (derived from article keywords or title) if search_keywords is not provided.
         article_id (str): ID of the article (used for naming images).
         base_name (str): Base name for image filenames.
         num_images (int): Number of images to download.
@@ -245,18 +280,26 @@ def search_and_download_images(query, article_id, base_name, num_images, title=N
         entity_list (list, optional): List of named entities from the article.
         content (str, optional): Article content for context-based search terms.
         requested_width (int, optional): Desired thumbnail width (in pixels). Defaults to 600.
+        search_keywords (list, optional): List of keywords passed from the HTML module.
         
     Returns:
         list: A list of dictionaries, each containing 'url', 'caption', and 'alt'.
     """
-    # Get a prioritized list of search terms using the original title if provided
-    if title:
-        search_queries = extract_search_terms("", title, content, entity_list)
+    # If search_keywords is provided, generate candidate queries from it.
+    if search_keywords and isinstance(search_keywords, list) and len(search_keywords) > 0:
+        # Try combinations starting with up to 5 keywords
+        search_queries = generate_keyword_combinations(search_keywords, max_terms=5)
+        logger.info(f"Using provided keywords for image search. Candidate queries: {search_queries}")
     else:
-        search_queries = extract_search_terms(query, title, content, entity_list)
-    if not search_queries:
-        logger.info("No keywords extracted using NLP; falling back to original title.")
-        search_queries = [title]
+        # Fallback to the previous extraction logic
+        if title:
+            search_queries = extract_search_terms("", title, content, entity_list)
+        else:
+            search_queries = extract_search_terms(query, title, content, entity_list)
+        if not search_queries:
+            logger.info("No keywords extracted using NLP; falling back to original title.")
+            search_queries = [title]
+    
     logger.debug(f"Will try these search queries in order: {search_queries}")
 
     logger.info("Using Wikimedia Commons search for images.")
@@ -278,8 +321,8 @@ def search_and_download_images(query, article_id, base_name, num_images, title=N
         }
         logger.debug(f"Searching Wikimedia Commons with query: '{current_query}' and params: {params}")
         try:
-            user_agent = get_config_value("USER_AGENT", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36 (your.email@example.com)")
-            timeout_value = get_config_value("REQUEST_TIMEOUT", 10)
+            user_agent = get_config_value(CONFIG, "USER_AGENT", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36 (your.email@example.com)")
+            timeout_value = get_config_value(CONFIG, "REQUEST_TIMEOUT", 10)
             headers = {
                 'User-Agent': user_agent
             }
@@ -298,11 +341,17 @@ def search_and_download_images(query, article_id, base_name, num_images, title=N
             if 'query' not in json_response or 'pages' not in json_response['query']:
                 logger.info(f"No images found in Wikimedia response for query '{current_query}'")
                 continue
-            sleep_duration = get_config_value("WIKIMEDIA_SLEEP_DURATION", 1)
+            sleep_duration = get_config_value(CONFIG, "WIKIMEDIA_SLEEP_DURATION", 1)
+            try:
+                sleep_duration = int(sleep_duration)
+            except (ValueError, TypeError):
+                sleep_duration = 1
             time.sleep(sleep_duration)
-            images = []
             pages = json_response["query"]["pages"]
             sorted_pages = sorted(pages.values(), key=lambda p: int(p.get("pageid", 0)))
+            
+            # Collect candidate images along with their relevance scores
+            candidate_images = []
             for idx, page in enumerate(sorted_pages, start=1):
                 imageinfo = page.get("imageinfo", [])
                 if not imageinfo:
@@ -311,6 +360,10 @@ def search_and_download_images(query, article_id, base_name, num_images, title=N
                 info = imageinfo[0]
                 image_url = info.get("thumburl") or info.get("url")
                 if not image_url:
+                    continue
+                # Filter out images with ".pdf" in the URL
+                if ".pdf" in image_url.lower():
+                    logger.debug(f"Skipping image due to PDF in URL: {image_url}")
                     continue
                 _, ext = os.path.splitext(image_url.lower())
                 if ext not in valid_extensions:
@@ -326,26 +379,41 @@ def search_and_download_images(query, article_id, base_name, num_images, title=N
                         caption = BeautifulSoup(caption, 'html.parser').get_text()
                 if not caption:
                     caption = page.get("title", "Image").replace("File:", "").replace("_", " ")
-                # Check relevance using the new helper function
-                if not is_relevant(caption, current_query):
-                    logger.debug(f"Skipping image '{page.get('title', 'Unknown')}' due to low relevance with query '{current_query}'.")
+                # Compute relevance score based on keyword matches in caption
+                score = get_relevance_score(caption, current_query)
+                if score == 0:
+                    logger.debug(f"Skipping image '{page.get('title', 'Unknown')}' due to zero relevance (caption: '{caption}')")
                     continue
+                # Attempt to download the image
                 image_data = download_image(image_url, article_id, base_name=base_name, counter=idx)
                 if image_data:
-                    images.append({
-                        "url": image_data["path"],
-                        "caption": caption,
-                        "alt": caption
+                    candidate_images.append({
+                        "score": score,
+                        "data": {
+                            "url": image_data["path"],
+                            "caption": caption,
+                            "alt": caption
+                        }
                     })
-                if len(images) >= num_images:
+                if len(candidate_images) >= num_images * 3:
+                    # We collect extra candidates to later filter and sort by relevance.
                     break
-            if images:
-                logger.info(f"Downloaded {len(images)} images from Wikimedia Commons for query: '{current_query}'")
-                return images
+            if candidate_images:
+                # Prefer images with a relevance score of at least 2
+                high_relevance = [c for c in candidate_images if c["score"] >= 2]
+                if high_relevance:
+                    final_candidates = high_relevance
+                else:
+                    final_candidates = candidate_images
+                # Sort candidates by relevance score (descending)
+                final_candidates.sort(key=lambda x: x["score"], reverse=True)
+                final_images = [c["data"] for c in final_candidates[:num_images]]
+                logger.info(f"Downloaded {len(final_images)} images from Wikimedia Commons for query: '{current_query}'")
+                return final_images
         except Exception as e:
             logger.error(f"Error searching for images on Wikimedia Commons with query '{current_query}': {e}", exc_info=True)
     
-    logger.warning("All queries failed to find images. No images will be included.")
+    logger.warning("All queries failed to find suitable images. No images will be included.")
     return []
 
 def create_standardized_image_html(url, caption=None, alt=None, is_featured=False):
@@ -479,7 +547,7 @@ def test_image_download():
     """
     test_url = "https://upload.wikimedia.org/wikipedia/commons/thumb/c/c3/Python-logo-notext.svg/800px-Python-logo-notext.svg.png"
     test_article_id = "test_article_123"
-    user_agent = get_config_value("USER_AGENT", "MySummarizerTest/1.0 (your.email@example.com) requests/2.25.1")
+    user_agent = get_config_value(CONFIG, "USER_AGENT", "MySummarizerTest/1.0 (your.email@example.com) requests/2.25.1")
     headers = {
         'User-Agent': user_agent
     }
@@ -487,7 +555,7 @@ def test_image_download():
     logger.debug(f"Testing image download with URL: {test_url}")
     
     try:
-        response = requests.get(test_url, headers=headers, stream=True, timeout=get_config_value("REQUEST_TIMEOUT", 10))
+        response = requests.get(test_url, headers=headers, stream=True, timeout=get_config_value(CONFIG, "REQUEST_TIMEOUT", 10))
         logger.debug(f"Test image download response status: {response.status_code}")
 
         if response.status_code == 200:

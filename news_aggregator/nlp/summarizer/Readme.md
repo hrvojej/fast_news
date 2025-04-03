@@ -3,9 +3,10 @@ Below is an updated version of your README with the necessary changes. In this v
 # venv
 C:\Users\Korisnik\Desktop\TLDR\venv\Scripts\Activate.ps1
 cd C:\Users\Korisnik\Desktop\TLDR\fast_news\news_aggregator\nlp\summarizer
+python main.py --schema pt_nyt --env dev --article-id "f66d7f33-b823-4810-8cda-da2699e61f9c"
 
 python main.py --schema pt_nyt --env dev --article-id "0078e4d3-5782-4c73-a6ae-d791e7d8e914"
-python main.py --schema pt_nyt --env dev --limit 10
+python main.py --schema pt_nyt --env dev --limit 100
 
 # Remove all items in curret folder:
 Remove-Item -Path * -Recurse -Force
@@ -19,7 +20,7 @@ pwsh -ExecutionPolicy Bypass -File update-site.ps1
 # Article Summarization System
 
 ```bash
-python main.py --schema pt_nyt --env dev --article-id "0078e4d3-5782-4c73-a6ae-d791e7d8e914"
+python main.py --schema pt_nyt --env dev --article-id "f66d7f33-b823-4810-8cda-da2699e61f9c"
 ```
 
 A modular system for summarizing articles using the Gemini API for generating summaries and the Wikimedia Commons API for retrieving images.

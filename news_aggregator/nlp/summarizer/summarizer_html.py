@@ -453,11 +453,10 @@ def create_filename_from_title(title, url, article_id):
     filename = filename[:50]                    # Limit length
     return f"{filename}.html"
 
-def save_as_html(article_id, title, url, content, summary, response_text, schema, keywords=None, existing_gemini_title=None):
-
+def save_as_html(article_id, title, url, content, summary, response_text, schema, keywords=None, existing_gemini_title=None): # Note: keywords arg here is likely unused now
     """
     Save the article and its summary as an HTML file, with images from Wikimedia based on keywords.
-    
+
     Args:
         article_id (str): The article ID
         title (str): The article title
@@ -465,27 +464,24 @@ def save_as_html(article_id, title, url, content, summary, response_text, schema
         content (str): The original article content
         summary (str): The generated summary
         response_text (str): The raw API response
-        keywords (list, optional): List of article keywords for Wikimedia image searches
-        
+        schema (str): The database schema
+        keywords (list, optional): [DEPRECATED/UNUSED in this context - keywords are extracted from summary]
+        existing_gemini_title (str, optional): Title from DB if already summarized.
+
     Returns:
         bool: True if successful, False otherwise
     """
     try:
         # Ensure output directory exists
         ensure_output_directory()
-        
-        # Debug the raw summary and response
+
         logger.debug(f"Raw summary type: {type(summary)}")
         logger.debug(f"Raw summary preview: {summary[:300] if summary else 'None'}")
-        
-        # Process featured image extraction first
-        featured_image_html = ""
-        processed_summary = summary        
-                              
-        # Extract HTML content properly
+
+        # --- Start Processing Summary and Extracting Fields FIRST ---
+        processed_summary = summary
         clean_summary = ""
         if processed_summary and isinstance(processed_summary, str):
-            # Check if summary contains code blocks
             if "```html" in processed_summary:
                 try:
                     processed_summary = processed_summary.split("```html")[1].split("```")[0].strip()
@@ -494,40 +490,24 @@ def save_as_html(article_id, title, url, content, summary, response_text, schema
                 except Exception as e:
                     logger.warning(f"Error extracting HTML from code block: {e}")
 
-            # Remove any stray style-based list item formatting
             processed_summary = re.sub(r'<li style="[^>]*">', '<li>', processed_summary)
-            
-            # Clean and normalize the HTML content
             clean_summary = clean_and_normalize_html(processed_summary)
         else:
             logger.warning(f"Invalid summary content: {type(processed_summary)}")
             clean_summary = "<div>No valid summary content available</div>"
-        
-        # Attempt to extract Gemini-generated title from the cleaned summary HTML.
-        # If an existing Gemini title is provided (from a prior summary), use it.
-        soup_summary = BeautifulSoup(clean_summary, 'html.parser')
-        gemini_title_tag = soup_summary.find('h1', class_='article-title')
-        generated_title = gemini_title_tag.get_text(separator=' ', strip=True) if gemini_title_tag else title
-        gemini_title = existing_gemini_title if existing_gemini_title is not None else generated_title
 
-        if existing_gemini_title is not None:
-            logger.info(f"Existing Gemini title found in DB for article {article_id}: '{existing_gemini_title}'. Title unchanged.")
-        else:
-            logger.info(f"New Gemini title generated for article {article_id}: '{generated_title}'.")
-
-
-        
         # If clean_summary is empty or just a placeholder, try with the API response
         if not clean_summary or clean_summary in ("<div>No content available</div>", "<div>No valid summary content available</div>"):
             logger.warning("Processed summary is empty, attempting to extract from raw API response")
             try:
-                if response_text and "```html" in response_text:
+                # ... (logic to extract HTML from response_text - keep as is) ...
+                 if response_text and "```html" in response_text:
                     html_content = response_text.split("```html")[1].split("```")[0].strip()
                     html_content = html.unescape(html_content)
                     if html_content:
                         clean_summary = clean_and_normalize_html(html_content)
                         logger.info("Successfully extracted HTML content from API response")
-                elif response_text and ("<html" in response_text or "<div" in response_text):
+                 elif response_text and ("<html" in response_text or "<div" in response_text):
                     html_match = re.search(r'(<div.*?>.*?</div>|<html.*?>.*?</html>)', response_text, re.DOTALL)
                     if html_match:
                         html_content = html_match.group(0)
@@ -535,202 +515,163 @@ def save_as_html(article_id, title, url, content, summary, response_text, schema
                         logger.info("Successfully extracted HTML content from API response using regex")
             except Exception as e:
                 logger.error(f"Error extracting HTML from API response: {e}")
-        
-        # If we still don't have a featured image, try to get one from Wikimedia
-        if not featured_image_html and ((keywords and isinstance(keywords, list) and len(keywords) > 0) or (title and title.strip() != "")):
-            base_name = re.sub(r'[^\w\s-]', '', title if title else "Article")
-            base_name = re.sub(r'\s+', '_', base_name)[:30]  # Limit length
-            
-            core_org_entities = []
-            core_named_entities = []
-            core_key_actions_entities = []
-            core_industry_terminology = []
-            soup_entities = BeautifulSoup(clean_summary, 'html.parser')
-            entity_grid = soup_entities.find('div', class_='entity-grid')
-            if entity_grid:
-                for category in entity_grid.find_all('div', class_='entity-category'):
-                    cat_title_tag = category.find(class_='entity-category-title')
-                    cat_title = cat_title_tag.get_text(strip=True).upper() if cat_title_tag else ""
-                    entity_list_tag = category.find('p', class_='entity-list')
-                    if entity_list_tag:
-                        entities_text = entity_list_tag.get_text(separator=',').strip()
-                        entities = [e.strip() for e in entities_text.split(',') if e.strip()]
-                        if cat_title.startswith("ORGANIZATIONS & PRODUCTS"):
-                            core_org_entities.extend(entities)
-                        elif cat_title.startswith("NAMED INDIVIDUALS"):
-                            core_named_entities.extend(entities)
-                        elif cat_title.startswith("KEY ACTIONS & RELATIONSHIPS"):
-                            core_key_actions_entities.extend(entities)
-                        elif cat_title.startswith("INDUSTRY TERMINOLOGY"):
-                            core_industry_terminology.extend(entities)
-            # Remove duplicates while preserving order
-            core_org_entities = list(dict.fromkeys(core_org_entities))
-            core_named_entities = list(dict.fromkeys(core_named_entities))
-            core_key_actions_entities = list(dict.fromkeys(core_key_actions_entities))
-            core_industry_terminology = list(dict.fromkeys(core_industry_terminology))
-            
-            # Combine ORGANIZATIONS & PRODUCTS with KEY ACTIONS & RELATIONSHIPS for more contextual results
-            combined_org_key = list(dict.fromkeys(core_org_entities + core_key_actions_entities))
-            
-            # Build candidate list in a round-robin fashion using combined_org_key, NAMED INDIVIDUALS, and INDUSTRY TERMINOLOGY
-            candidates = []
-            index = 0
-            while True:
-                added = False
-                if index < len(combined_org_key):
-                    candidates.append(combined_org_key[index])
-                    added = True
-                if index < len(core_named_entities):
-                    candidates.append(core_named_entities[index])
-                    added = True
-                if index < len(core_industry_terminology):
-                    candidates.append(core_industry_terminology[index])
-                    added = True
-                if not added:
-                    break
-                index += 1
 
-            # Prioritize candidates that appear in the original article title
-            article_title_lower = title.lower()
-            prioritized_candidates = []
-            non_prioritized_candidates = []
-            for candidate in candidates:
-                if candidate.lower() in article_title_lower:
-                    prioritized_candidates.append(candidate)
-                else:
-                    non_prioritized_candidates.append(candidate)
-            candidates = prioritized_candidates + non_prioritized_candidates           
-            
-            
-            
 
-            if not candidates and title:
-                title_words = [word.lower() for word in re.findall(r'\b\w+\b', title)
-                               if len(word) > 3 and word.lower() not in ['the', 'and', 'with', 'from', 'that', 'this']]
-                candidates = title_words[:6]
+        # Extract Gemini-generated title (use existing if available)
+        soup_summary = BeautifulSoup(clean_summary, 'html.parser')
+        gemini_title_tag = soup_summary.find('h1', class_='article-title')
+        generated_title = gemini_title_tag.get_text(separator=' ', strip=True) if gemini_title_tag else title
+        gemini_title = existing_gemini_title if existing_gemini_title is not None else generated_title
 
-            image_query = " ".join(candidates)
-            logger.debug(f"Entities for Wikimedia image search: {candidates}")                    
-                    
-            
-            if image_query:
-                logger.info("Using Wikimedia search query based on the original title for image search.")
-                
-                from summarizer_config import CONFIG, get_config_value
-                short_threshold = get_config_value(CONFIG, 'image_search', 'short_threshold', 3000)
-                medium_threshold = get_config_value(CONFIG, 'image_search', 'medium_threshold', 7000)
-                max_images = get_config_value(CONFIG, 'image_search', 'max_images', 3)
-                
-                content_length = len(content) if content else 0
-                if content_length < short_threshold:
-                    num_images = 2
-                elif content_length < medium_threshold:
-                    num_images = 3
-                else:
-                    num_images = max_images
-                
-                images = search_and_download_images("", article_id, base_name, num_images, title=title)               
-                
-                
-                
-                logger.info(f"Found {len(images)} images for article {article_id}")
-                
-                if images and len(images) > 0:
-                    featured_image = images[0]
-                    featured_image_url = featured_image["url"].replace("\\", "/")
-                    featured_image_html = (
-                        f'<div class="featured-image">'
-                        f'<img src="{featured_image_url}" alt="{featured_image["caption"]}">'
-                        f'<figcaption>{featured_image["caption"]}</figcaption>'
-                        f'</div>'
-                    )
-                    logger.info(f"Featured image added to HTML: {featured_image_url}")
-                else:
-                    featured_image_html = ""
-                    logger.warning("No featured image available to add to HTML.")
-                    
-        
-        # Process any images in the summary, downloading them and updating src attributes
+        if existing_gemini_title is not None:
+             logger.info(f"Existing Gemini title found in DB for article {article_id}: '{existing_gemini_title}'. Title unchanged.")
+        else:
+             logger.info(f"New Gemini title generated for article {article_id}: '{generated_title}'.")
+
+        # **MODIFICATION 1: Extract summary fields (including keywords) HERE**
+        summary_fields = extract_summary_fields(clean_summary)
+        # Get the keywords extracted from the summary content
+        extracted_keywords = summary_fields.get("keywords", []) # Use a different variable name to avoid confusion with the function argument
+
+        # --- Now Perform Image Search Using Extracted Keywords ---
+        images = [] # Initialize images list
+        featured_image_html = ""
+
+        # Use extracted keywords for image search if available, otherwise fall back to title
+        if extracted_keywords:
+            logger.info(f"Attempting Wikimedia image search using extracted keywords: {extracted_keywords}")
+            base_name = re.sub(r'[^\w\s-]', '', gemini_title if gemini_title else "Article")
+            base_name = re.sub(r'\s+', '_', base_name)[:30]
+
+            from summarizer_config import CONFIG, get_config_value
+            short_threshold = get_config_value(CONFIG, 'image_search', 'short_threshold', 3000)
+            medium_threshold = get_config_value(CONFIG, 'image_search', 'medium_threshold', 7000)
+            max_images = get_config_value(CONFIG, 'image_search', 'max_images', 3)
+
+            content_length = len(content) if content else 0
+            if content_length < short_threshold:
+                num_images = 3 # put to 2 for lowering num of images in short articles
+            elif content_length < medium_threshold:
+                num_images = 3
+            else:
+                num_images = max_images
+
+            # **MODIFICATION 2: Pass extracted_keywords to search_keywords parameter**
+            images = search_and_download_images(
+                query="", # Query is not needed when search_keywords is provided
+                article_id=article_id,
+                base_name=base_name,
+                num_images=num_images,
+                title=gemini_title, # Still pass title for potential fallback or context
+                search_keywords=extracted_keywords # <-- PASS THE KEYWORDS HERE
+            )
+            logger.info(f"Found {len(images)} images for article {article_id} using extracted keywords.")
+
+        elif title: # Fallback if no keywords were extracted, but title exists
+             logger.info("No keywords extracted from summary, falling back to title-based image search.")
+             base_name = re.sub(r'[^\w\s-]', '', title)
+             base_name = re.sub(r'\s+', '_', base_name)[:30]
+             # Determine num_images based on content length (same logic as above)
+             from summarizer_config import CONFIG, get_config_value
+             short_threshold = get_config_value(CONFIG, 'image_search', 'short_threshold', 3000)
+             medium_threshold = get_config_value(CONFIG, 'image_search', 'medium_threshold', 7000)
+             max_images = get_config_value(CONFIG, 'image_search', 'max_images', 3)
+             content_length = len(content) if content else 0
+             if content_length < short_threshold: num_images = 2
+             elif content_length < medium_threshold: num_images = 3
+             else: num_images = max_images
+
+             images = search_and_download_images(
+                 query="", # Let the image module use extract_search_terms with title
+                 article_id=article_id,
+                 base_name=base_name,
+                 num_images=num_images,
+                 title=title,
+                 search_keywords=None # Explicitly pass None
+             )
+             logger.info(f"Found {len(images)} images for article {article_id} using title fallback.")
+        else:
+            logger.warning("No keywords extracted and no title provided. Cannot search for images.")
+
+
+        # Prepare featured image and fetched images context (using the 'images' list populated above)
+        featured_image_data = None
+        fetched_images_data = []
+        if images and len(images) > 0:
+            # Use the first image as featured
+            featured_image_data = {
+                "url": os.path.basename(images[0]["url"]), # Use basename for template path
+                "alt": images[0].get("caption", "Article image"),
+                "caption": images[0].get("caption", "")
+            }
+            # Use the rest as fetched images
+            fetched_images_data = [{
+                "url": os.path.basename(img["url"]), # Use basename for template path
+                "alt": img.get("caption", "Article image"),
+                "caption": img.get("caption", "")
+            } for img in images[1:]]
+
+            # Also generate the featured_image_html string if needed elsewhere (though context is preferred for Jinja)
+            featured_image_url = images[0]["url"].replace("\\", "/") # Use the relative path from download_image
+            featured_image_html = (
+                 f'<div class="featured-image">'
+                 f'<img src="{featured_image_url}" alt="{images[0]["caption"]}">'
+                 f'<figcaption>{images[0]["caption"]}</figcaption>'
+                 f'</div>'
+            )
+            logger.info(f"Featured image prepared: {featured_image_url}")
+        else:
+             logger.warning("No images found or downloaded. No featured image will be added.")
+
+
+        # Process any *inline* images already present in the summary HTML
         if clean_summary and "<img" in clean_summary:
             clean_summary = process_images_in_html(clean_summary, article_id)
-        
-        # Create filename and filepath
+
+
+        # --- Continue with saving HTML, using already extracted summary_fields ---
         filename = create_filename_from_title(gemini_title, url, article_id)
 
         # Determine subfolder(s) based on URL
         subfolder = get_subfolder_from_url(url)
-        if subfolder:
-            target_dir = os.path.join(OUTPUT_HTML_DIR, subfolder)
-            os.makedirs(target_dir, exist_ok=True)
-        else:
-            target_dir = OUTPUT_HTML_DIR
-
+        target_dir = os.path.join(OUTPUT_HTML_DIR, subfolder) if subfolder else OUTPUT_HTML_DIR
+        os.makedirs(target_dir, exist_ok=True)
         filepath = os.path.join(target_dir, filename)
         logger.debug(f"Preparing to save HTML to: {filepath}")
 
-        # Compute relative path for static assets based on the depth of the target directory.
-        # Base case: when file is in OUTPUT_HTML_DIR, relative path is "../../static".
-        # For each additional subfolder level, add one "../".
+        # Compute relative path for static assets
         depth = subfolder.count(os.sep) + 1 if subfolder else 0
         relative_static_path = "../" * (1 + depth) + "static"
 
-        # Determine the correct relative path for static assets
-        
-        # Create processed date and current year for footer
+        # Create processed date and current year
         processed_date = datetime.now().strftime("%B %d, %Y %H:%M")
         current_year = datetime.now().year
-        
-        # Prepare featured image and fetched images context
-        # Instead of using the first image exclusively as featured_image,
-        # pass all images to fetched_images_data.
-        if images and len(images) > 0:
-            featured_image_data = {
-                "url": os.path.basename(images[0]["url"]),
-                "alt": images[0].get("caption", "Article image"),
-                "caption": images[0].get("caption", "")
-            }
-            fetched_images_data = [{
-                "url": os.path.basename(img["url"]),
-                "alt": img.get("caption", "Article image"),
-                "caption": img.get("caption", "")
-            } for img in images[1:]]
-        else:
-            featured_image_data = None
-            fetched_images_data = []
-            
-        # After clean_summary has been computed
-        summary_fields = extract_summary_fields(clean_summary)
 
-        # Compute relative file location for the saved HTML file with forward slashes
-        if subfolder:
-            relative_file_location = os.path.join(subfolder, filename).replace(os.sep, '/')
-        else:
-            relative_file_location = filename.replace(os.sep, '/')
+        # Compute relative file location for the saved HTML file
+        relative_file_location = os.path.join(subfolder, filename).replace(os.sep, '/') if subfolder else filename.replace(os.sep, '/')
 
+        # Get Related Articles (using the already extracted keywords)
         from db_scripts.db_context import DatabaseContext
         db_context = DatabaseContext()
-        keywords = summary_fields.get("keywords", [])
-        if keywords:
-            related_articles_list = get_related_articles(db_context, schema, article_id, keywords, limit=5)
-        else:
-            related_articles_list = []
+        related_articles_list = get_related_articles(db_context, schema, article_id, extracted_keywords, limit=5) if extracted_keywords else []
 
-                
+        # Prepare context for Jinja template
         context = {
             "title": gemini_title or f"Article {article_id}",
             "article_id": article_id,
             "url": url,
             "processed_date": processed_date,
-            "featured_image": featured_image_data,
+            "featured_image": featured_image_data, # Use the data dict
             "summary": clean_summary if clean_summary else "<div>No summary available</div>",
-            "fetched_images": fetched_images_data,
-            "show_api_response": True,
+            "fetched_images": fetched_images_data, # Use the data list
+            "show_api_response": True, # Or False based on your config/preference
             "response_text": response_text,
-            "content": content,
+            "content": content, # Optional: include original content if template uses it
             "relative_static_path": relative_static_path,
             "current_year": current_year,
+            # Use fields extracted earlier
             "source_attribution": summary_fields.get("source_attribution", ""),
-            "keywords": summary_fields.get("keywords", []),
+            "keywords": extracted_keywords, # Use the extracted list
             "entity_overview": summary_fields.get("entity_overview", []),
             "summary_paragraphs": summary_fields.get("summary_paragraphs", []),
             "interesting_facts": summary_fields.get("interesting_facts", []),
@@ -743,35 +684,21 @@ def save_as_html(article_id, title, url, content, summary, response_text, schema
             "article_html_file_location": relative_file_location
         }
 
-        
-        # Load the article template from the Jinja2 environment
+        # Load and render the template
         template = jinja_env.get_template('article.html')
-        
-        # Render the final HTML using the template and the provided context
         html_content = template.render(context)
-        
+
         # Write the rendered HTML to the output file
         with open(filepath, 'w', encoding='utf-8') as f:
             f.write(html_content)
-            f.flush()
-        
-        if os.path.exists(filepath):
-            logger.info(f"HTML file created successfully: {filepath} (Size: {os.path.getsize(filepath)} bytes)")
-        else:
-            logger.error(f"Failed to create HTML file: {filepath}")
-        
-        if featured_image_html:
-            if featured_image_url in html_content:
-                logger.debug(f"Confirmed featured image path '{featured_image_url}' is correctly embedded in HTML.")
-            else:
-                logger.error(f"Featured image path '{featured_image_url}' is missing in generated HTML.")
-        
+            f.flush() # Ensure data is written to disk
+
+        # Final checks and DB update
         if os.path.exists(filepath):
             file_size = os.path.getsize(filepath)
             logger.info(f"Successfully saved HTML output to {filepath} (size: {file_size} bytes)")
-            # Update additional summary fields in the database.
-            schema = context.get("schema", "pt_nyt")
-            update_success = update_article_summary_details(db_context, schema, article_id, context)
+            # Update additional summary details in the database.
+            update_success = update_article_summary_details(db_context, schema, article_id, context) # Pass the full context
             if update_success:
                 logger.info("Database summary details updated successfully.")
             else:
@@ -780,6 +707,9 @@ def save_as_html(article_id, title, url, content, summary, response_text, schema
         else:
             logger.error(f"File wasn't created despite no errors: {filepath}")
             return False
+
     except Exception as e:
-        logger.error(f"Error saving HTML file {filepath if 'filepath' in locals() else 'unknown'}", exc_info=True)
+        # Ensure filepath is defined for logging, even if error occurred early
+        filepath_str = filepath if 'filepath' in locals() else 'unknown path'
+        logger.error(f"Error saving HTML file {filepath_str}: {e}", exc_info=True)
         return False

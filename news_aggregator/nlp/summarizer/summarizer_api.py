@@ -1,4 +1,3 @@
-# summarizer_api.py
 """
 Module for interacting with the API (Gemini) for article summarization.
 """
@@ -11,9 +10,7 @@ from google import genai
 from google.genai import types
 from google.genai.types import Tool, GenerateContentConfig, GoogleSearch
 
-
 from summarizer_logging import get_logger
-
 
 # Initialize logger
 logger = get_logger(__name__)
@@ -45,9 +42,9 @@ def initialize_api():
         return False
 
 def get_model_for_content_length(content_length):
-    # Always use the non-experimental model for image search capability
-    return 'gemini-2.0-pro-exp-02-05'
-
+    # Always use the experimental Gemini 2.5 Pro model
+    return 'gemini-2.0-flash-001'
+    # return 'gemini-2.5-pro-exp-03-25'
 
 def create_safety_settings():
     """
@@ -86,13 +83,13 @@ def call_gemini_api(prompt, article_id, content_length, retries=2):
     Call the Gemini API to generate a summary.
     
     Args:
-        prompt (str): The prompt to send to the API
-        article_id (str): The ID of the article being summarized
-        content_length (int): The length of the article content
-        retries (int): Number of retry attempts
+        prompt (str): The prompt to send to the API.
+        article_id (str): The ID of the article being summarized.
+        content_length (int): The length of the article content.
+        retries (int): Number of retry attempts.
         
     Returns:
-        tuple: (summary_text, raw_response_text) or (None, None) if failed
+        tuple: (summary_text, raw_response_text) or (None, None) if failed.
     """
     if not prompt:
         logger.error(f"Empty prompt for article ID {article_id}")
@@ -114,15 +111,12 @@ def call_gemini_api(prompt, article_id, content_length, retries=2):
     logger.info(f"Using model {model} for article ID {article_id}")
     
     # Configure request
-    # In the call_gemini_api function, update the config_kwargs dictionary:
     config_kwargs = {
-    "max_output_tokens": 8192,
-    "temperature": 0.7,
-    "top_p": 0.9,
-    # Removed generation_config because it is not permitted in the current GenerateContentConfig
-}
-
-
+        "max_output_tokens": 16384,
+        "temperature": 0.7,
+        "top_p": 0.9,
+        # Removed generation_config because it is not permitted in the current GenerateContentConfig
+    }
     
     # Add safety settings if available
     safety_settings = create_safety_settings()
@@ -140,28 +134,26 @@ def call_gemini_api(prompt, article_id, content_length, retries=2):
     for attempt in range(retries + 1):
         try:
             logger.info(f"Calling Gemini API for article ID {article_id} (attempt {attempt+1}/{retries+1})")
-            
             start_time = time.time()
-
-            google_search_tool = Tool(google_search=GoogleSearch())
-
+            
+            # Execute API call using the custom config
             response = client.models.generate_content(
                 model=model,
                 contents=[{"role": "user", "parts": [{"text": prompt}]}],
-                config=GenerateContentConfig(
-                    tools=[google_search_tool],
-                    response_modalities=["TEXT"],
-                )
+                config=config
             )
-
-
-            elapsed_time = time.time() - start_time
             
+            elapsed_time = time.time() - start_time
             logger.info(f"API call completed in {elapsed_time:.2f} seconds")
             
             # Process response
-            if response and hasattr(response, 'text'):
-                summary_text = response.text.strip()
+            if response:
+                try:
+                    # Try using the aggregated response.text property
+                    summary_text = response.text.strip()
+                except AttributeError:
+                    # Fallback: extract text from the first candidate's content parts
+                    summary_text = response.candidates[0].content.parts[0].text.strip()
                 raw_response_text = str(response)
                 
                 # Cache the response
@@ -179,10 +171,9 @@ def call_gemini_api(prompt, article_id, content_length, retries=2):
                 
         except Exception as e:
             logger.error(f"API call failed for article ID {article_id} (attempt {attempt+1}): {e}", exc_info=True)
-            
             # Wait before retrying
             if attempt < retries:
-                wait_time = (attempt + 1) * 5  # Exponential backoff: 5s, 10s
+                wait_time = (attempt + 1) * 5  # Exponential backoff: 5s, 10s, etc.
                 logger.info(f"Retrying in {wait_time} seconds...")
                 time.sleep(wait_time)
     

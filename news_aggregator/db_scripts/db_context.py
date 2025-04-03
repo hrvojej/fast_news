@@ -132,3 +132,14 @@ class DatabaseContext:
     
     def __exit__(self, exc_type: Optional[type], exc_val: Optional[Exception], exc_tb: Optional[Any]) -> None:
         self.dispose()
+        
+        
+    def fetch_all(self, query: str) -> list:
+        """
+        Execute the given SQL query and return the result as a list of dictionaries.
+        """
+        with self.connection() as conn:
+            result = conn.execute(sa.text(query))
+            rows = result.fetchall()
+            return [dict(row._mapping) for row in rows]
+

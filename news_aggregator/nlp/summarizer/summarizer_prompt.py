@@ -32,7 +32,27 @@ def create_prompt(content, article_length, include_images=True, enable_entity_li
     try:
         # Base prompt with main topic identification
         prompt = (
-            "Create a visually enhanced and focused summary of the main topic from the following text. The summary must be at least 800 words in total. Additionally, perform a web search to retrieve not less than 10 relevant and recent original web resources based on article topic that provide sensational, dramatic, intriguing and compelling information related to the article’s topic, and incorporate these interesting facts both within the summary and in a dedicated 'Interesting Facts' section. Add all resources to " "MORE ON TOPIC AND RELATED TERMINOLOGY:\n"" section. Use links that open the “search snippets” (sometimes called the “snippet” or “meta description snippet”) that Google displays underneath each search result to summarize the page’s content.:\n\n"
+                        """
+            Create a visually enhanced and focused summary of the main topic from the following text. The summary must be at least 1200 words in total not taking into account other areas of the text. The summary should be structured in a way that is easy to read and understand, while also being visually appealing. 
+
+            Additionally:
+            1. Perform a web search to retrieve not less than 10 relevant and recent original web resources based on article topic that provide sensational, dramatic, intriguing and compelling information related to the article's topic
+            2. Incorporate these interesting facts both within the summary and in a dedicated 'Interesting Facts' section
+            3. Include the Google Search  URL and actual text of the search snippets found during the search process, alongside the source URL and the search query used. Give Google Search  URL appropriate intuitive and logical name.
+            4. Add Google image search links and YouTube search links with relevant keywords or direct links to the most relevant videos covering the current topic
+
+            Format the additional information in a section titled:
+            'MORE ON TOPIC AND RELATED TERMINOLOGY:'
+
+            For resources, include:
+            - The search query used - href in HTML
+            - The source URL - title of href
+            - The Google search snippet text - Featured snippet from the web - use it after URL as description and equally describe image and video search results.
+            
+            Descriptions should be taken from sources itself, so don't use summaries like "Explore search results discussing the vast, often untapped..." - that is incorrect. Instead of that take description from first most relevant snippet found in the search results, like " Ukraine claims to hold nearly $15 trillion worth of mineral resources, making it one of the most resource-rich nations in Europe." - this is correct.
+
+            Do not include the resources themselves since they often become unavailable after a period of time.
+            """
             
             "MAIN TOPIC IDENTIFICATION:\n"
             "1. Determine the central topic by analyzing the article title, introductory paragraphs, and recurring themes or keywords.\n"
@@ -168,7 +188,7 @@ def create_prompt(content, article_length, include_images=True, enable_entity_li
             "   - INDUSTRY TERMINOLOGY: Specialized terms and jargon specific to the industry being discussed that are essential to understanding the core topic.\n"
             "   - FINANCIAL & BUSINESS TERMS: Important business metrics, financial concepts, or market terminology directly relevant to the main narrative.\n"
             "   - KEY ACTIONS & RELATIONSHIPS: Verbs that show important actions or relationships between key entities in the core story.\n"
-            "2. CRITICAL: Only include entities that are genuinely relevant to the core topic. Exclude entities that appear in tangential discussions, background information, or unrelated sections.\n"
+            "2. CRITICAL: Only include entities that are genuinely relevant to the core topic. Exclude entities that appear in tangential discussions, background information, or unrelated sections. Create maximum of 10 entities of any kind.\n"
             "3. Track the frequency and prominence of each entity throughout the text.\n"
             "4. Rank entities within each category based on importance (using factors such as frequency, prominence in headlines, or early mentions).\n"
         )

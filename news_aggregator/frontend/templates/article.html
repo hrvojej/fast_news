@@ -105,27 +105,30 @@
                 {% set supporting_point_count.value = supporting_point_count.value + 1 %}
                 
                 {# Insert the second image after the 2nd supporting-point #}
-                {% if supporting_point_count.value == 2 and fetched_images and fetched_images|length > 1 %}
-                    <div class="extra-image" style="margin: 20px 0; border: 1px solid #ddd; padding: 10px;">
-                        <img src="{{ relative_static_path }}/images/{{ fetched_images[0].url }}" alt="{{ fetched_images[1].caption|default('Article image') }}" style="max-width:100%;">
-                        {% if fetched_images[1].caption %}
-                            <figcaption>{{ fetched_images[1].caption }}</figcaption>
+                {% if supporting_point_count.value == 2 and fetched_images and fetched_images|length > 0 %}
+                    <div class="extra-image" style="...">
+                        <img src="{{ relative_static_path }}/images/{{ fetched_images[0].url }}" alt="{{ fetched_images[0].caption|default('Article image') }}" style="max-width:100%;">
+                        {% if fetched_images[0].caption %}
+                            <figcaption>{{ fetched_images[0].caption }}</figcaption>
                         {% endif %}
                     </div>
                 {% endif %}
                 
                 {# Insert the third image after the 4th supporting-point #}
-                {% if supporting_point_count.value == 4 and fetched_images and fetched_images|length > 2 %}
-                <div class="extra-image" style="margin: 20px 0; border: 1px solid #ddd; padding: 10px;">
-                    <img src="{{ relative_static_path }}/images/{{ fetched_images[1].url }}" alt="{{ fetched_images[2].caption|default('Article image') }}" style="max-width:100%;">
-                    {% if fetched_images[2].caption %}
-                        <figcaption>{{ fetched_images[2].caption }}</figcaption>
-                    {% endif %}
-                </div>
+                {% if supporting_point_count.value == 4 and fetched_images and fetched_images|length > 1 %}
+                    <div class="extra-image" style="...">
+                        <img src="{{ relative_static_path }}/images/{{ fetched_images[1].url }}" alt="{{ fetched_images[1].caption|default('Article image') }}" style="max-width:100%;">
+                        {% if fetched_images[1].caption %}
+                            <figcaption>{{ fetched_images[1].caption }}</figcaption>
+                        {% endif %}
+                    </div>
+                {% endif %}
             {% endif %}
-            
-            {% endif %}
-        {% endfor %}
+        {% endfor %}   
+
+
+
+
     </div>
 
         <!-- Sentiment Analysis Section -->
@@ -173,7 +176,7 @@
     <!-- More on topic and related terminology Section -->
     {% if related_resources %}
     <div class="more-on-topic">
-        <strong class="more-on-topic-heading">More on topic and related terminology:</strong>
+        <strong class="more-on-topic-heading">Explore this topic deeper:</strong>
         <div class="more-on-topic-container">
             <ul class="related-terminology-list">
                 {% for resource in related_resources %}
