@@ -199,3 +199,76 @@ a:hover {
         grid-template-columns: 1fr;
     }
 }
+
+/* Header Navigation */
+.header-nav {
+    background-color: #fff;
+    border-bottom: 1px solid #ddd;
+    overflow: hidden;
+}
+
+.header-nav .menu {
+    list-style: none;
+    display: flex;
+    margin: 0;
+    padding: 0;
+    white-space: nowrap;
+}
+
+.header-nav .menu-item {
+    padding: 15px 20px;
+    flex-shrink: 0;
+}
+
+.header-nav .menu-item a {
+    text-decoration: none;
+    color: #333;
+    font-size: 1rem;
+}
+
+.header-nav .menu-item a:hover {
+    color: #0066cc;
+}
+
+/* "More" menu item */
+.header-nav .more {
+    position: relative;
+    cursor: pointer;
+}
+
+.header-nav .more > a::after {
+    content: " ▼";
+    font-size: 0.8rem;
+    margin-left: 5px;
+}
+
+.header-nav .more-dropdown {
+    position: absolute;
+    top: 100%;
+    right: 0;
+    background-color: #fff;
+    min-width: 150px;
+    list-style: none;
+    padding: 0;
+    margin: 0;
+    border: 1px solid #ddd;
+    display: none;
+    z-index: 1000;
+}
+
+.header-nav .more:hover .more-dropdown {
+    display: block;
+}
+
+.header-nav .more-dropdown .menu-item {
+    padding: 10px 15px;
+    white-space: normal;
+}
+
+.header-nav .more-dropdown .menu-item a {
+    color: #333;
+}
+
+.header-nav .more-dropdown .menu-item a:hover {
+    background-color: #f4f4f4;
+}

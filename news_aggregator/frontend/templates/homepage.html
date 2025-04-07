@@ -1,0 +1,55 @@
+{% extends "base.html" %}
+
+{% block title %}{{ homepage_title }}{% endblock %}
+
+{% block extra_css %}
+    <link rel="stylesheet" href="{{ relative_static_path }}/css/homepage.css">
+    <style>
+      .homepage-container {
+          max-width: 1200px;
+          margin: 0 auto;
+          padding: 20px;
+      }
+      .section-header {
+          font-size: 2rem;
+          margin: 20px 0;
+          border-bottom: 2px solid #0066cc;
+          padding-bottom: 5px;
+      }
+      .articles-grid {
+          display: grid;
+          grid-template-columns: repeat(4, 1fr);
+          gap: 20px;
+      }
+      .article-card img {
+          width: 100%;
+          height: auto;
+          object-fit: cover;
+      }
+    </style>
+{% endblock %}
+
+{% block content %}
+<div class="homepage-container">
+    <h1>{{ homepage_title }}</h1>
+    {% for section in homepage_sections %}
+       <div class="homepage-section">
+           <h2 class="section-header">{{ section.category | title }}</h2>
+           <div class="articles-grid">
+               {% for article in section.featured %}
+                   <div class="article-card">
+                       <a href="{{ relative_articles_path }}{{ article.article_html_file_location }}">
+                           {% if article.summary_featured_image_large %}
+                               <img src="{{ relative_category_images_path }}/{{ article.summary_featured_image_large }}" alt="">
+                           {% else %}
+                               <img src="path/to/default/image.jpg" alt="No image available">
+                           {% endif %}
+                           <h3>{{ article.summary_article_gemini_title }}</h3>
+                       </a>
+                   </div>
+               {% endfor %}
+           </div>
+       </div>
+    {% endfor %}
+</div>
+{% endblock %}

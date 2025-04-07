@@ -20,9 +20,20 @@ body {
     color: #777;
     margin-bottom: 20px;
     font-size: 0.9em;
-    padding-bottom: 15px;
-    border-bottom: 1px solid #eee;
 }
+
+/* New styles for publication date */
+.publication-date {
+    color: #777;
+    font-size: 0.9em;
+    margin-bottom: 10px;
+}
+
+.publication-date .label {
+    font-weight: bold;
+    margin-right: 5px;
+}
+
 
 .summary {
     background-color: #f5f5f5;

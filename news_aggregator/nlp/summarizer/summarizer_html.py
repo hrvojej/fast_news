@@ -1,4 +1,3 @@
-# path: fast_news/news_aggregator/nlp/summarizer/summarizer_html.py
 """
 Module for HTML processing and file operations for the article summarization system.
 """
@@ -14,11 +13,10 @@ from datetime import datetime
 from summarizer_logging import get_logger
 from summarizer_config import OUTPUT_HTML_DIR, ensure_output_directory
 from summarizer_image import IMAGES_DIR, process_images_in_html, search_and_download_images
-from summarizer_db import update_article_summary_details, get_related_articles
+from summarizer_db import update_article_summary_details, get_related_articles, get_article_metadata
+
 
 from db_scripts.db_context import DatabaseContext
-
-
 
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
@@ -104,8 +102,6 @@ def get_subfolder_from_url(url):
         logger.error(f"Error extracting subfolder from URL: {e}")
         return ""
 
-    
-
 def ensure_proper_classes(soup):
     """
     Ensure that only approved classes are used and elements have appropriate classes.
@@ -151,7 +147,6 @@ def ensure_proper_classes(soup):
     'more-on-topic-heading', 'more-on-topic-container', 'related-terminology-list', 'terminology-item', 'resource-link', 'resource-description', 'more-topic-divider'
     ]
 
-    
     # Check for elements with classes not in the allowed list
     for element in soup.find_all(class_=True):
         element_classes = element.get('class', [])
@@ -413,7 +408,6 @@ def extract_summary_fields(clean_html):
             # Split the string into a list by comma and trim each keyword
             entity_keywords = [kw.strip() for kw in keywords_text.split(',') if kw.strip()]
 
-        
         sentiment_data.append({
             'entity': entity_name,
             'positive': positive,
@@ -477,6 +471,16 @@ def save_as_html(article_id, title, url, content, summary, response_text, schema
 
         logger.debug(f"Raw summary type: {type(summary)}")
         logger.debug(f"Raw summary preview: {summary[:300] if summary else 'None'}")
+        
+        metadata = get_article_metadata(DatabaseContext(), schema, article_id)
+        if metadata and metadata.get("pub_date"):
+            publication_date = metadata.get("pub_date")
+            formatted_pub_date = publication_date.strftime("%B %d, %Y")
+
+        else:
+            formatted_pub_date = datetime.now().strftime("%B %d, %Y")
+
+
 
         # --- Start Processing Summary and Extracting Fields FIRST ---
         processed_summary = summary
@@ -501,13 +505,13 @@ def save_as_html(article_id, title, url, content, summary, response_text, schema
             logger.warning("Processed summary is empty, attempting to extract from raw API response")
             try:
                 # ... (logic to extract HTML from response_text - keep as is) ...
-                 if response_text and "```html" in response_text:
+                if response_text and "```html" in response_text:
                     html_content = response_text.split("```html")[1].split("```")[0].strip()
                     html_content = html.unescape(html_content)
                     if html_content:
                         clean_summary = clean_and_normalize_html(html_content)
                         logger.info("Successfully extracted HTML content from API response")
-                 elif response_text and ("<html" in response_text or "<div" in response_text):
+                elif response_text and ("<html" in response_text or "<div" in response_text):
                     html_match = re.search(r'(<div.*?>.*?</div>|<html.*?>.*?</html>)', response_text, re.DOTALL)
                     if html_match:
                         html_content = html_match.group(0)
@@ -515,7 +519,6 @@ def save_as_html(article_id, title, url, content, summary, response_text, schema
                         logger.info("Successfully extracted HTML content from API response using regex")
             except Exception as e:
                 logger.error(f"Error extracting HTML from API response: {e}")
-
 
         # Extract Gemini-generated title (use existing if available)
         soup_summary = BeautifulSoup(clean_summary, 'html.parser')
@@ -577,9 +580,12 @@ def save_as_html(article_id, title, url, content, summary, response_text, schema
              medium_threshold = get_config_value(CONFIG, 'image_search', 'medium_threshold', 7000)
              max_images = get_config_value(CONFIG, 'image_search', 'max_images', 3)
              content_length = len(content) if content else 0
-             if content_length < short_threshold: num_images = 2
-             elif content_length < medium_threshold: num_images = 3
-             else: num_images = max_images
+             if content_length < short_threshold:
+                 num_images = 2
+             elif content_length < medium_threshold:
+                 num_images = 3
+             else:
+                 num_images = max_images
 
              images = search_and_download_images(
                  query="", # Let the image module use extract_search_terms with title
@@ -592,7 +598,6 @@ def save_as_html(article_id, title, url, content, summary, response_text, schema
              logger.info(f"Found {len(images)} images for article {article_id} using title fallback.")
         else:
             logger.warning("No keywords extracted and no title provided. Cannot search for images.")
-
 
         # Prepare featured image and fetched images context (using the 'images' list populated above)
         featured_image_data = None
@@ -623,11 +628,9 @@ def save_as_html(article_id, title, url, content, summary, response_text, schema
         else:
              logger.warning("No images found or downloaded. No featured image will be added.")
 
-
         # Process any *inline* images already present in the summary HTML
         if clean_summary and "<img" in clean_summary:
             clean_summary = process_images_in_html(clean_summary, article_id)
-
 
         # --- Continue with saving HTML, using already extracted summary_fields ---
         filename = create_filename_from_title(gemini_title, url, article_id)
@@ -642,36 +645,46 @@ def save_as_html(article_id, title, url, content, summary, response_text, schema
         # Compute relative path for static assets
         depth = subfolder.count(os.sep) + 1 if subfolder else 0
         relative_static_path = "../" * (1 + depth) + "static"
+        # --- Compute relative path for category pages ---
+        relative_categories_path = "../" * (1 + depth) + "categories"
+        # --- Compute relative path for root pages (e.g., Home, About) ---
+        relative_root_path = ("../" * (depth + 1)) if subfolder else "."
 
-        # Create processed date and current year
-        processed_date = datetime.now().strftime("%B %d, %Y %H:%M")
-        current_year = datetime.now().year
 
-        # Compute relative file location for the saved HTML file
-        relative_file_location = os.path.join(subfolder, filename).replace(os.sep, '/') if subfolder else filename.replace(os.sep, '/')
-
-        # Get Related Articles (using the already extracted keywords)
-        from db_scripts.db_context import DatabaseContext
-        db_context = DatabaseContext()
-        related_articles_list = get_related_articles(db_context, schema, article_id, extracted_keywords, limit=5) if extracted_keywords else []
+        # --- New Code to Generate Dynamic Header Categories ---
+        categories_folder = os.path.join(BASE_DIR, 'frontend', 'web', 'categories')
+        category_files = [f for f in os.listdir(categories_folder) if f.startswith("category_") and f.endswith(".html")]
+        header_categories = []
+        for file in category_files:
+            # Extract slug from filename, e.g., "books" from "category_books.html"
+            slug = file.replace("category_", "").replace(".html", "")
+            # Skip the 'espanol' category
+            if slug.lower() == "espanol":
+                continue
+            # Rename 'nyregion' to display as "NY"
+            display_name = "NY" if slug.lower() == "nyregion" else slug.title()
+            header_categories.append({"slug": slug, "name": display_name})
+        # --- End of New Code ---
 
         # Prepare context for Jinja template
         context = {
             "title": gemini_title or f"Article {article_id}",
             "article_id": article_id,
             "url": url,
-            "processed_date": processed_date,
-            "featured_image": featured_image_data, # Use the data dict
+            "processed_date": formatted_pub_date,
+            "featured_image": featured_image_data,
             "summary": clean_summary if clean_summary else "<div>No summary available</div>",
-            "fetched_images": fetched_images_data, # Use the data list
-            "show_api_response": True, # Or False based on your config/preference
+            "fetched_images": fetched_images_data,
+            "show_api_response": True,
             "response_text": response_text,
-            "content": content, # Optional: include original content if template uses it
+            "content": content,
             "relative_static_path": relative_static_path,
-            "current_year": current_year,
-            # Use fields extracted earlier
+            "relative_categories_path": relative_categories_path,
+            "relative_root_path": relative_root_path,
+            "current_year": datetime.now().year,
+            # Additional fields from summary extraction
             "source_attribution": summary_fields.get("source_attribution", ""),
-            "keywords": extracted_keywords, # Use the extracted list
+            "keywords": extracted_keywords,
             "entity_overview": summary_fields.get("entity_overview", []),
             "summary_paragraphs": summary_fields.get("summary_paragraphs", []),
             "interesting_facts": summary_fields.get("interesting_facts", []),
@@ -679,9 +692,11 @@ def save_as_html(article_id, title, url, content, summary, response_text, schema
             "sentiment_analysis": summary_fields.get("sentiment_analysis", []),
             "topic_popularity": summary_fields.get("topic_popularity", {}),
             "popularity_score": int(summary_fields.get("topic_popularity", {}).get("number", "0") or 0),
-            "related_articles_list": related_articles_list,
+            "related_articles_list": get_related_articles(DatabaseContext(), schema, article_id, extracted_keywords, limit=5) if extracted_keywords else [],
             "schema": schema,
-            "article_html_file_location": relative_file_location
+            "article_html_file_location": os.path.join(subfolder, filename).replace(os.sep, '/') if subfolder else filename.replace(os.sep, '/'),
+            # --- Inject Dynamic Header Categories ---
+            "header_categories": header_categories
         }
 
         # Load and render the template
@@ -691,14 +706,14 @@ def save_as_html(article_id, title, url, content, summary, response_text, schema
         # Write the rendered HTML to the output file
         with open(filepath, 'w', encoding='utf-8') as f:
             f.write(html_content)
-            f.flush() # Ensure data is written to disk
+            f.flush()  # Ensure data is written to disk
 
         # Final checks and DB update
         if os.path.exists(filepath):
             file_size = os.path.getsize(filepath)
             logger.info(f"Successfully saved HTML output to {filepath} (size: {file_size} bytes)")
             # Update additional summary details in the database.
-            update_success = update_article_summary_details(db_context, schema, article_id, context) # Pass the full context
+            update_success = update_article_summary_details(DatabaseContext(), schema, article_id, context)  # Pass the full context
             if update_success:
                 logger.info("Database summary details updated successfully.")
             else:

@@ -149,46 +149,66 @@ class ArticleSummarizer:
 
 
     def run(self, limit=None):
-        """
-        Run the summarization process for multiple articles.
-        
-        Args:
-            limit (int, optional): Maximum number of articles to process
-        """
-        logger.info(f"Starting Article Summarizer for {self.schema} schema (debug_mode={self.debug_mode})")
-        
-        try:
-            # Get articles
-            articles = get_articles(self.db_context, self.schema, limit, recent_timeout_hours=getattr(self, 'recent_timeout', None))
-            article_count = len(articles)
-            logger.info(f"Found {article_count} articles to process")
-            
-            # Process each article
-            for idx, article in enumerate(articles):
-                article_info = dict(article._mapping)
-                article_id = article_info.get('article_id')
-                logger.info(f"[{idx+1}/{article_count}] Processing article ID: {article_id}")
-                
-                try:
-                    success = self.summarize_article(article_info)
-                    if success:
-                        self.processed_count += 1
-                        logger.info(f"Successfully processed article {idx+1}/{article_count}")
-                    else:
-                        self.failed_count += 1
-                        logger.error(f"Failed to process article {idx+1}/{article_count}")
+            """
+            Run the summarization process for multiple articles.
+
+            Args:
+                limit (int, optional): Maximum number of articles to process
+            """
+            logger.info(f"Starting Article Summarizer for {self.schema} schema (debug_mode={self.debug_mode})")
+            try:
+                # Get articles (without filtering on summary, ordering by pub_date DESC)
+                articles = get_articles(self.db_context, self.schema, limit)
+                article_count = len(articles)
+                logger.info(f"Found {article_count} articles to process")
+
+                # Report number of articles with empty HTML file location
+                missing_html_count = len([a for a in articles if not a._mapping.get('article_html_file_location')])
+                logger.info(f"{missing_html_count} articles have an empty article_html_file_location and need to be generated")
+
+                # Process each article
+                for idx, article in enumerate(articles):
+                    article_info = dict(article._mapping)
+                    article_id = article_info.get('article_id')
                     
-                    # Apply rate limiting
-                    if not self.debug_mode and idx < article_count - 1:
-                        rate_limit_sleep()
-                        
-                except Exception as e:
-                    self.failed_count += 1
-                    logger.error(f"Exception processing article ID {article_id}: {e}", exc_info=True)
-                    continue
-            
-            logger.info(f"Summarization completed. Processed: {self.processed_count}, Failed: {self.failed_count}")
-            
-        except Exception as e:
-            logger.error(f"Error in run method: {e}", exc_info=True)
-            raise
+                    # Log all article details (pub_date, title, article_id, HTML file location)
+                    logger.info(
+                        f"Article details - ID: {article_id}, "
+                        f"Title: {article_info.get('title')}, "
+                        f"Pub Date: {article_info.get('pub_date')}, "
+                        f"HTML File: {article_info.get('article_html_file_location')}"
+                    )
+                    
+                    # Check if an HTML file is already defined and exists on disk
+                    html_file_location = article_info.get('article_html_file_location')
+                    if html_file_location:
+                        from os import path
+                        full_path = path.join(OUTPUT_HTML_DIR, html_file_location)
+                        if path.exists(full_path):
+                            logger.info(f"Skipping article {article_id} as HTML file exists at {full_path}")
+                            continue  # Skip this article since the file exists
+                    else:
+                        logger.info(f"No HTML file location defined for article {article_id}; processing article.")
+                    
+                    logger.info(f"[{idx+1}/{article_count}] Processing article ID: {article_id}")
+
+                    
+                    
+                    try:
+                        success = self.summarize_article(article_info)
+                        if success:
+                            self.processed_count += 1
+                            logger.info(f"Successfully processed article {idx+1}/{article_count}")
+                        else:
+                            self.failed_count += 1
+                            logger.error(f"Failed to process article {idx+1}/{article_count}")
+                    except Exception as e:
+                        self.failed_count += 1
+                        logger.error(f"Exception processing article ID {article_id}: {e}", exc_info=True)
+                        continue
+
+                logger.info(f"Summarization completed. Processed: {self.processed_count}, Failed: {self.failed_count}")
+
+            except Exception as e:
+                logger.error(f"Error in run method: {e}", exc_info=True)
+                raise

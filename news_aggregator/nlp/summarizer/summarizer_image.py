@@ -138,22 +138,10 @@ def ensure_images_directory():
         return False
 
 def download_image(url, article_id, base_name=None, counter=None):
-    """
-    Download an image from a URL and save it to the images directory.
-
-    Args:
-        url (str): URL of the image to download.
-        article_id (str): ID of the article (used for naming fallback).
-        base_name (str, optional): Base name for the image file (e.g., sanitized article title).
-        counter (int, optional): A counter to append to the filename.
-
-    Returns:
-        dict: Image metadata including 'path', 'filename', 'original_url', or None if download failed.
-    """
-    logger.debug(f"download_image called with url: {url}, article_id: {article_id}, base_name: {base_name}, counter: {counter}")
+    logger.debug("download_image called with url: %s, article_id: %s, base_name: %s, counter: %s", url, article_id, base_name, counter)
 
     if not is_valid_image_url(url):
-        logger.warning(f"Invalid image URL: {url}")
+        logger.warning("Invalid image URL: %s", url)
         return None
 
     if not ensure_images_directory():
@@ -162,45 +150,55 @@ def download_image(url, article_id, base_name=None, counter=None):
 
     parsed_url = urlparse(url)
     extension = os.path.splitext(parsed_url.path.lower())[1] or '.jpg'
-
+    
+    # Determine filename based on base_name and counter if provided
     if base_name and counter is not None:
         sanitized_base = re.sub(r'[^\w\s-]', '', base_name).strip().replace(' ', '_')
         filename = f"{sanitized_base}_{counter}{extension}"
+        logger.debug("Generated filename using base_name and counter: %s", filename)
     else:
         unique_id = str(uuid.uuid4())[:8]
         filename = f"img_{article_id}_{unique_id}{extension}"
+        logger.debug("Generated filename using unique_id: %s", filename)
 
     filepath = os.path.join(IMAGES_DIR, filename)
-    logger.debug(f"Attempting to download image from {url} to {filepath}")
+    logger.debug("Image will be saved to: %s", filepath)
 
     try:
         user_agent = get_config_value(CONFIG, "USER_AGENT", "MySummarizer/1.0 (your.email@example.com)")
         timeout_value = get_config_value(CONFIG, "REQUEST_TIMEOUT", 10)
-        headers = {
-            'User-Agent': user_agent
-        }
+        logger.debug("Using User-Agent: %s and timeout: %s seconds", user_agent, timeout_value)
+        headers = {'User-Agent': user_agent}
+        
+        start_time = time.time()
         response = requests.get(url, headers=headers, stream=True, timeout=timeout_value)
-        logger.debug(f"Image download response status: {response.status_code}")
+        elapsed_time = time.time() - start_time
+        logger.debug("Image download request completed in %.2f seconds with status: %s", elapsed_time, response.status_code)
+        
         response.raise_for_status()
 
-        # Check if the response contains an image
         content_type = response.headers.get('Content-Type', '')
+        logger.debug("Response Content-Type: %s", content_type)
         if not content_type.startswith('image/'):
-            logger.error(f"URL did not return image content: {url} (Content-Type: {content_type})")
+            logger.error("URL did not return image content: %s (Content-Type: %s)", url, content_type)
             return None
 
+        logger.debug("Starting to save the image file to disk.")
         with open(filepath, 'wb') as f:
-            response.raw.decode_content = True
-            shutil.copyfileobj(response.raw, f)
+            for chunk in response.iter_content(chunk_size=8192):
+                if chunk:
+                    f.write(chunk)
+        response.close()
+        logger.debug("Finished writing image data to: %s", filepath)
 
         if os.path.exists(filepath):
             file_size = os.path.getsize(filepath)
-            logger.info(f"Downloaded image successfully:\n"
-                        f"    Original URL: {url}\n"
-                        f"    Local path: {filename}\n"
-                        f"    Absolute path: {filepath}\n"
-                        f"    Size: {file_size} bytes, Content-Type: {content_type}")
-
+            logger.info("Downloaded image successfully:\n"
+                        "    Original URL: %s\n"
+                        "    Local path: %s\n"
+                        "    Absolute path: %s\n"
+                        "    Size: %s bytes, Content-Type: %s",
+                        url, filename, filepath, file_size, content_type)
             return {
                 "path": "/static/images/" + filename,
                 "filename": filename,
@@ -209,15 +207,16 @@ def download_image(url, article_id, base_name=None, counter=None):
                 "size": file_size
             }
         else:
-            logger.error(f"Image file {filepath} was not created after download attempt.")
+            logger.error("Image file %s was not created after download attempt.", filepath)
             return None
 
     except requests.RequestException as req_error:
-        logger.error(f"Request error while downloading image from {url}: {req_error}", exc_info=True)
+        logger.error("Request error while downloading image from %s: %s", url, req_error, exc_info=True)
         return None
     except Exception as file_error:
-        logger.error(f"Failed to save image to {filepath}: {file_error}", exc_info=True)
+        logger.error("Failed to save image to %s: %s", filepath, file_error, exc_info=True)
         return None
+
 
 def extract_search_terms(query, title, content=None, entity_list=None):
     import logging

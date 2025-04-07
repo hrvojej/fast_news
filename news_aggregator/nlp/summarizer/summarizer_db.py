@@ -22,10 +22,12 @@ from summarizer_logging import get_logger
 # Initialize logger
 logger = get_logger(__name__)
 
-def get_articles(db_context, schema, limit=None, recent_timeout_hours=None):
 
+def get_articles(db_context, schema, limit=None, recent_timeout_hours=None):
     """
     Get articles from the database to be processed.
+    This version retrieves all articles (processed or not) with additional fields,
+    so that the processing logic can decide based on file existence.
     
     Args:
         db_context: Database context for session management
@@ -37,39 +39,22 @@ def get_articles(db_context, schema, limit=None, recent_timeout_hours=None):
     """
     try:
         with db_context.session() as session:
-            # Build query
-            # query = f"SELECT article_id, title,keywords, url, content FROM {schema}.articles" #  processing again even if summary is not null
-            # Build query
-            # Build query
             query = f"""
-                SELECT article_id, title, keywords, url, content 
-                FROM {schema}.articles 
-                WHERE summary IS NULL OR summary = ''
+                SELECT article_id, title, keywords, url, content, article_html_file_location, pub_date
+                FROM {schema}.articles
+                ORDER BY pub_date DESC
             """
-            if recent_timeout_hours is not None:
-                cutoff_time = datetime.now(timezone.utc) - timedelta(hours=recent_timeout_hours)
-                query += " AND (summary_generated_at IS NULL OR summary_generated_at < :cutoff_time)"
-            
-            # Add limit if specified
             if limit and isinstance(limit, int) and limit > 0:
                 query += f" LIMIT {limit}"
             
-            # Build parameters dictionary
-            params = {}
-            if recent_timeout_hours is not None:
-                params["cutoff_time"] = cutoff_time
-            
-            # Execute query
-            result = session.execute(text(query), params)
+            result = session.execute(text(query))
             articles = result.fetchall()
-
-            
             logger.info(f"Retrieved {len(articles)} articles from database")
             return articles
-            
     except Exception as e:
         logger.error(f"Error retrieving articles from database: {e}", exc_info=True)
         return []
+
 
 def update_article_summary(db_context, schema, article_id, summary):
     """
@@ -86,7 +71,6 @@ def update_article_summary(db_context, schema, article_id, summary):
     """
     try:
         with db_context.session() as session:
-            # Handle string article_id (convert to UUID)
             if isinstance(article_id, str):
                 try:
                     article_id = uuid.UUID(article_id)
@@ -94,7 +78,7 @@ def update_article_summary(db_context, schema, article_id, summary):
                     logger.error(f"Invalid article_id format: {article_id} - {e}")
                     return False
             
-            # Use raw SQL instead of ORM to avoid model conflicts
+            # UPDATE query instead of SELECT
             query = text(f"""
                 UPDATE {schema}.articles
                 SET summary = :summary, 
@@ -111,7 +95,6 @@ def update_article_summary(db_context, schema, article_id, summary):
             result = session.execute(query, params)
             session.commit()
             
-            # Check if the update was successful
             rows_affected = result.rowcount
             if rows_affected > 0:
                 logger.info(f"Article ID {article_id} summary updated in the database")
@@ -119,13 +102,12 @@ def update_article_summary(db_context, schema, article_id, summary):
             else:
                 logger.error(f"Article ID {article_id} not found in the database")
                 return False
-                
     except Exception as e:
         logger.error(f"Database error updating article ID {article_id}: {e}", exc_info=True)
         if 'session' in locals():
             session.rollback()
         return False
-    
+
 def get_article_metadata(db_context, schema, article_id):
     """
     Get metadata for a specific article.
@@ -140,7 +122,6 @@ def get_article_metadata(db_context, schema, article_id):
     """
     try:
         with db_context.session() as session:
-            # Handle string article_id (convert to UUID)
             if isinstance(article_id, str):
                 try:
                     article_id = uuid.UUID(article_id)
@@ -148,10 +129,10 @@ def get_article_metadata(db_context, schema, article_id):
                     logger.error(f"Invalid article_id format: {article_id} - {e}")
                     return None
             
-            # Query for article metadata
+            # Use pub_date instead of published_at
             query = text(f"""
                 SELECT 
-                    title, url, published_at, author, category_id
+                    title, url, pub_date, author, category_id
                 FROM 
                     {schema}.articles
                 WHERE 
@@ -162,12 +143,10 @@ def get_article_metadata(db_context, schema, article_id):
             metadata = result.fetchone()
             
             if metadata:
-                # Convert to dictionary
                 return dict(metadata._mapping)
             else:
                 logger.error(f"Article ID {article_id} metadata not found")
                 return None
-                
     except Exception as e:
         logger.error(f"Error retrieving article metadata: {e}", exc_info=True)
         return None
@@ -187,12 +166,9 @@ def get_article_categories(db_context, schema):
         with db_context.session() as session:
             query = text(f"SELECT category_id, name FROM {schema}.categories")
             result = session.execute(query)
-            
-            # Create dictionary mapping category_id to name
             categories = {row.category_id: row.name for row in result}
             logger.info(f"Retrieved {len(categories)} categories from database")
             return categories
-            
     except Exception as e:
         logger.error(f"Error retrieving categories: {e}", exc_info=True)
         return {}
@@ -210,11 +186,9 @@ def get_summarization_stats(db_context, schema):
     """
     try:
         with db_context.session() as session:
-            # Query for total articles
             total_query = text(f"SELECT COUNT(*) as count FROM {schema}.articles")
             total_result = session.execute(total_query).fetchone()
             
-            # Query for summarized articles
             summarized_query = text(f"""
                 SELECT COUNT(*) as count 
                 FROM {schema}.articles 
@@ -222,7 +196,6 @@ def get_summarization_stats(db_context, schema):
             """)
             summarized_result = session.execute(summarized_query).fetchone()
             
-            # Calculate percentages
             total = total_result.count if total_result else 0
             summarized = summarized_result.count if summarized_result else 0
             percentage = (summarized / total * 100) if total > 0 else 0
@@ -233,7 +206,6 @@ def get_summarization_stats(db_context, schema):
                 "remaining_articles": total - summarized,
                 "completion_percentage": round(percentage, 2)
             }
-            
     except Exception as e:
         logger.error(f"Error retrieving summarization stats: {e}", exc_info=True)
         return {
@@ -243,7 +215,7 @@ def get_summarization_stats(db_context, schema):
             "completion_percentage": 0,
             "error": str(e)
         }
-        
+
 def update_article_summary_details(db_context, schema, article_id, context):
     """
     Update additional summary fields for an article in the database.
@@ -265,7 +237,6 @@ def update_article_summary_details(db_context, schema, article_id, context):
     """
     try:
         with db_context.session() as session:
-            # Convert article_id to UUID if needed
             if isinstance(article_id, str):
                 try:
                     import uuid
@@ -274,7 +245,6 @@ def update_article_summary_details(db_context, schema, article_id, context):
                     logger.error(f"Invalid article_id format: {article_id} - {e}")
                     return False
 
-            # Extract fields from context
             processed_date = context.get("processed_date")
             gemini_title = context.get("title")
             featured_image_data = context.get("featured_image")
@@ -282,9 +252,7 @@ def update_article_summary_details(db_context, schema, article_id, context):
                 import json
                 featured_image_data = json.dumps(featured_image_data)
             summary_paragraphs = context.get("summary_paragraphs", [])
-            summary_first_paragraph = (
-                summary_paragraphs[0]['content'] if summary_paragraphs else None
-            )
+            summary_first_paragraph = summary_paragraphs[0]['content'] if summary_paragraphs else None
             popularity_score = context.get("popularity_score", 0)
 
             query = text(f"""
@@ -310,7 +278,6 @@ def update_article_summary_details(db_context, schema, article_id, context):
                 "article_id": article_id
             }
 
-
             result = session.execute(query, params)
             session.commit()
             rows_affected = result.rowcount
@@ -321,14 +288,12 @@ def update_article_summary_details(db_context, schema, article_id, context):
             else:
                 logger.error(f"Article ID {article_id} not found when updating summary details.")
                 return False
-
     except Exception as e:
         logger.error(f"Error updating article summary details for article ID {article_id}: {e}", exc_info=True)
         if 'session' in locals():
             session.rollback()
         return False
-    
-    
+
 def get_related_articles(db_context, schema, current_article_id, current_keywords, limit=5):
     """
     Retrieve related articles based on matching keywords, popularity, and recency.
@@ -365,14 +330,11 @@ def get_related_articles(db_context, schema, current_article_id, current_keyword
 
     candidates = []
     for row in articles:
-        # Exclude the current article
         if str(row.article_id) == str(current_article_id):
             continue
-        # Ensure required fields are not empty
         if not row.summary_article_gemini_title or not row.article_html_file_location:
             continue
 
-        # Process keywords (handle both comma-separated string and list formats)
         candidate_keywords = []
         if row.keywords:
             if isinstance(row.keywords, list):
@@ -392,10 +354,7 @@ def get_related_articles(db_context, schema, current_article_id, current_keyword
             "summary_generated_at": row.summary_generated_at
         }
         candidates.append(candidate)
-
     
-    # Sort candidates by matching_count, then popularity_score, then recency (all descending)
     sorted_candidates = sorted(candidates, key=lambda x: (x["matching_count"], x["popularity_score"], x["summary_generated_at"]), reverse=True)
     related_articles = [{"title": cand["title"], "link": cand["link"]} for cand in sorted_candidates[:limit]]
     return related_articles
-

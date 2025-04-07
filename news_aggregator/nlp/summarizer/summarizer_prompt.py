@@ -33,7 +33,7 @@ def create_prompt(content, article_length, include_images=True, enable_entity_li
         # Base prompt with main topic identification
         prompt = (
                         """
-            Create a visually enhanced and focused summary of the main topic from the following text. The summary must be at least 1200 words in total not taking into account other areas of the text. The summary should be structured in a way that is easy to read and understand, while also being visually appealing. 
+            Create a visually enhanced and focused summary of the main topic from the following text. The summary must be around  800 words in total not taking into account other areas of the text. The summary should be structured in a way that is easy to read and understand, without complicated words and without too long sentences,  while also being visually appealing. 
 
             Additionally:
             1. Perform a web search to retrieve not less than 10 relevant and recent original web resources based on article topic that provide sensational, dramatic, intriguing and compelling information related to the article's topic
@@ -49,7 +49,8 @@ def create_prompt(content, article_length, include_images=True, enable_entity_li
             - The source URL - title of href
             - The Google search snippet text - Featured snippet from the web - use it after URL as description and equally describe image and video search results.
             
-            Descriptions should be taken from sources itself, so don't use summaries like "Explore search results discussing the vast, often untapped..." - that is incorrect. Instead of that take description from first most relevant snippet found in the search results, like " Ukraine claims to hold nearly $15 trillion worth of mineral resources, making it one of the most resource-rich nations in Europe." - this is correct.
+            For prompt purposes, always use the exact description provided by the source instead of summarizing it. Do not generate generic phrases like "Explore search results." Instead, directly extract the first relevant snippet from the search results. For example, if the search result displays: "Ukraine claims to hold nearly $15 trillion worth of mineral resources, making it one of the most resource-rich nations in Europe."
+            use that snippet verbatim in your prompt.
 
             Do not include the resources themselves since they often become unavailable after a period of time.
             """
@@ -117,11 +118,11 @@ def create_prompt(content, article_length, include_images=True, enable_entity_li
             "SOURCE ATTRIBUTION SECTION:\n"
             "1. Immediately after the title, create a source attribution block using a <div> element (no class needed for this container div).\n"
             "2. Inside the div, create EXACTLY ONE paragraph with class \"source-attribution\" to display the source info.\n"
-            "3. Within this paragraph, use <span class=\"label\"> elements ONLY for the labels \"Source:\" and \"Published:\".\n"
+            "3. Within this paragraph, use <span class=\"label\"> elements ONLY for the labels \"Source:\".\n"
             "4. Use plain <span> elements (without classes) for the actual source name and publication date.\n"
-            "5. The structure must be EXACTLY: <div><p class=\"source-attribution\"><span class=\"label\">Source:</span> <span>[SOURCE]</span> <span>|</span> <span class=\"label\">Published:</span> <span>[DATE]</span></p></div>\n"
+            "5. The structure must be EXACTLY: <div><p class=\"source-attribution\"><span class=\"label\">Source:</span> <span>[SOURCE]</span> </div>\n"
             "6. Do not add any additional classes, elements, or styling to this section.\n"
-            "Example: <div><p class=\"source-attribution\"><span class=\"label\">Source:</span> <span>Tesla, Inc.</span> <span>|</span> <span class=\"label\">Published:</span> <span>January 15, 2023</span></p></div>\n"
+            "Example: <div><p class=\"source-attribution\"><span class=\"label\">Source:</span> <span>Tesla, Inc.</div>\n"
         )
 
         # Add source attribution guidelines
@@ -131,18 +132,14 @@ def create_prompt(content, article_length, include_images=True, enable_entity_li
             "   - NEVER attribute to photography sources, photographers, or image credits\n"
             "   - For government sources, ALWAYS specify which government (e.g., 'U.S. Department of Treasury' not just 'Government')\n"
             "   - Valid sources include: professionals, specific companies, named government agencies, industry associations, research institutions, regulatory bodies\n"
-            "8. For the date:\n"
-            "   - Use the format 'Month DD, YYYY' if the exact date is available\n"
-            "   - If only the month and year are known, use 'Month YYYY'\n"
-            "   - If date is completely unknown, use the current month and year (e.g., 'March 2025')\n"
-            "9. Examples of CORRECT attribution:\n"
-            "   - <div><p class=\"source-attribution\"><span class=\"label\">Source:</span> <span>Tesla, Inc.</span> <span>|</span> <span class=\"label\">Published:</span> <span>January 15, 2023</span></p></div>\n"
-            "   - <div><p class=\"source-attribution\"><span class=\"label\">Source:</span> <span>World Health Organization, UNICEF, Doctors Without Borders</span> <span>|</span> <span class=\"label\">Published:</span> <span>February 2025</span></p></div>\n"
-            "10. Examples of INCORRECT attribution (NEVER use these formats):\n"
-            "   - Source: The New York Times | Published: April 26, 2024 (✗ - news portal)\n"
-            "   - Source: Government Review | Published: February 28, 2024 (✗ - non-specific government)\n"
-            "   - Source: James Lester Photography | Published: 2024 (✗ - photography source)\n\n"
-            "11. For finding the online author of the text, adhere to the following guidelines:\n"
+            "8. Examples of CORRECT attribution:\n"
+            "   - <div><p class=\"source-attribution\"><span class=\"label\">Source:</span> <span>Tesla, Inc.</span></p></div>\n"
+            "   - <div><p class=\"source-attribution\"><span class=\"label\">Source:</span> <span>World Health Organization, UNICEF, Doctors Without Borders</span></p></div>\n"
+            "9. Examples of INCORRECT attribution (NEVER use these formats):\n"
+            "   - Source: The New York Times (✗ - news portal)\n"
+            "   - Source: Government Review (✗ - non-specific government)\n"
+            "   - Source: James Lester Photography (✗ - photography source)\n\n"
+            "10. For finding the online author of the text, adhere to the following guidelines:\n"
             "   - Conduct a thorough search using reputable and verifiable online sources to identify the author.\n"
             "   - Prioritize sources that are professional, specific companies, named government agencies, industry associations, research institutions, or regulatory bodies.\n"
             "   - Verify the author's identity by cross-referencing at least two authoritative sources before final attribution.\n"
@@ -151,6 +148,9 @@ def create_prompt(content, article_length, include_images=True, enable_entity_li
             "   - If the author cannot be determined or verified, state 'Author: Unknown' instead of making an attribution.\n"
             "   - Always provide citation details and, if applicable, a URL for the source where the author was confirmed.\n"
         )
+
+
+
 
         
        
@@ -356,6 +356,7 @@ def create_prompt(content, article_length, include_images=True, enable_entity_li
             "     </ul>\n"
             "   </div>\n"
             "3. End this section with EXACTLY: '<div class=\"more-topic-divider\"></div>'\n\n"
+            "Format all entities with appropriate styling and hyperlinks as defined in the Entity Overview section using the EXACT same HTML patterns and CSS classes.\n"
         )
         if include_images:
             prompt += (

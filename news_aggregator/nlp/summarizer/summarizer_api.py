@@ -1,3 +1,4 @@
+# summarizer_api.py
 """
 Module for interacting with the API (Gemini) for article summarization.
 """
@@ -42,9 +43,8 @@ def initialize_api():
         return False
 
 def get_model_for_content_length(content_length):
-    # Always use the experimental Gemini 2.5 Pro model
+    # Always use a simpler Gemini model for faster responses
     return 'gemini-2.0-flash-001'
-    # return 'gemini-2.5-pro-exp-03-25'
 
 def create_safety_settings():
     """
@@ -78,7 +78,19 @@ def create_safety_settings():
         logger.error(f"Error creating safety settings: {e}")
         return None
 
-def call_gemini_api(prompt, article_id, content_length, retries=2):
+def gemini_generate_content(model, prompt, config_kwargs):
+    from google.genai import types
+    # Create a new client instance for the process using the module-level API_KEY.
+    client = genai.Client(api_key=API_KEY)
+    # Reconstruct the config object from the configuration keyword arguments.
+    config = types.GenerateContentConfig(**config_kwargs)
+    return client.models.generate_content(
+         model=model,
+         contents=[{"role": "user", "parts": [{"text": prompt}]}],
+         config=config
+    )
+
+def call_gemini_api(prompt, article_id, content_length, retries=2, timeout_seconds=180):
     """
     Call the Gemini API to generate a summary.
     
@@ -86,7 +98,8 @@ def call_gemini_api(prompt, article_id, content_length, retries=2):
         prompt (str): The prompt to send to the API.
         article_id (str): The ID of the article being summarized.
         content_length (int): The length of the article content.
-        retries (int): Number of retry attempts.
+        retries (int): Number of retry attempts for each model.
+        timeout_seconds (int): Timeout in seconds for each API call.
         
     Returns:
         tuple: (summary_text, raw_response_text) or (None, None) if failed.
@@ -94,21 +107,27 @@ def call_gemini_api(prompt, article_id, content_length, retries=2):
     if not prompt:
         logger.error(f"Empty prompt for article ID {article_id}")
         return None, None
-    
+
     # Check cache
     cache_key = f"{article_id}_{hash(prompt)}"
     if cache_key in response_cache:
         logger.info(f"Using cached response for article ID {article_id}")
         return response_cache[cache_key]
-    
+
     # Initialize API if needed
     if not initialize_api():
         logger.error("API initialization failed")
         return None, None
-    
-    # Select model based on content length
-    model = get_model_for_content_length(content_length)
-    logger.info(f"Using model {model} for article ID {article_id}")
+
+    # Define the list of models to try in order
+    models = [
+        'gemini-2.5-pro-exp-03-25',
+        'gemini-2.0-pro-exp-02-05',
+        'gemini-2.0-flash-001',
+        'gemini-2.0-flash-thinking-exp-01-21',
+        'gemini-2.0-flash-thinking-exp-1219',
+        'gemini-2.0-flash-exp'
+    ]
     
     # Configure request
     config_kwargs = {
@@ -117,68 +136,75 @@ def call_gemini_api(prompt, article_id, content_length, retries=2):
         "top_p": 0.9,
         # Removed generation_config because it is not permitted in the current GenerateContentConfig
     }
-    
+
     # Add safety settings if available
     safety_settings = create_safety_settings()
     if safety_settings:
         config_kwargs["safety_settings"] = safety_settings
-    
-    # Create config
+
+    # Create config object for local use (for logging errors if needed)
     try:
         config = types.GenerateContentConfig(**config_kwargs)
     except Exception as e:
         logger.error(f"Error creating config: {e}", exc_info=True)
         return None, None
-    
-    # Make API call with retries
-    for attempt in range(retries + 1):
-        try:
-            logger.info(f"Calling Gemini API for article ID {article_id} (attempt {attempt+1}/{retries+1})")
-            start_time = time.time()
-            
-            # Execute API call using the custom config
-            response = client.models.generate_content(
-                model=model,
-                contents=[{"role": "user", "parts": [{"text": prompt}]}],
-                config=config
-            )
-            
-            elapsed_time = time.time() - start_time
-            logger.info(f"API call completed in {elapsed_time:.2f} seconds")
-            
-            # Process response
-            if response:
-                try:
-                    # Try using the aggregated response.text property
-                    summary_text = response.text.strip()
-                except AttributeError:
-                    # Fallback: extract text from the first candidate's content parts
-                    summary_text = response.candidates[0].content.parts[0].text.strip()
-                raw_response_text = str(response)
-                
-                # Cache the response
-                response_cache[cache_key] = (summary_text, raw_response_text)
-                
-                # Clean cache if it gets too large (keep last 50 entries)
-                if len(response_cache) > 50:
-                    keys = list(response_cache.keys())
-                    for old_key in keys[:-50]:
-                        del response_cache[old_key]
-                
-                return summary_text, raw_response_text
-            else:
-                logger.error(f"Invalid response format for article ID {article_id}")
-                
-        except Exception as e:
-            logger.error(f"API call failed for article ID {article_id} (attempt {attempt+1}): {e}", exc_info=True)
-            # Wait before retrying
+
+    from concurrent.futures import ThreadPoolExecutor, TimeoutError
+
+
+    # Loop through models and attempt retries on each
+    for model in models:
+        logger.info(f"Trying model {model} for article ID {article_id}")
+        for attempt in range(retries + 1):
+            try:
+                logger.info(f"Calling Gemini API with model {model} for article ID {article_id} (attempt {attempt+1}/{retries+1})")
+                start_time = time.time()
+                with ThreadPoolExecutor(max_workers=1) as executor:
+                    future = executor.submit(gemini_generate_content, model, prompt, config_kwargs)
+                    try:
+                        response = future.result(timeout=timeout_seconds)
+                    except TimeoutError:
+                        raise TimeoutError("API call timed out")
+
+                elapsed_time = time.time() - start_time
+                logger.info(f"API call completed in {elapsed_time:.2f} seconds")
+
+                if response:
+                    try:
+                        summary_text = response.text.strip()
+                    except AttributeError:
+                        summary_text = response.candidates[0].content.parts[0].text.strip()
+                    raw_response_text = str(response)
+
+                    # Cache the response
+                    response_cache[cache_key] = (summary_text, raw_response_text)
+
+                    # Clean cache if it gets too large (keep last 50 entries)
+                    if len(response_cache) > 50:
+                        keys = list(response_cache.keys())
+                        for old_key in keys[:-50]:
+                            del response_cache[old_key]
+
+                    return summary_text, raw_response_text
+                else:
+                    logger.error(f"Invalid response format for article ID {article_id} with model {model}")
+
+            except TimeoutError as te:
+                logger.error(f"Timeout error for article ID {article_id} using model {model} on attempt {attempt+1}: {te}", exc_info=True)
+            except KeyboardInterrupt:
+                logger.error("Execution interrupted by user (Ctrl+C). Exiting.")
+                raise
+            except Exception as e:
+                logger.error(f"API call failed for article ID {article_id} using model {model} on attempt {attempt+1}: {e}", exc_info=True)
+
             if attempt < retries:
                 wait_time = (attempt + 1) * 5  # Exponential backoff: 5s, 10s, etc.
                 logger.info(f"Retrying in {wait_time} seconds...")
                 time.sleep(wait_time)
-    
-    # All attempts failed
-    logger.error(f"Failed to get summary after {retries+1} attempts for article ID {article_id}")
+
+        logger.info(f"Switching to next model after {retries+1} attempts for article ID {article_id} with model {model}")
+
+    logger.error(f"Failed to get summary after trying all models for article ID {article_id}")
     return None, None
 
 # Test function
@@ -195,4 +221,7 @@ def test_api_call():
         return False
 
 if __name__ == "__main__":
-    test_api_call()
+    try:
+        test_api_call()
+    except KeyboardInterrupt:
+        logger.info("Script execution terminated by user (Ctrl+C).")

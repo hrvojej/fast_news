@@ -1,12 +1,99 @@
-Below is an updated version of your README with the necessary changes. In this version, we explicitly state that the summarization is done via the Gemini API while image retrieval is now handled using the Wikimedia Commons API. We removed any misleading references to image fetching via Gemini API and adjusted the key features and documentation accordingly.
+# most important
+& C:/Users/Korisnik/Desktop/TLDR/venv/Scripts/python.exe C:\Users\Korisnik\Desktop\TLDR\fast_news\news_aggregator\nlp\summarizer\main.py --schema pt_nyt --env dev --limit 90000
+& C:/Users/Korisnik/Desktop/TLDR/venv/Scripts/python.exe c:/Users/Korisnik/Desktop/TLDR/fast_news/news_aggregator/nlp/summarizer/summarizer_category_generator.py
 
-# venv
+
+
+# CloudFlare
+Use the following credentials for S3 clients:
+Access Key ID
+50b6ed42f7c0b28f8877f4a9a9932c42
+Click to copy
+
+Secret Access Key
+2b2968d71bf7762f99ce1086fd4abccc75c31a545827ed3bf5ec7f52524b1223
+Click to copy
+
+Use jurisdiction-specific endpoints for S3 clients:
+DefaultEuropean Union (EU)
+https://4e5d50e5c54202502e8b325e64584fae.eu.r2.cloudflarestorage.com
+Click to copy
+
+# Chrome - use this
+Start-Process -FilePath "C:\Program Files\Google\Chrome\Application\chrome.exe" -ArgumentList `
+ "--remote-debugging-port=9222",
+ "--user-data-dir=""C:\Users\Korisnik\AppData\Local\Google\Chrome\User Data""",
+ "--profile-directory=""Profile 1""",
+ "--disable-gpu",
+ "--disable-popup-blocking",
+ "--disable-extensions",
+ "--disable-sync",
+ "--disable-translate",
+ "--disable-notifications",
+ "--mute-audio"
+
+# pg
+user: postgres 
+pss: fasldkflk423mkj4k24jk242
+psql -U postgres -W
+DROP DATABASE news_aggregator_dev;
+DROP ROLE news_admin_dev;
+CREATE DATABASE news_aggregator_dev;
+CREATE ROLE news_admin_dev WITH LOGIN PASSWORD 'fasldkflk423mkj4k24jk242';
+ALTER DATABASE news_aggregator_dev OWNER TO news_admin_dev;
+ad
+
+# alembic
+alembic upgrade head
+
+# PROCEDURE
+-------------------
+# dagster 
+C:\Users\Korisnik\Desktop\TLDR\venv\Scripts\Activate.ps1
+cd C:\Users\Korisnik\Desktop\TLDR\fast_news\news_aggregator\dagster_orchestration
+dagster dev
+http://127.0.0.1:3000/runs
+
+# article content updater - run in Dagster for nyt articles
+
+# summarizer
+& C:/Users/Korisnik/Desktop/TLDR/venv/Scripts/python.exe C:\Users\Korisnik\Desktop\TLDR\fast_news\news_aggregator\nlp\summarizer\main.py --schema pt_nyt --env dev --limit 90000
+
+python main.py --schema pt_nyt --env dev --article-id "a24a8a0d-910b-40b9-a09f-dfce65ce3610"
+
+python main.py --schema pt_nyt --env dev --limit 90000
+
 C:\Users\Korisnik\Desktop\TLDR\venv\Scripts\Activate.ps1
 cd C:\Users\Korisnik\Desktop\TLDR\fast_news\news_aggregator\nlp\summarizer
-python main.py --schema pt_nyt --env dev --article-id "f66d7f33-b823-4810-8cda-da2699e61f9c"
+python main.py --schema pt_nyt --env dev --limit 1
+
+
+python main.py --schema pt_nyt --env dev --article-id "a24a8a0d-910b-40b9-a09f-dfce65ce3610"
 
 python main.py --schema pt_nyt --env dev --article-id "0078e4d3-5782-4c73-a6ae-d791e7d8e914"
-python main.py --schema pt_nyt --env dev --limit 100
+python main.py --schema pt_nyt --env dev --limit 90000
+
+To process all unprocessed articles in the development environment, you should set a high limit (or use a value that covers the total number of articles) and avoid using the force flag. This ensures that only articles that have not already been summarized (i.e., not already generated as HTML) are processed.
+
+python main.py --schema pt_nyt --env dev --limit 90000 --recent-timeout 6
+Explanation
+--schema pt_nyt: Specifies the database schema.
+
+--env dev: Runs the script in the development environment.
+
+--limit 90000: Sets a high limit to process all unprocessed articles. (Adjust this number if you have more articles.)
+
+--recent-timeout 6: Skips articles that have been processed in the last 6 hours.
+
+No --force flag: Ensures the script does not re‑process articles that have already been created.
+
+# Category pages generation
+ & C:/Users/Korisnik/Desktop/TLDR/venv/Scripts/python.exe c:/Users/Korisnik/Desktop/TLDR/fast_news/news_aggregator/nlp/summarizer/summarizer_category_generator.py
+
+# Update change in local frontend to CloudFlare
+cd C:\Users\Korisnik\Desktop\TLDR\fast_news\news_aggregator\frontend
+pwsh -ExecutionPolicy Bypass -File update-site.ps1
+
 
 # Remove all items in curret folder:
 Remove-Item -Path * -Recurse -Force
@@ -123,7 +210,6 @@ python main.py --schema pt_nyt --env dev --limit 2 --debug --verbose
 ```
 
 #### 3. Processing a Single Article
-
 Process a specific article by its ID:
 
 ```bash
@@ -355,3 +441,4 @@ To avoid re‑processing articles that have been summarized recently, you can sp
 
 ```bash
 python main.py --schema pt_nyt --env dev --limit 20 --recent-timeout 6
+

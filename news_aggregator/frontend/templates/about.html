@@ -1,0 +1,57 @@
+{% extends "base.html" %}
+
+{% block title %}About{% endblock %}
+
+{% block extra_css %}
+    <link rel="stylesheet" href="{{ relative_static_path }}/css/about.css">
+    <style>
+      /* Fallback inline styles if about.css fails to load */
+      .about-container {
+          max-width: 800px;
+          margin: 40px auto;
+          padding: 20px;
+          background-color: #fff;
+          color: #333;
+          line-height: 1.6;
+          font-size: 1.1rem;
+          box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+          border-radius: 5px;
+      }
+      .about-container h1 {
+          font-size: 2.5rem;
+          margin-bottom: 20px;
+          border-bottom: 2px solid #0066cc;
+          padding-bottom: 10px;
+      }
+      .about-container p {
+          margin-bottom: 15px;
+      }
+      .about-container ul {
+          list-style: disc;
+          padding-left: 20px;
+          margin-bottom: 15px;
+      }
+      .about-container li {
+          margin-bottom: 10px;
+      }
+    </style>
+{% endblock %}
+
+{% block content %}
+<div class="about-container">
+    <h1>About</h1>
+    <p>Welcome to our fast, fact-checked news platform. Our website is built on the principles of accuracy, reliability, and clarity. We verify facts from multiple reputable sources and present concise, relevant events to keep you informed without overwhelming you with unnecessary detail.</p>
+    <p>Our platform is unique in its ability to generate fast summaries that distill complex events into easily digestible content. These summaries are designed not only to inform but also to engage, by using carefully chosen design elements and color cues that enhance readability and retention.</p>
+    <p>Our site is organized into several core sections:</p>
+    <ul>
+        <li><strong>Homepage:</strong> A curated display of the latest and most significant headlines, presented with fast summaries and visual cues for quick comprehension.</li>
+        <li><strong>Categories:</strong> Detailed sections that cover topics such as politics, business, technology, sports, and more, each with dedicated summaries and supporting details.</li>
+        <li><strong>Additional Sections:</strong> Curated lists, entity overviews, and insightful summaries that help you quickly grasp key facts, trends, and relationships in the news.</li>
+    </ul>
+    <p>One of the unique aspects of our platform is the use of color theory in our design. Research shows that colors can influence cognitive processing, memory retention, and decision-making. We apply this science by associating specific colors with different types of content and key entities. For example, our design may use a distinct color for organizations, another for prominent individuals, and yet another for geographic locations. This helps create a mental map that allows you to quickly identify and connect related pieces of information.</p>
+    <p>In addition, our system employs custom, finely crafted search algorithms that are built to enable deeper exploration of topics. These searches are tailored to retrieve not only the most recent and relevant information but also to uncover interesting facts and contextual details that enrich your understanding of the subject matter. Whether you're looking for fast summaries or a deeper dive into a topic, our platform is designed to serve your informational needs with clarity and precision.</p>
+    <p>We also take pride in our advanced entity extraction process. By identifying and categorizing key entities—such as individuals, organizations, and locations—we ensure that every summary is not only informative but also structured in a way that makes it easy to explore the underlying relationships. This structured approach helps in creating a cohesive narrative where each element is interconnected, providing you with a comprehensive view of the news.</p>
+    <p>Furthermore, our commitment to clarity extends to our visual design. The use of consistent layouts, clear typography, and well-defined color schemes helps create a user-friendly experience. Our design choices are based on sound research in cognitive science and design theory, ensuring that the content is not only accessible but also engaging.</p>
+    <p>Thank you for choosing our platform as your trusted source for fast, reliable, and thoughtfully designed news summaries. We are continuously refining our methods and technologies to deliver an even better experience and deeper insights into the news that matters most to you.</p>
+</div>
+{% endblock %}
