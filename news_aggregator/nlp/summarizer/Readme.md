@@ -2,22 +2,17 @@
 & C:/Users/Korisnik/Desktop/TLDR/venv/Scripts/python.exe C:\Users\Korisnik\Desktop\TLDR\fast_news\news_aggregator\nlp\summarizer\main.py --schema pt_nyt --env dev --limit 90000
 & C:/Users/Korisnik/Desktop/TLDR/venv/Scripts/python.exe c:/Users/Korisnik/Desktop/TLDR/fast_news/news_aggregator/nlp/summarizer/summarizer_category_generator.py
 
-
-
 # CloudFlare
 Use the following credentials for S3 clients:
 Access Key ID
 50b6ed42f7c0b28f8877f4a9a9932c42
-Click to copy
 
 Secret Access Key
 2b2968d71bf7762f99ce1086fd4abccc75c31a545827ed3bf5ec7f52524b1223
-Click to copy
 
 Use jurisdiction-specific endpoints for S3 clients:
 DefaultEuropean Union (EU)
 https://4e5d50e5c54202502e8b325e64584fae.eu.r2.cloudflarestorage.com
-Click to copy
 
 # Chrome - use this
 Start-Process -FilePath "C:\Program Files\Google\Chrome\Application\chrome.exe" -ArgumentList `
@@ -41,7 +36,6 @@ DROP ROLE news_admin_dev;
 CREATE DATABASE news_aggregator_dev;
 CREATE ROLE news_admin_dev WITH LOGIN PASSWORD 'fasldkflk423mkj4k24jk242';
 ALTER DATABASE news_aggregator_dev OWNER TO news_admin_dev;
-ad
 
 # alembic
 alembic upgrade head
