@@ -2,6 +2,7 @@
 & C:/Users/Korisnik/Desktop/TLDR/venv/Scripts/python.exe C:\Users\Korisnik\Desktop\TLDR\fast_news\news_aggregator\nlp\summarizer\main.py --schema pt_nyt --env dev --limit 90000
 & C:/Users/Korisnik/Desktop/TLDR/venv/Scripts/python.exe c:/Users/Korisnik/Desktop/TLDR/fast_news/news_aggregator/nlp/summarizer/summarizer_category_generator.py
 
+
 # CloudFlare
 Use the following credentials for S3 clients:
 Access Key ID
@@ -87,6 +88,10 @@ No --force flag: Ensures the script does not re‑process articles that have alr
 # Update change in local frontend to CloudFlare
 cd C:\Users\Korisnik\Desktop\TLDR\fast_news\news_aggregator\frontend
 pwsh -ExecutionPolicy Bypass -File update-site.ps1
+
+aws s3 sync "C:\path\to\local\folder" s3://my-bucket-name/ \
+    --endpoint-url https://<ACCOUNT_ID>.r2.cloudflarestorage.com
+
 
 
 # Remove all items in curret folder:

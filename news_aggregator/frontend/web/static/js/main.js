@@ -2,16 +2,16 @@
 
 document.addEventListener('DOMContentLoaded', function() {
     console.log('Article Summarizer JS initialized');
-    
-    // Toggle visibility of elements
+
+    // -------------------------------
+    // 1) General Toggle Utility (if needed)
+    // -------------------------------
     function toggleElement(elementId) {
         const element = document.getElementById(elementId);
         if (element) {
             element.style.display = (element.style.display === 'none') ? 'block' : 'none';
         }
     }
-    
-    // Add event listeners for toggle buttons
     const toggleButtons = document.querySelectorAll('.toggle-button');
     toggleButtons.forEach(button => {
         button.addEventListener('click', function() {
@@ -19,23 +19,14 @@ document.addEventListener('DOMContentLoaded', function() {
             toggleElement(targetId);
         });
     });
-    
-    // Enhance entity displays with hover effects
-    enhanceEntities();
-    
-    // Add image zooming capabilities
-    setupImageZoom();
-    
-    // Setup collapsible sections
-    setupCollapsibleSections();
-    
-    // Setup mobile navigation using the hamburger icon
-    setupMobileNav();
 
+    // -------------------------------
+    // 2) Enhance Entity Displays (add tooltips, etc.)
+    // -------------------------------
     function enhanceEntities() {
         const entityClasses = [
             'named-individual', 'roles-categories', 'orgs-products',
-            'location', 'time-event', 'artistic', 'industry', 
+            'location', 'time-event', 'artistic', 'industry',
             'financial', 'key-actions'
         ];
         entityClasses.forEach(className => {
@@ -57,7 +48,11 @@ document.addEventListener('DOMContentLoaded', function() {
             });
         });
     }
-    
+    enhanceEntities();
+
+    // -------------------------------
+    // 3) Image Zoom
+    // -------------------------------
     function setupImageZoom() {
         const images = document.querySelectorAll('.article-image img, .featured-image img');
         images.forEach(img => {
@@ -98,21 +93,16 @@ document.addEventListener('DOMContentLoaded', function() {
             });
         });
     }
-    
+    setupImageZoom();
+
+    // -------------------------------
+    // 4) Collapsible Sections
+    // -------------------------------
     function setupCollapsibleSections() {
         const sections = [
-            { 
-                heading: '.entity-overview-heading', 
-                content: '.entity-grid',
-                initialState: 'expanded' 
-            },
-            { 
-                heading: '.facts-heading', 
-                content: '.facts-container',
-                initialState: 'expanded' 
-            }
+            { heading: '.entity-overview-heading', content: '.entity-grid', initialState: 'expanded' },
+            { heading: '.facts-heading', content: '.facts-container', initialState: 'expanded' }
         ];
-        
         sections.forEach(section => {
             const headings = document.querySelectorAll(section.heading);
             headings.forEach(heading => {
@@ -142,19 +132,12 @@ document.addEventListener('DOMContentLoaded', function() {
             });
         });
     }
-    
-    function setupMobileNav() {
-        // Look for the hamburger icon using the 'hamburger' class
-        const hamburger = document.querySelector('.hamburger');
-        const mainNav = document.querySelector('.main-nav');
-        
-        if (hamburger && mainNav) {
-            hamburger.addEventListener('click', function() {
-                mainNav.classList.toggle('active');
-            });
-        }
-        
-        // Optional: Wrap tables for responsiveness
+    setupCollapsibleSections();
+
+    // -------------------------------
+    // 5) Responsive Table Wrapping
+    // -------------------------------
+    function wrapTablesForResponsiveness() {
         const tables = document.querySelectorAll('table');
         tables.forEach(table => {
             const wrapper = document.createElement('div');
@@ -163,4 +146,39 @@ document.addEventListener('DOMContentLoaded', function() {
             wrapper.appendChild(table);
         });
     }
+    wrapTablesForResponsiveness();
+
+    // -------------------------------
+    // 6) Mobile Overlay Menu Logic
+    // -------------------------------
+    // Toggle overlay when hamburger is clicked
+    const mobileHamburger = document.querySelector('.hamburger');
+    if (mobileHamburger) {
+        mobileHamburger.addEventListener('click', function(e) {
+            e.stopPropagation();
+            const overlay = document.getElementById('mobile-menu-overlay');
+            if (overlay) {
+                overlay.style.display = (overlay.style.display === 'block') ? 'none' : 'block';
+            }
+        });
+    }
+    // Close overlay if clicking outside the mobile menu container
+    const mobileOverlay = document.getElementById('mobile-menu-overlay');
+    if (mobileOverlay) {
+        mobileOverlay.addEventListener('click', function(e) {
+            if (e.target.id === 'mobile-menu-overlay') {
+                mobileOverlay.style.display = 'none';
+            }
+        });
+    }
+    // Accordion for mobile submenu toggling
+    const mobileCategoryTitles = document.querySelectorAll('.mobile-category-title');
+    mobileCategoryTitles.forEach(function(title) {
+        title.addEventListener('click', function() {
+            const parent = this.closest('.mobile-menu-category');
+            if (parent) {
+                parent.classList.toggle('active');
+            }
+        });
+    });
 });

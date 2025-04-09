@@ -45,10 +45,10 @@ articles_data = [article for article in articles_data if article.get("article_ht
 # Initialize logger
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
+
 # Define BASE_DIR (points to the frontend folder)
 BASE_DIR = os.path.join(package_root, "frontend")
 
-# Convert absolute Windows paths to relative paths for articles
 # Convert absolute Windows paths to relative paths for articles
 ARTICLES_BASE_PATH = os.path.join(BASE_DIR, "web", "articles")
 for article in articles_data:
@@ -67,7 +67,6 @@ for article in articles_data:
         logger.warning(f"HTML file not found for article: {article['summary_article_gemini_title']} at {file_full_path}")
 articles_data = valid_articles
 
-
 # Convert summary_featured_image from string to dict if needed.
 for article in articles_data:
     sfi = article.get("summary_featured_image")
@@ -81,8 +80,6 @@ for article in articles_data:
                 article["summary_featured_image"] = {"url": sfi_strip, "alt": "", "caption": ""}
         else:
             article["summary_featured_image"] = {"url": sfi_strip, "alt": "", "caption": ""}
-
-
 
 # Define directories for static files, templates, and output pages
 STATIC_IMAGE_DIR = os.path.join(BASE_DIR, "web", "static", "images")
@@ -107,7 +104,8 @@ for file in category_files:
     link = f"categories/category_{slug}.html"
     header_categories.append({"slug": slug, "name": display_name, "link": link})
 
-# For category pages (located in web/categories) set relative context values:
+# --- Prepare Context for Templates (initial values) ---
+# We will later add subcategories_by_category into this context.
 cat_context = {
     "relative_static_path": "../static",
     "relative_articles_path": "../articles/",
@@ -123,6 +121,7 @@ jinja_env = Environment(
     autoescape=select_autoescape(['html', 'xml'])
 )
 
+# --- Extract Category Info from Articles ---
 def extract_category_info(article_html_file_location):
     if "/" not in article_html_file_location:
         return {'category': "Uncategorized", 'subcategory': None}
@@ -131,32 +130,59 @@ def extract_category_info(article_html_file_location):
     subcategory = parts[1] if len(parts) > 1 and parts[1] and not parts[1].endswith(".html") else None
     return {'category': category, 'subcategory': subcategory}
 
-# Extract category info for each article
 for article in articles_data:
     cat_info = extract_category_info(article["article_html_file_location"])
     article["extracted_category"] = cat_info.get("category")
     article["extracted_subcategory"] = cat_info.get("subcategory")
-    
-# Group articles by top-level category
+
+# Normalize to lowercase
+for article in articles_data:
+    if article.get("extracted_category"):
+        article["extracted_category"] = article["extracted_category"].lower()
+    if article.get("extracted_subcategory"):
+        article["extracted_subcategory"] = article["extracted_subcategory"].lower()
+
+# --- Group Articles by Top-Level Category ---
 categories_group = {}
 for article in articles_data:
     top_category = article.get("extracted_category") or "Uncategorized"
     categories_group.setdefault(top_category, []).append(article)
 
-# Sort articles_data by publication date and popularity (descending)
+# --- Generate Global subcategories_by_category for header ---
+subcategories_by_category = {}
+for header_cat in header_categories:
+    cat_slug = header_cat["slug"].lower()
+    subcats = set()
+    if cat_slug in categories_group:
+        for article in categories_group[cat_slug]:
+            subcat = article.get("extracted_subcategory")
+            if subcat and subcat != cat_slug:
+                subcats.add(subcat)
+    subcat_list = []
+    for subcat in sorted(subcats):
+        subcat_obj = {
+            "slug": subcat,
+            "name": subcat.title(),
+            "link": f"./subcategory_{subcat}.html"
+        }
+        subcat_list.append(subcat_obj)
+    subcategories_by_category[cat_slug] = subcat_list
+
+# Update our global header context with subcategories_by_category.
+cat_context["subcategories_by_category"] = subcategories_by_category
+
+# --- Sort Articles by Publication Date and Popularity ---
 articles_data = sorted(
     articles_data,
     key=lambda x: (x.get("pub_date"), x.get("popularity_score", 0)),
     reverse=True
 )
 
-# Preserve original image URL if not already preserved
+# --- Preserve & Process Images ---
 for article in articles_data:
     if article.get("summary_featured_image") and article["summary_featured_image"].get("url"):
         if "original_url" not in article["summary_featured_image"]:
             article["summary_featured_image"]["original_url"] = article["summary_featured_image"]["url"]
-
-# Process images for each article; store processed filenames as plain strings.
 for article in articles_data:
     if article.get("summary_featured_image") and article["summary_featured_image"].get("url"):
         original_url = article["summary_featured_image"]["url"]
@@ -256,23 +282,21 @@ for top_category, articles in categories_group.items():
         sys.exit(1)
 
 # --- Generate Homepage ---
-# For the homepage (located at frontend/web/homepage.html), we define context values appropriate for the web folder.
 HOMEPAGE_OUTPUT_FILE = os.path.join(BASE_DIR, "web", "homepage.html")
 homepage_context = {
     "homepage_title": "Latest News",
     "header_categories": header_categories,
-    # In the web folder, static, articles, and categories are siblings.
     "relative_static_path": "static",
     "relative_articles_path": "articles/",
     "relative_category_images_path": "categories/images",
     "relative_root_path": ".",
-    "relative_categories_path": "categories"
+    "relative_categories_path": "categories",
+    # Pass global subcategories_by_category for header usage
+    "subcategories_by_category": subcategories_by_category
 }
 
-# Define which categories are most important for the homepage
 IMPORTANT_CATEGORIES = ["us", "world", "business", "technology", "sports"]
 HOMEPAGE_FEATURED_COUNT = 5
-
 homepage_sections = []
 for important_cat in IMPORTANT_CATEGORIES:
     for group_key, group_articles in categories_group.items():
@@ -288,7 +312,6 @@ for important_cat in IMPORTANT_CATEGORIES:
                 "featured": sorted_articles[:HOMEPAGE_FEATURED_COUNT]
             })
             break
-
 homepage_context["homepage_sections"] = homepage_sections
 
 try:
@@ -308,7 +331,6 @@ except Exception as e:
     sys.exit(1)
 
 # --- Generate About Page ---
-# For the about page (located at frontend/web/about.html), we use context values similar to the homepage.
 ABOUT_OUTPUT_FILE = os.path.join(BASE_DIR, "web", "about.html")
 about_context = {
     "relative_static_path": "static",
@@ -316,9 +338,9 @@ about_context = {
     "relative_category_images_path": "categories/images",
     "relative_root_path": ".",
     "relative_categories_path": "categories",
-    "header_categories": header_categories
+    "header_categories": header_categories,
+    "subcategories_by_category": subcategories_by_category
 }
-
 try:
     template = jinja_env.get_template("about.html")
     rendered_html = template.render(about_context)

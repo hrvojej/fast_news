@@ -1,32 +1,96 @@
-
 <header class="site-header">
     <div class="header-content">
-        <div class="logo">
-            <a href="{{ relative_root_path }}/homepage.html">Fast fact checked news</a>
-        </div>
-        <div class="hamburger">&#9776;</div>
-        <nav class="main-nav">
-            <ul class="nav-left">
-                <li><a href="{{ relative_root_path }}/homepage.html">Home</a></li>
-                {% set direct_categories = header_categories[:5] %}
-                {% set more_categories = header_categories[5:] %}
-                {% for category in direct_categories %}
-                    <li><a href="{{ relative_categories_path }}/category_{{ category.slug }}.html">{{ category.name }}</a></li>
-                {% endfor %}
-                {% if more_categories %}
-                <li class="dropdown more">
-                    <a href="#">More</a>
-                    <ul class="dropdown-menu">
-                        {% for category in more_categories %}
-                            <li><a href="{{ relative_categories_path }}/category_{{ category.slug }}.html">{{ category.name }}</a></li>
-                        {% endfor %}
-                    </ul>
-                </li>
+      <!-- Logo -->
+      <div class="logo">
+        <a href="{{ relative_root_path }}/homepage.html">Fast fact checked news</a>
+      </div>
+  
+      <!-- Hamburger for Mobile (will show only on mobile per CSS) -->
+      <div class="hamburger">&#9776;</div>
+  
+      <!-- Desktop Navigation -->
+      <nav class="main-nav">
+        <!-- Left-aligned navigation: Home, direct categories, and More (if needed) -->
+        <ul class="nav-left">
+            <li>
+            <a href="{{ relative_root_path }}/homepage.html">Home</a>
+            </li>
+            {# Split header_categories: direct_categories as first 7, more_categories as the rest #}
+            {% set direct_categories = header_categories[:7] %}
+            {% set more_categories = header_categories[7:] %}
+        
+            {# Loop over direct categories with subcategories shown on hover #}
+            {% for category in direct_categories %}
+            <li class="dropdown">
+                <a href="{{ relative_categories_path }}/category_{{ category.slug }}.html">
+                {{ category.name }}
+                </a>
+                {% if subcategories_by_category[category.slug]|length > 0 %}
+                <ul class="dropdown-menu">
+                    {% for subcat in subcategories_by_category[category.slug] %}
+                    <li>
+                        <a href="{{ subcat.link }}">{{ subcat.name }}</a>
+                    </li>
+                    {% endfor %}
+                </ul>
                 {% endif %}
-            </ul>
-            <ul class="nav-right">
-                <li><a href="{{ relative_root_path }}/about.html">About</a></li>
-            </ul>
-        </nav>
+            </li>
+            {% endfor %}
+        
+            {# "More" dropdown shows only remaining top-level categories (without nested subcategories) #}
+            {% if more_categories %}
+            <li class="dropdown more">
+                <a href="#">More</a>
+                <ul class="dropdown-menu">
+                {% for category in more_categories %}
+                    <li>
+                    <a href="{{ relative_categories_path }}/category_{{ category.slug }}.html">
+                        {{ category.name }}
+                    </a>
+                    </li>
+                {% endfor %}
+                </ul>
+            </li>
+            {% endif %}
+        </ul>
+  
+  
+        <!-- Right-aligned navigation: About -->
+        <ul class="nav-right">
+          <li>
+            <a href="{{ relative_root_path }}/about.html">About</a>
+          </li>
+        </ul>
+      </nav>
     </div>
-</header>
+  
+    <!-- Mobile Overlay Navigation (remains unchanged) -->
+    <div id="mobile-menu-overlay" style="display: none;">
+      <div class="mobile-menu-container">
+        <ul class="mobile-menu-list">
+          {% for category in header_categories %}
+            <li class="mobile-menu-category">
+              <div class="mobile-category-title">
+                <a href="{{ relative_categories_path }}/category_{{ category.slug }}.html">
+                  {{ category.name }}
+                </a>
+              </div>
+              {% if subcategories_by_category[category.slug]|length > 0 %}
+                <ul class="mobile-submenu">
+                  {% for subcat in subcategories_by_category[category.slug] %}
+                    <li>
+                      <a href="{{ subcat.link }}">{{ subcat.name }}</a>
+                    </li>
+                  {% endfor %}
+                </ul>
+              {% endif %}
+            </li>
+          {% endfor %}
+          <li class="mobile-menu-about">
+            <a href="{{ relative_root_path }}/about.html">About</a>
+          </li>
+        </ul>
+      </div>
+    </div>
+  </header>
+  
