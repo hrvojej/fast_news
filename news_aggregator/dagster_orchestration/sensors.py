@@ -1,4 +1,5 @@
 from dagster import RunRequest, sensor, RunsFilter, DagsterRunStatus
+from datetime import datetime, timedelta, timezone
 from sync_jobs import (
    sync_pt_abc_articles,
    sync_pt_aljazeera_articles, 
@@ -129,3 +130,30 @@ def aljazeera_sync_sensor(context):
        if last_run.run_id != cursor:
            context.update_cursor(last_run.run_id)
            yield RunRequest(run_key=f"sync_after_{last_run.run_id}")
+           
+           
+
+# Define maximum run duration in minutes
+MAX_DURATION_MINUTES = 20
+
+@sensor(name="summarization_timeout_killer", minimum_interval_seconds=60)
+def summarization_timeout_killer(context):
+    instance = context.instance
+    now = datetime.now(timezone.utc)
+
+    # Get all currently running runs for this job
+    running_runs = instance.get_runs(
+        filters=RunsFilter(job_name="summarization_update_job", statuses=["STARTED"])
+    )
+
+    for run in running_runs:
+        start_ts = run.start_time
+        if not start_ts:
+            continue  # skip if no start time
+
+        started_at = datetime.fromtimestamp(start_ts, tz=timezone.utc)
+        elapsed = now - started_at
+
+        if elapsed > timedelta(minutes=MAX_DURATION_MINUTES):
+            context.log.warn(f"Run {run.run_id} for summarization_update_job running too long ({elapsed}), cancelling it.")
+            instance.report_run_canceled(run)

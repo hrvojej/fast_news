@@ -1,3 +1,5 @@
+I have following dagster job script:
+C:\Users\Korisnik\Desktop\TLDR\fast_news\news_aggregator\dagster_orchestration\dagster_jobs.py
 # dagster_jobs.py
 import os
 import sys
@@ -8,7 +10,6 @@ import time
 import random
 from dagster import success_hook
 from custom_dagster_client import dagster_client_resource
-from dagster import sensor, RunRequest
 
 
 ##############################################
@@ -561,77 +562,13 @@ def cnn_news_job():
     cat_status = cnn_category_parser_op()
     articles_status = cnn_article_parser_op(cat_status)
     cnn_article_updater_op(articles_status)
-    
-    
-##############################################
-# Summarizer & Frontend Update Sequence
-##############################################
 
-@op
-def summarizer_main_op(context):
-    context.log.info("Starting Summarizer Main Script...")
-    # Define the command without the PowerShell call symbol (&)
-    cmd = [
-        r"C:\Users\Korisnik\Desktop\TLDR\venv\Scripts\python.exe",
-        r"C:\Users\Korisnik\Desktop\TLDR\fast_news\news_aggregator\nlp\summarizer\main.py",
-        "--schema", "pt_nyt",
-        "--env", "dev",
-        "--limit", "1"
-    ]
-    log_file = get_log_file_path("summarizer_main.log")
-    process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding="utf-8")
-    retcode = stream_subprocess_output(context, process, log_file)
-    if retcode != 0:
-        context.log.error(f"Summarizer Main Script failed with return code {retcode}")
-        raise Exception("Summarizer Main Script failed.")
-    context.log.info("Summarizer Main Script completed successfully.")
-    return "main_executed"
+Now I want to add this to dagster schedule:
+I want to run in sequence this scripts in following order:
+1. & C:/Users/Korisnik/Desktop/TLDR/venv/Scripts/python.exe C:\Users\Korisnik\Desktop\TLDR\fast_news\news_aggregator\nlp\summarizer\main.py --schema pt_nyt --env dev --limit 1
+2. & C:/Users/Korisnik/Desktop/TLDR/venv/Scripts/python.exe c:/Users/Korisnik/Desktop/TLDR/fast_news/news_aggregator/nlp/summarizer/summarizer_category_generator.py
+3. cd C:\Users\Korisnik\Desktop\TLDR\fast_news\news_aggregator\frontend
+pwsh -ExecutionPolicy Bypass -File update-site.ps1
 
-@op
-def summarizer_category_op(context, previous_status):
-    context.log.info("Starting Summarizer Category Generator Script...")
-    cmd = [
-        r"C:\Users\Korisnik\Desktop\TLDR\venv\Scripts\python.exe",
-        r"C:\Users\Korisnik\Desktop\TLDR\fast_news\news_aggregator\nlp\summarizer\summarizer_category_generator.py"
-    ]
-    log_file = get_log_file_path("summarizer_category_generator.log")
-    process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding="utf-8")
-    retcode = stream_subprocess_output(context, process, log_file)
-    if retcode != 0:
-        context.log.error(f"Summarizer Category Generator failed with return code {retcode}")
-        raise Exception("Summarizer Category Generator Script failed.")
-    context.log.info("Summarizer Category Generator completed successfully.")
-    return "category_generated"
-
-@op
-def update_site_op(context, previous_status):
-    context.log.info("Starting Frontend Site Update Script...")
-    # Set the working directory for the frontend update command.
-    work_dir = r"C:\Users\Korisnik\Desktop\TLDR\fast_news\news_aggregator\frontend"
-    cmd = [
-        "pwsh",
-        "-ExecutionPolicy", "Bypass",
-        "-File", "update-site.ps1"
-    ]
-    log_file = get_log_file_path("update_site.log")
-    process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, cwd=work_dir, text=True, encoding="utf-8")
-    retcode = stream_subprocess_output(context, process, log_file)
-    if retcode != 0:
-        context.log.error(f"Frontend Site Update failed with return code {retcode}")
-        raise Exception("Frontend Site Update failed.")
-    context.log.info("Frontend Site Update completed successfully.")
-    return "update_completed"
-
-@job
-def summarization_update_job():
-    main_status = summarizer_main_op()
-    category_status = summarizer_category_op(main_status)
-    update_site_op(category_status)
-
-
-@sensor(job=summarization_update_job, minimum_interval_seconds=50)
-def summarization_update_sensor(_context):
-    # This sensor triggers a run every evaluation cycle.
-    yield RunRequest(run_key=str(time.time()))
-
-
+I want to run this sequence every 40 seconds and  I want each run to spawn separate processes. 
+How to achieve this?

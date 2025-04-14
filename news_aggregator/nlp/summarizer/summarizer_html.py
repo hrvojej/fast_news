@@ -13,7 +13,7 @@ from datetime import datetime
 from summarizer_logging import get_logger
 from summarizer_config import OUTPUT_HTML_DIR, ensure_output_directory
 from summarizer_image import IMAGES_DIR, process_images_in_html, search_and_download_images
-from summarizer_db import update_article_summary_details, get_related_articles, get_article_metadata
+from summarizer_db import update_article_summary_details, get_related_articles, get_article_metadata, update_article_status_html_date
 
 
 from db_scripts.db_context import DatabaseContext
@@ -718,10 +718,18 @@ def save_as_html(article_id, title, url, content, summary, response_text, schema
                 logger.info("Database summary details updated successfully.")
             else:
                 logger.error("Failed to update database summary details.")
+            
+            # --- New Code: Update html_date in the article_status table ---
+            from datetime import timezone
+            html_date = datetime.now(timezone.utc)
+            status_update_success = update_article_status_html_date(DatabaseContext(), schema, url, html_date)
+            if status_update_success:
+                logger.info(f"Article status updated with html_date {html_date} for URL: {url}")
+            else:
+                logger.warning(f"Failed to update article status html_date for URL: {url}")
+            
             return True
-        else:
-            logger.error(f"File wasn't created despite no errors: {filepath}")
-            return False
+
 
     except Exception as e:
         # Ensure filepath is defined for logging, even if error occurred early

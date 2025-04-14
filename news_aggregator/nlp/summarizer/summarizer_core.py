@@ -57,12 +57,16 @@ class ArticleSummarizer:
         self.processed_count = 0
         self.failed_count = 0
         ensure_output_directory()
-        ensure_images_directory()  # Add this line
-
-        
+        ensure_images_directory()  # Add this line        
         logger.info(f"Initialized ArticleSummarizer for {schema} (env={env}, debug_mode={debug_mode})")
     
     def summarize_article(self, article_info):
+        from db_scripts.db_context import DatabaseContext
+        from summarizer_db import update_article_status_processing
+        # Mark the article as being processed so that concurrent processes skip it
+        if not update_article_status_processing(DatabaseContext.get_instance(self.env), self.schema, article_info["url"], True):
+            self.logger.info(f"Article {article_info['article_id']} is already being processed by another worker. Skipping.")
+            return False
         try:
             # Extract article information
             content = article_info.get('content', '')
@@ -177,22 +181,7 @@ class ArticleSummarizer:
                         f"Title: {article_info.get('title')}, "
                         f"Pub Date: {article_info.get('pub_date')}, "
                         f"HTML File: {article_info.get('article_html_file_location')}"
-                    )
-                    
-                    # Check if an HTML file is already defined and exists on disk
-                    html_file_location = article_info.get('article_html_file_location')
-                    if html_file_location:
-                        from os import path
-                        full_path = path.join(OUTPUT_HTML_DIR, html_file_location)
-                        if path.exists(full_path):
-                            logger.info(f"Skipping article {article_id} as HTML file exists at {full_path}")
-                            continue  # Skip this article since the file exists
-                    else:
-                        logger.info(f"No HTML file location defined for article {article_id}; processing article.")
-                    
-                    logger.info(f"[{idx+1}/{article_count}] Processing article ID: {article_id}")
-
-                    
+                    )                   
                     
                     try:
                         success = self.summarize_article(article_info)

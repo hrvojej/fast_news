@@ -1,0 +1,62 @@
+{% extends "base.html" %}
+
+{% block title %}Subcategory - {{ subcategory.name }}{% endblock %}
+
+{% block extra_css %}
+    <link rel="stylesheet" href="/static/css/category.css">
+    <style>
+      .content-container {
+          width: 100%;
+          margin: 0 auto;
+          padding: 20px;
+      }
+      .grid-4 {
+          display: grid;
+          grid-template-columns: repeat(4, 1fr);
+          gap: 20px;
+      }
+      .grid-article img {
+          width: 100%;
+          height: auto;
+          object-fit: cover;
+      }
+    </style>
+{% endblock %}
+
+{% block content %}
+<div class="subcategory-container content-container">
+    <h1>{{ subcategory.name }}</h1>
+    
+    {# Split the articles array: first 4 as featured, the rest as additional #}
+    {% set featured_articles = articles[:4] %}
+    {% set additional_articles = articles[4:] %}
+    
+    <!-- Main Articles Grid -->
+    <div class="main-articles-section">
+      <div class="grid-4">
+        {% for article in featured_articles %}
+          <div class="grid-article">
+            <!-- Note: Using absolute path for articles -->
+            <a href="/articles/{{ article.article_html_file_location }}">
+              {% if article.summary_featured_image_large %}
+                <img src="/categories/images/{{ article.summary_featured_image_large }}" alt="">
+              {% else %}
+                <img src="/static/path/to/default/image.jpg" alt="No image available">
+              {% endif %}
+              <h3>{{ article.summary_article_gemini_title }}</h3>
+            </a>
+          </div>
+        {% endfor %}
+      </div>
+      <ul class="additional-articles">
+        {% for article in additional_articles %}
+          <li>
+            <a href="/articles/{{ article.article_html_file_location }}">
+              {{ article.summary_article_gemini_title }}
+            </a>
+          </li>
+        {% endfor %}
+      </ul>
+    </div>
+</div>
+{% endblock %}

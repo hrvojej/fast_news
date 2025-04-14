@@ -50,11 +50,8 @@ function Get-ContentType {
 }
 
 # 1. Check if we need to update the Worker code
-$updateWorker = $false
-$updateWorkerInput = Read-Host "Do you want to update the Worker code? (y/n)"
-if ($updateWorkerInput -eq "y") {
-    $updateWorker = $true
-}
+$updateWorker = $true
+
 
 # 2. Upload changed files to R2 using rclone
 Write-Host "Starting rclone sync to upload new or updated files..." -ForegroundColor Yellow

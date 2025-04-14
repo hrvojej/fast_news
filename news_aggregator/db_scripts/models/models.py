@@ -139,7 +139,8 @@ def create_portal_article_status_model(schema: str):
             'pub_date': sa.Column(TIMESTAMP(timezone=True)),
             # Updated fields to match migration changes:
             'status': sa.Column(sa.Boolean),
-            'status_type': sa.Column(sa.String(10))
+            'status_type': sa.Column(sa.String(10)),
+            'html_date': sa.Column(TIMESTAMP(timezone=True))
         }
     )
 

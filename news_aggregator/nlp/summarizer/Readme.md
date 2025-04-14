@@ -1,6 +1,23 @@
 # most important
-& C:/Users/Korisnik/Desktop/TLDR/venv/Scripts/python.exe C:\Users\Korisnik\Desktop\TLDR\fast_news\news_aggregator\nlp\summarizer\main.py --schema pt_nyt --env dev --limit 90000
+& C:/Users/Korisnik/Desktop/TLDR/venv/Scripts/python.exe C:\Users\Korisnik\Desktop\TLDR\fast_news\news_aggregator\nlp\summarizer\main.py --schema pt_nyt --env dev --limit 1
+
 & C:/Users/Korisnik/Desktop/TLDR/venv/Scripts/python.exe c:/Users/Korisnik/Desktop/TLDR/fast_news/news_aggregator/nlp/summarizer/summarizer_category_generator.py
+
+# run http server locally 
+cd C:\Users\Korisnik\Desktop\TLDR\fast_news\news_aggregator\frontend\web
+python -m http.server
+
+# Update change in local frontend to CloudFlare
+cd C:\Users\Korisnik\Desktop\TLDR\fast_news\news_aggregator\frontend
+pwsh -ExecutionPolicy Bypass -File update-site.ps1
+
+# dagster 
+C:\Users\Korisnik\Desktop\TLDR\venv\Scripts\Activate.ps1
+cd C:\Users\Korisnik\Desktop\TLDR\fast_news\news_aggregator\dagster_orchestration
+dagster dev
+http://127.0.0.1:3000/runs
+
+### ############################### 
 
 
 # CloudFlare
@@ -88,10 +105,6 @@ No --force flag: Ensures the script does not re‑process articles that have alr
 # Update change in local frontend to CloudFlare
 cd C:\Users\Korisnik\Desktop\TLDR\fast_news\news_aggregator\frontend
 pwsh -ExecutionPolicy Bypass -File update-site.ps1
-
-aws s3 sync "C:\path\to\local\folder" s3://my-bucket-name/ \
-    --endpoint-url https://<ACCOUNT_ID>.r2.cloudflarestorage.com
-
 
 
 # Remove all items in curret folder:
@@ -440,4 +453,7 @@ To avoid re‑processing articles that have been summarized recently, you can sp
 
 ```bash
 python main.py --schema pt_nyt --env dev --limit 20 --recent-timeout 6
+
+# List only folders in directory
+Get-ChildItem -Path . -Directory -Recurse | Select-Object FullName
 

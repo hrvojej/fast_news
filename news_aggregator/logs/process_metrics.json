@@ -1,0 +1,83 @@
+{
+  "current_run": {
+    "run_id": "8d440856-8fff-45ad-8bb8-709261105578",
+    "start_time": "2025-04-13T14:29:36.092967",
+    "end_time": null,
+    "total_articles": 5680,
+    "processed_articles": 0,
+    "successful_articles": 0,
+    "failed_articles": 0,
+    "skipped_articles": 0,
+    "api_calls": 0,
+    "api_errors": 0,
+    "total_api_time": 0,
+    "total_process_time": 0,
+    "article_metrics": {}
+  },
+  "historical_runs": [
+    {
+      "run_id": "d7430adf-5e05-4471-8c56-419b57d2dbd0",
+      "start_time": "2025-04-12T07:31:44.512786",
+      "end_time": "2025-04-12T07:31:44.691046",
+      "total_articles": 0,
+      "processed_articles": 0,
+      "successful_articles": 0,
+      "failed_articles": 0,
+      "skipped_articles": 0,
+      "api_calls": 0,
+      "api_errors": 0,
+      "total_api_time": 0,
+      "total_process_time": 0.17826,
+      "success_rate": 0,
+      "average_processing_time": 0
+    },
+    {
+      "run_id": "2fd4c8a8-e5bb-4691-8ae4-91a51a1661f6",
+      "start_time": "2025-04-12T07:31:44.717487",
+      "end_time": "2025-04-13T13:37:15.875675",
+      "total_articles": 5548,
+      "processed_articles": 0,
+      "successful_articles": 0,
+      "failed_articles": 0,
+      "skipped_articles": 0,
+      "api_calls": 0,
+      "api_errors": 0,
+      "total_api_time": 0,
+      "total_process_time": 108331.158188,
+      "success_rate": 0,
+      "average_processing_time": 0
+    },
+    {
+      "run_id": "82ddc3ef-5477-4af8-aa99-c6f5518e16db",
+      "start_time": "2025-04-13T13:37:15.877024",
+      "end_time": "2025-04-13T13:37:15.894844",
+      "total_articles": 5680,
+      "processed_articles": 0,
+      "successful_articles": 0,
+      "failed_articles": 0,
+      "skipped_articles": 0,
+      "api_calls": 0,
+      "api_errors": 0,
+      "total_api_time": 0,
+      "total_process_time": 0.01782,
+      "success_rate": 0,
+      "average_processing_time": 0
+    },
+    {
+      "run_id": "f15218d5-e91f-4d96-834b-dd82f159274d",
+      "start_time": "2025-04-13T14:29:35.554283",
+      "end_time": "2025-04-13T14:29:36.090926",
+      "total_articles": 0,
+      "processed_articles": 0,
+      "successful_articles": 0,
+      "failed_articles": 0,
+      "skipped_articles": 0,
+      "api_calls": 0,
+      "api_errors": 0,
+      "total_api_time": 0,
+      "total_process_time": 0.536643,
+      "success_rate": 0,
+      "average_processing_time": 0
+    }
+  ]
+}

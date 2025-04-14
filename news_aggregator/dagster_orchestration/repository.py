@@ -1,4 +1,6 @@
 from dagster import repository
+from sensors import summarization_timeout_killer
+
 from dagster_jobs import (
     abc_news_job,
     aljazeera_news_job,
@@ -8,7 +10,10 @@ from dagster_jobs import (
     nyt_news_job,
     reuters_news_job,
     cnn_news_job,
+    summarization_update_job,      
+    summarization_update_sensor,  
 )
+
 from sync_jobs import (
     sync_pt_abc_articles,
     sync_pt_aljazeera_articles, 
@@ -20,6 +25,7 @@ from sync_jobs import (
     sync_pt_cnn_articles,
     sync_all_schema_articles
 )
+
 from schedules import (
     abc_news_schedule,
     aljazeera_news_schedule,
@@ -30,6 +36,7 @@ from schedules import (
     reuters_news_schedule,
     cnn_news_schedule,
 )
+
 from sensors import (
     abc_sync_sensor,
     aljazeera_sync_sensor,
@@ -53,6 +60,7 @@ def news_aggregator_repository():
         nyt_news_job,
         reuters_news_job,
         cnn_news_job,
+        summarization_update_job,
         
         # Sync jobs
         sync_pt_abc_articles,
@@ -83,5 +91,7 @@ def news_aggregator_repository():
         fox_sync_sensor,
         guardian_sync_sensor,
         nyt_sync_sensor,
-        reuters_sync_sensor
+        reuters_sync_sensor,
+        summarization_update_sensor,
+        summarization_timeout_killer
     ]

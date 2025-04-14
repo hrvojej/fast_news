@@ -138,16 +138,6 @@ def process_single_article(args, summarizer):
         return False
 
 def run_batch_mode(args, summarizer):
-    """
-    Run the summarizer in batch mode, processing multiple articles.
-    
-    Args:
-        args (argparse.Namespace): Command line arguments
-        summarizer (ArticleSummarizer): The summarizer instance
-        
-    Returns:
-        bool: True if successful, False otherwise
-    """
     try:
         # Get batch size from args or config
         batch_size = args.batch_size
@@ -164,7 +154,15 @@ def run_batch_mode(args, summarizer):
             
         logger.info(f"Processing up to {effective_limit} articles from {args.schema} in {args.env}")
         
-        # Get statistics before running
+        # WAIT LOOP: Check until there is at least one article ready for processing.
+        db_context = DatabaseContext.get_instance(args.env)
+        articles = get_articles(db_context, args.schema)
+        while not articles:
+            logger.info("No articles found to process. Waiting for 30 seconds before rechecking...")
+            time.sleep(30)
+            db_context = DatabaseContext.get_instance(args.env)
+            articles = get_articles(db_context, args.schema)
+        
         if not args.dry_run:
             stats_before = get_summarization_stats(DatabaseContext.get_instance(args.env), args.schema)
             total_articles = stats_before['total_articles']
@@ -179,7 +177,6 @@ def run_batch_mode(args, summarizer):
             # Show progress
             print_progress()
             
-            # Show completion message
             processed = summarizer.processed_count
             failed = summarizer.failed_count
             logger.info(f"Completed batch. Processed: {processed}, Failed: {failed}")
@@ -189,6 +186,7 @@ def run_batch_mode(args, summarizer):
     except Exception as e:
         logger.error(f"Error in batch mode: {e}", exc_info=True)
         return False
+
 
 def run_continuous_mode(args, summarizer):
     """

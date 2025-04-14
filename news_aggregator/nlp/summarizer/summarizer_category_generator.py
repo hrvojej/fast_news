@@ -1,10 +1,12 @@
 """
-Module for generating category pages, the homepage, and the about page.
-This script loads templates, renders them with data from the database,
-and writes the output to:
+Module for generating category pages, the homepage, the about page, the dynamic header file,
+and subcategory pages.
+This script loads templates, renders them with data from the database, and writes the output to:
   - Category pages: frontend/web/categories/category_*.html
   - Homepage: frontend/web/homepage.html
   - About page: frontend/web/about.html
+  - Header file: frontend/web/header.html  <-- New dynamic header file
+  - Subcategory pages: frontend/web/categories/subcategory_*.html  <-- New subcategory pages
 """
 
 import os
@@ -76,7 +78,7 @@ for article in articles_data:
             try:
                 article["summary_featured_image"] = json.loads(sfi_strip)
             except Exception as e:
-                logging.error(f"Error parsing summary_featured_image JSON: {e}")
+                logger.error(f"Error parsing summary_featured_image JSON: {e}")
                 article["summary_featured_image"] = {"url": sfi_strip, "alt": "", "caption": ""}
         else:
             article["summary_featured_image"] = {"url": sfi_strip, "alt": "", "caption": ""}
@@ -86,6 +88,10 @@ STATIC_IMAGE_DIR = os.path.join(BASE_DIR, "web", "static", "images")
 CATEGORY_IMAGES_DIR = os.path.join(BASE_DIR, "web", "categories", "images")
 TEMPLATE_DIR = os.path.join(BASE_DIR, "templates")
 OUTPUT_CATEGORY_DIR = os.path.join(BASE_DIR, "web", "categories")
+# Ensure the categories/images folder exists.
+if not os.path.exists(CATEGORY_IMAGES_DIR):
+    os.makedirs(CATEGORY_IMAGES_DIR)
+    logger.debug(f"Created categories images directory: {CATEGORY_IMAGES_DIR}")
 if not os.path.exists(OUTPUT_CATEGORY_DIR):
     os.makedirs(OUTPUT_CATEGORY_DIR)
     logger.debug(f"Created output directory: {OUTPUT_CATEGORY_DIR}")
@@ -100,12 +106,11 @@ for file in category_files:
     if slug.lower() == "espanol":
         continue
     display_name = "NY" if slug.lower() == "nyregion" else slug.title()
-    # For header links from pages in web, include the "categories/" folder.
-    link = f"categories/category_{slug}.html"
+    # Use an absolute URL for category pages.
+    link = f"/categories/category_{slug}.html"
     header_categories.append({"slug": slug, "name": display_name, "link": link})
 
-# --- Prepare Context for Templates (initial values) ---
-# We will later add subcategories_by_category into this context.
+# --- Prepare initial context for non-header templates (if needed) ---
 cat_context = {
     "relative_static_path": "../static",
     "relative_articles_path": "../articles/",
@@ -115,7 +120,7 @@ cat_context = {
     "header_categories": header_categories
 }
 
-# Setup Jinja2 environment
+# --- Setup Jinja2 environment ---
 jinja_env = Environment(
     loader=FileSystemLoader(TEMPLATE_DIR),
     autoescape=select_autoescape(['html', 'xml'])
@@ -135,7 +140,7 @@ for article in articles_data:
     article["extracted_category"] = cat_info.get("category")
     article["extracted_subcategory"] = cat_info.get("subcategory")
 
-# Normalize to lowercase
+# Normalize extracted categories to lowercase
 for article in articles_data:
     if article.get("extracted_category"):
         article["extracted_category"] = article["extracted_category"].lower()
@@ -160,16 +165,28 @@ for header_cat in header_categories:
                 subcats.add(subcat)
     subcat_list = []
     for subcat in sorted(subcats):
+        # Use an absolute URL for subcategory pages under /categories.
         subcat_obj = {
             "slug": subcat,
             "name": subcat.title(),
-            "link": f"./subcategory_{subcat}.html"
+            "link": f"/categories/subcategory_{subcat}.html"
         }
         subcat_list.append(subcat_obj)
     subcategories_by_category[cat_slug] = subcat_list
 
-# Update our global header context with subcategories_by_category.
+# Update our global header context within cat_context for other pages.
 cat_context["subcategories_by_category"] = subcategories_by_category
+
+# --- Define header context for dynamic header file (using absolute paths) ---
+header_context = {
+    "relative_static_path": "/static",
+    "relative_articles_path": "/articles/",
+    "relative_category_images_path": "/categories/images",
+    "relative_root_path": "/",           # Ensures that paths like homepage.html become /homepage.html
+    "relative_categories_path": "/categories",
+    "header_categories": header_categories,
+    "subcategories_by_category": subcategories_by_category
+}
 
 # --- Sort Articles by Publication Date and Popularity ---
 articles_data = sorted(
@@ -291,7 +308,6 @@ homepage_context = {
     "relative_category_images_path": "categories/images",
     "relative_root_path": ".",
     "relative_categories_path": "categories",
-    # Pass global subcategories_by_category for header usage
     "subcategories_by_category": subcategories_by_category
 }
 
@@ -355,4 +371,57 @@ try:
     logger.debug(f"About page generated at: {ABOUT_OUTPUT_FILE}")
 except Exception as e:
     logger.error(f"Error writing about page to file: {e}")
+    sys.exit(1)
+
+# --- Generate Subcategory Pages ---
+# We'll generate one subcategory page for each distinct subcategory found across all articles.
+GLOBAL_SUBCAT_DIR = os.path.join(BASE_DIR, "web", "categories")
+try:
+    subcat_template = jinja_env.get_template("subcategory.html")
+except Exception as e:
+    logger.error(f"Subcategory template not found: {e}")
+    sys.exit(1)
+
+global_subcategories = {}
+for article in articles_data:
+    subcat = article.get("extracted_subcategory")
+    if subcat:
+        global_subcategories.setdefault(subcat, []).append(article)
+
+for subcat, articles in global_subcategories.items():
+    articles_sorted = sorted(
+        articles,
+        key=lambda x: (x.get("pub_date"), x.get("popularity_score", 0)),
+        reverse=True
+    )
+    context = {
+        "subcategory": {"name": subcat.title()},
+        "articles": articles_sorted,
+        "relative_static_path": "/static",
+        "relative_articles_path": "/articles/",
+        "relative_category_images_path": "/categories/images",
+        "relative_root_path": "/",
+        "relative_categories_path": "/categories"
+    }
+
+    output_filename = f"subcategory_{subcat}.html"
+    output_file_path = os.path.join(GLOBAL_SUBCAT_DIR, output_filename)
+    try:
+        with open(output_file_path, "w", encoding="utf-8") as f:
+            f.write(subcat_template.render(context))
+        logger.debug(f"Subcategory page for {subcat} generated at: {output_file_path}")
+    except Exception as e:
+        logger.error(f"Error writing subcategory page for {subcat} to file: {e}")
+        sys.exit(1)
+
+# --- Generate Dynamic Header File ---
+HEADER_OUTPUT_FILE = os.path.join(BASE_DIR, "web", "header.html")
+try:
+    header_template = jinja_env.get_template("components/header.html")
+    rendered_header = header_template.render(header_context)
+    with open(HEADER_OUTPUT_FILE, "w", encoding="utf-8") as f:
+        f.write(rendered_header)
+    logger.debug(f"Header file generated at: {HEADER_OUTPUT_FILE}")
+except Exception as e:
+    logger.error(f"Error generating header file at {HEADER_OUTPUT_FILE}: {e}")
     sys.exit(1)

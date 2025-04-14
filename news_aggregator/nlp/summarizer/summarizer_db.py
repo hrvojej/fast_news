@@ -26,31 +26,50 @@ logger = get_logger(__name__)
 def get_articles(db_context, schema, limit=None, recent_timeout_hours=None):
     """
     Get articles from the database to be processed.
-    This version retrieves all articles (processed or not) with additional fields,
-    so that the processing logic can decide based on file existence.
-    
+    This version retrieves articles that have html_processing_status false and then further
+    filters out those whose article_html_file_location indicates an HTML file that already exists on disk.
+
     Args:
         db_context: Database context for session management
         schema (str): Database schema name
         limit (int, optional): Maximum number of articles to retrieve
-        
+
     Returns:
-        list: List of article rows from the database
+        list: List of article rows from the database that need processing.
     """
+    from summarizer_config import OUTPUT_HTML_DIR
+    import os
     try:
         with db_context.session() as session:
             query = f"""
-                SELECT article_id, title, keywords, url, content, article_html_file_location, pub_date
-                FROM {schema}.articles
-                ORDER BY pub_date DESC
+                SELECT a.article_id, a.title, a.keywords, a.url, a.content, a.article_html_file_location, a.pub_date
+                FROM {schema}.articles a
+                JOIN {schema}.article_status s ON a.url = s.url
+                WHERE s.html_processing_status = false
+                ORDER BY a.pub_date DESC
             """
-            if limit and isinstance(limit, int) and limit > 0:
-                query += f" LIMIT {limit}"
-            
             result = session.execute(text(query))
             articles = result.fetchall()
             logger.info(f"Retrieved {len(articles)} articles from database")
-            return articles
+
+            # --- New File Existence Filtering ---
+            filtered_articles = []
+            for article in articles:
+                file_location = article._mapping.get('article_html_file_location')
+                if file_location:
+                    full_path = os.path.join(OUTPUT_HTML_DIR, file_location)
+                    if os.path.exists(full_path):
+                        logger.info(f"Skipping article {article._mapping.get('article_id')} because file exists at {full_path}")
+                        continue
+                filtered_articles.append(article)
+            logger.info(f"After file-check filtering, {len(filtered_articles)} articles eligible for processing")
+
+            # --- Apply the Limit in Python ---
+            if limit and isinstance(limit, int) and limit > 0:
+                filtered_articles = filtered_articles[:limit]
+                logger.info(f"Returning top {len(filtered_articles)} articles based on limit parameter")
+
+            return filtered_articles
     except Exception as e:
         logger.error(f"Error retrieving articles from database: {e}", exc_info=True)
         return []
@@ -358,3 +377,71 @@ def get_related_articles(db_context, schema, current_article_id, current_keyword
     sorted_candidates = sorted(candidates, key=lambda x: (x["matching_count"], x["popularity_score"], x["summary_generated_at"]), reverse=True)
     related_articles = [{"title": cand["title"], "link": cand["link"]} for cand in sorted_candidates[:limit]]
     return related_articles
+
+
+# New function to update the html_date in the article_status table
+def update_article_status_html_date(db_context, schema, url, html_date):
+    """
+    Update the html_date field for a record in the article_status table.
+
+    Args:
+        db_context: Database context for session management.
+        schema (str): Database schema name.
+        url (str): The article URL (used as unique identifier).
+        html_date (datetime): Timestamp when the HTML was saved.
+
+    Returns:
+        bool: True if update successful, False otherwise.
+    """
+    try:
+        with db_context.session() as session:
+            query = text(f"""
+                UPDATE {schema}.article_status
+                SET html_date = :html_date
+                WHERE url = :url
+            """)
+            params = {"html_date": html_date, "url": url}
+            result = session.execute(query, params)
+            session.commit()
+            if result.rowcount > 0:
+                logger.info(f"Article status updated for URL {url} with html_date {html_date}")
+                return True
+            else:
+                logger.warning(f"No article status record found for URL {url} to update html_date")
+                return False
+    except Exception as e:
+        logger.error(f"Error updating html_date for URL {url}: {e}", exc_info=True)
+        return False
+
+def update_article_status_processing(db_context, schema, url, processing_status=True):
+    """
+    Update the html_processing_status for a record in the article_status table.
+    
+    Args:
+        db_context: Database context for session management.
+        schema (str): Database schema name.
+        url (str): The article URL (used as unique identifier).
+        processing_status (bool): The processing flag to set (default: True).
+        
+    Returns:
+        bool: True if the update was successful, False otherwise.
+    """
+    try:
+        with db_context.session() as session:
+            query = text(f"""
+                UPDATE {schema}.article_status
+                SET html_processing_status = :status
+                WHERE url = :url
+            """)
+            params = {"status": processing_status, "url": url}
+            result = session.execute(query, params)
+            session.commit()
+            if result.rowcount > 0:
+                logger.info(f"Article status for URL {url} set to processing status {processing_status}")
+                return True
+            else:
+                logger.warning(f"No article status record found for URL {url} when setting processing status")
+                return False
+    except Exception as e:
+        logger.error(f"Error updating processing status for URL {url}: {e}", exc_info=True)
+        return False

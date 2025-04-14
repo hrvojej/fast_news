@@ -44,10 +44,9 @@ def create_prompt(content, article_length, include_images=True, enable_entity_li
             Format the additional information in a section titled:
             'MORE ON TOPIC AND RELATED TERMINOLOGY:'
 
-            For resources, include:
+            For resources of this section include:
             - The search query used - href in HTML
-            - The source URL - title of href
-            - The Google search snippet text - Featured snippet from the web - use it after URL as description and equally describe image and video search results.
+            - The Google search snippet text - Featured snippet from the web - use it after URL as description and equally describe image and video search results. Never never never ever use actual source URL for this purpose!!! Only use google search URL and the snippet text.Do not use "Google search" or "Google" in the link text. Use intuitive and logical name for the link text. Also, do not use "Google image search" or "Google image" in the link text. Use intuitive and logical name for the link text. Also, do not use "Google video search" or "Google video" in the link text. Use intuitive and logical name for the link text.
             
             For prompt purposes, always use the exact description provided by the source instead of summarizing it. Do not generate generic phrases like "Explore search results." Instead, directly extract the first relevant snippet from the search results. For example, if the search result displays: "Ukraine claims to hold nearly $15 trillion worth of mineral resources, making it one of the most resource-rich nations in Europe."
             use that snippet verbatim in your prompt.
