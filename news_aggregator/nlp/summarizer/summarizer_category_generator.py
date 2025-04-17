@@ -277,6 +277,7 @@ for top_category, articles in categories_group.items():
         "featured_articles": featured_articles,
         "additional_articles": additional_articles,
         "subcategories": subcategories,
+        "canonical_url": "https://fast-news.net/categories/category_" + top_category.lower().replace(' ', '_') + ".html",
         **cat_context
     }
     
@@ -302,6 +303,7 @@ for top_category, articles in categories_group.items():
 HOMEPAGE_OUTPUT_FILE = os.path.join(BASE_DIR, "web", "homepage.html")
 homepage_context = {
     "homepage_title": "Latest News",
+    "canonical_url": "https://fast-news.net/homepage.html",
     "header_categories": header_categories,
     "relative_static_path": "static",
     "relative_articles_path": "articles/",
@@ -310,6 +312,7 @@ homepage_context = {
     "relative_categories_path": "categories",
     "subcategories_by_category": subcategories_by_category
 }
+
 
 IMPORTANT_CATEGORIES = ["us", "world", "business", "technology", "sports"]
 HOMEPAGE_FEATURED_COUNT = 5
@@ -349,6 +352,7 @@ except Exception as e:
 # --- Generate About Page ---
 ABOUT_OUTPUT_FILE = os.path.join(BASE_DIR, "web", "about.html")
 about_context = {
+    "canonical_url": "https://fast-news.net/about.html",
     "relative_static_path": "static",
     "relative_articles_path": "articles/",
     "relative_category_images_path": "categories/images",
@@ -357,6 +361,7 @@ about_context = {
     "header_categories": header_categories,
     "subcategories_by_category": subcategories_by_category
 }
+
 try:
     template = jinja_env.get_template("about.html")
     rendered_html = template.render(about_context)
@@ -397,12 +402,14 @@ for subcat, articles in global_subcategories.items():
     context = {
         "subcategory": {"name": subcat.title()},
         "articles": articles_sorted,
+        "canonical_url": "https://fast-news.net/categories/subcategory_" + subcat + ".html",
         "relative_static_path": "/static",
         "relative_articles_path": "/articles/",
         "relative_category_images_path": "/categories/images",
         "relative_root_path": "/",
         "relative_categories_path": "/categories"
     }
+
 
     output_filename = f"subcategory_{subcat}.html"
     output_file_path = os.path.join(GLOBAL_SUBCAT_DIR, output_filename)
@@ -425,3 +432,48 @@ try:
 except Exception as e:
     logger.error(f"Error generating header file at {HEADER_OUTPUT_FILE}: {e}")
     sys.exit(1)
+    
+    
+# --- Generate Sitemap XML for Google Search Console ---
+# This sitemap.xml includes the homepage, about page, all category pages, subcategory pages, and every article page.
+base_url = "https://fast-news.net"
+sitemap_urls = set()
+
+# Add homepage and about page URLs
+sitemap_urls.add(f"{base_url}/homepage.html")
+sitemap_urls.add(f"{base_url}/about.html")
+
+# Add category pages URLs from header_categories
+for cat in header_categories:
+    # cat["link"] is like "/categories/category_{slug}.html"
+    sitemap_urls.add(f"{base_url}{cat['link']}")
+
+# Add subcategory pages URLs from global_subcategories (defined in the subcategory pages generation section)
+for subcat in global_subcategories.keys():
+    sitemap_urls.add(f"{base_url}/categories/subcategory_{subcat}.html")
+
+# Add article pages URLs from articles_data
+for article in articles_data:
+    # article_html_file_location was converted to a relative path (e.g., "us/article1.html")
+    article_path = article["article_html_file_location"]
+    sitemap_urls.add(f"{base_url}/articles/{article_path}")
+
+# Generate XML content
+sitemap_content = '<?xml version="1.0" encoding="UTF-8"?>\n'
+sitemap_content += '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n'
+for url in sitemap_urls:
+    sitemap_content += "  <url>\n"
+    sitemap_content += f"    <loc>{url}</loc>\n"
+    sitemap_content += "  </url>\n"
+sitemap_content += '</urlset>\n'
+
+# Define output file path for sitemap.xml (placing it in the frontend/web folder)
+SITEMAP_OUTPUT_FILE = os.path.join(BASE_DIR, "web", "sitemap.xml")
+try:
+    with open(SITEMAP_OUTPUT_FILE, "w", encoding="utf-8") as f:
+        f.write(sitemap_content)
+    logger.debug(f"Sitemap generated successfully at: {SITEMAP_OUTPUT_FILE}")
+except Exception as e:
+    logger.error(f"Error writing sitemap.xml to file: {e}")
+    sys.exit(1)
+

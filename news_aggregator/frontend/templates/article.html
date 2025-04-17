@@ -1,4 +1,4 @@
-<!-- Add this at the beginning of your template for debugging -->
+<!-- article.html -->
 <!-- {% if fetched_images %}
 <div style="background-color: #ffeeee; padding: 10px; border: 1px solid red; margin-bottom: 10px;">
     <p>Debug: Found {{ fetched_images|length }} fetched images</p>
@@ -15,11 +15,16 @@
 
 {% extends "base.html" %}
 
-{% block title %}{{ title or "Fast News" }}{% endblock %}
+{% block title %}{{ title }}{% endblock %}
+
+{% block canonical %}
+<link rel="canonical" href="{{ canonical_url }}">
+{% endblock %}
 
 {% block extra_css %}
     <link rel="stylesheet" href="{{ relative_static_path }}/css/article.css">
 {% endblock %}
+
 
 {% block content %}
 <div class="article-container">

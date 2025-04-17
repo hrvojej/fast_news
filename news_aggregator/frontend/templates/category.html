@@ -1,6 +1,13 @@
+  <!-- category.html template -->
+
 {% extends "base.html" %}
 
 {% block title %}Category - {{ category.name }}{% endblock %}
+
+{% block canonical %}
+<link rel="canonical" href="{{ canonical_url }}">
+{% endblock %}
+  
 
 {% block extra_css %}
     <link rel="stylesheet" href="{{ relative_static_path }}/css/category.css">

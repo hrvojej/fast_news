@@ -1,6 +1,8 @@
 # most important
 & C:/Users/Korisnik/Desktop/TLDR/venv/Scripts/python.exe C:\Users\Korisnik\Desktop\TLDR\fast_news\news_aggregator\nlp\summarizer\main.py --schema pt_nyt --env dev --limit 1
 
+& C:/Users/Korisnik/Desktop/TLDR/venv/Scripts/python.exe C:\Users\Korisnik\Desktop\TLDR\fast_news\news_aggregator\nlp\summarizer\main.py --schema pt_nyt --env dev --article-id "fd94a3bf-f919-42ea-82dc-24d44ed67927"
+
 & C:/Users/Korisnik/Desktop/TLDR/venv/Scripts/python.exe c:/Users/Korisnik/Desktop/TLDR/fast_news/news_aggregator/nlp/summarizer/summarizer_category_generator.py
 
 # run http server locally 
@@ -71,7 +73,7 @@ http://127.0.0.1:3000/runs
 # summarizer
 & C:/Users/Korisnik/Desktop/TLDR/venv/Scripts/python.exe C:\Users\Korisnik\Desktop\TLDR\fast_news\news_aggregator\nlp\summarizer\main.py --schema pt_nyt --env dev --limit 90000
 
-python main.py --schema pt_nyt --env dev --article-id "a24a8a0d-910b-40b9-a09f-dfce65ce3610"
+python main.py --schema pt_nyt --env dev --article-id "fd94a3bf-f919-42ea-82dc-24d44ed67927"
 
 python main.py --schema pt_nyt --env dev --limit 90000
 

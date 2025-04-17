@@ -1,7 +1,19 @@
 export default {
 	async fetch(request, env, ctx) {
-	  const url = new URL(request.url);
+	  const url = new URL(request.url);  
+	  // 1. Redirect www.fast-news.net → fast-news.net
+	  if (url.hostname === "www.fast-news.net") {
+	  	url.hostname = "fast-news.net";
+	  	return Response.redirect(url.toString(), 301);
+	  }
+	  
+	  // 2. Redirect root path to homepage.html
+	  if (url.hostname === "fast-news.net" && (url.pathname === "/" || url.pathname === "")) {
+	  	return Response.redirect("https://fast-news.net/homepage.html", 301);
+	  }
+	  
 	  let path = url.pathname;
+		
 	  
 	  // Handle root requests
 	  if (path === "/" || path === "") {

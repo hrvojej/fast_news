@@ -629,9 +629,15 @@ def summarization_update_job():
     update_site_op(category_status)
 
 
-@sensor(job=summarization_update_job, minimum_interval_seconds=50)
-def summarization_update_sensor(_context):
-    # This sensor triggers a run every evaluation cycle.
-    yield RunRequest(run_key=str(time.time()))
+@sensor(job=summarization_update_job, minimum_interval_seconds=160)
+def summarization_update_sensor(context):
+    # Optional: add a short delay to let the system settle upon each evaluation
+    time.sleep(4)
+    # Always yield a RunRequest with a unique run key based on the current timestamp.
+    run_key = str(time.time())
+    context.log.info(f"Yielding run request with unique run key: {run_key}")
+    yield RunRequest(run_key=run_key)
+
+
 
 

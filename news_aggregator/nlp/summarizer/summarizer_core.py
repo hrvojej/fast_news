@@ -17,6 +17,7 @@ from summarizer_path_config import configure_paths
 configure_paths()
 
 # Import our modules
+from summarizer_db import claim_article  # ensure you import the new function
 from summarizer_logging import get_logger
 from summarizer_prompt import create_prompt
 from summarizer_api import call_gemini_api
@@ -153,51 +154,39 @@ class ArticleSummarizer:
 
 
     def run(self, limit=None):
-            """
-            Run the summarization process for multiple articles.
+        logger.info(f"Starting Article Summarizer for {self.schema} schema (debug_mode={self.debug_mode})")
+        claimed_articles = []
+        try:
+            # Claim articles one by one until you reach the limit or no more are available.
+            num_to_claim = limit if (limit and isinstance(limit, int) and limit > 0) else 10  # default batch size if no limit provided
+            for i in range(num_to_claim):
+                article = claim_article(self.db_context, self.schema)
+                if article is None:
+                    logger.info("No more eligible articles to claim.")
+                    break
+                claimed_articles.append(article)
+            total_claimed = len(claimed_articles)
+            logger.info(f"Claimed {total_claimed} articles for processing.")
 
-            Args:
-                limit (int, optional): Maximum number of articles to process
-            """
-            logger.info(f"Starting Article Summarizer for {self.schema} schema (debug_mode={self.debug_mode})")
-            try:
-                # Get articles (without filtering on summary, ordering by pub_date DESC)
-                articles = get_articles(self.db_context, self.schema, limit)
-                article_count = len(articles)
-                logger.info(f"Found {article_count} articles to process")
-
-                # Report number of articles with empty HTML file location
-                missing_html_count = len([a for a in articles if not a._mapping.get('article_html_file_location')])
-                logger.info(f"{missing_html_count} articles have an empty article_html_file_location and need to be generated")
-
-                # Process each article
-                for idx, article in enumerate(articles):
-                    article_info = dict(article._mapping)
-                    article_id = article_info.get('article_id')
-                    
-                    # Log all article details (pub_date, title, article_id, HTML file location)
-                    logger.info(
-                        f"Article details - ID: {article_id}, "
-                        f"Title: {article_info.get('title')}, "
-                        f"Pub Date: {article_info.get('pub_date')}, "
-                        f"HTML File: {article_info.get('article_html_file_location')}"
-                    )                   
-                    
-                    try:
-                        success = self.summarize_article(article_info)
-                        if success:
-                            self.processed_count += 1
-                            logger.info(f"Successfully processed article {idx+1}/{article_count}")
-                        else:
-                            self.failed_count += 1
-                            logger.error(f"Failed to process article {idx+1}/{article_count}")
-                    except Exception as e:
+            # Process each claimed article
+            for idx, article in enumerate(claimed_articles):
+                article_info = dict(article._mapping)
+                article_id = article_info.get('article_id')
+                logger.info(f"[{idx+1}/{total_claimed}] Processing article ID: {article_id}")
+                try:
+                    success = self.summarize_article(article_info)
+                    if success:
+                        self.processed_count += 1
+                        logger.info(f"Successfully processed article {idx+1}/{total_claimed}")
+                    else:
                         self.failed_count += 1
-                        logger.error(f"Exception processing article ID {article_id}: {e}", exc_info=True)
-                        continue
+                        logger.error(f"Failed to process article {idx+1}/{total_claimed}")
+                except Exception as e:
+                    self.failed_count += 1
+                    logger.error(f"Exception processing article ID {article_id}: {e}", exc_info=True)
+                    continue
 
-                logger.info(f"Summarization completed. Processed: {self.processed_count}, Failed: {self.failed_count}")
-
-            except Exception as e:
-                logger.error(f"Error in run method: {e}", exc_info=True)
-                raise
+            logger.info(f"Summarization completed. Processed: {self.processed_count}, Failed: {self.failed_count}")
+        except Exception as e:
+            logger.error(f"Error in run method: {e}", exc_info=True)
+            raise

@@ -187,7 +187,7 @@ a:hover {
 }
 
 /* Responsive Tweaks */
-@media (max-width: 992px) {
+@media (max-width: 768px) {
     .featured-grid,
     .subcategory-featured-grid {
         grid-template-columns: repeat(2, 1fr);
@@ -199,6 +199,7 @@ a:hover {
         grid-template-columns: 1fr;
     }
 }
+
 
 /* Header Navigation */
 .header-nav {

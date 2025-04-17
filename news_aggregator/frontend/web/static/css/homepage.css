@@ -21,6 +21,12 @@
     gap: 20px;
 }
 
+@media (max-width: 768px) {
+    .articles-grid {
+        grid-template-columns: repeat(2, 1fr);
+    }
+}
+
 .article-card {
     background: #f9f9f9;
     border-radius: 5px;

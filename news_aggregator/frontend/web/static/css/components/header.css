@@ -129,7 +129,7 @@
     display: none;
     position: absolute;
     right: 20px;
-    top: 10px;
+    top: 1.2rem;
     font-size: 1.5em;
     color: #fff;
     cursor: pointer;
@@ -145,7 +145,7 @@
     left: 0;
     width: 100%;
     height: 100%;
-    background-color: rgba(51, 51, 51, 0.95);
+    background-color: #fff;  /* Promijenjena boja pozadine */
     z-index: 10000;
     overflow-y: auto;
     overflow-x: hidden;
@@ -153,12 +153,21 @@
     padding-top: 70px; /* Space for fixed header */
 }
 
+#mobile-menu-overlay a {
+    color: #333;
+    text-decoration: none;
+}
+
+#mobile-menu-overlay a:hover {
+    color: #0073e6;
+}
+
 .mobile-menu-container {
     width: 90%;
     max-width: 600px;
     margin: 0 auto;
     padding: 20px;
-    color: #fff;
+    color: #333;  /* Promijenjena boja teksta */
 }
 
 .mobile-menu-list {

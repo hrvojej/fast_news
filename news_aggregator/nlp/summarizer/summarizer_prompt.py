@@ -34,9 +34,9 @@ def create_prompt(content, article_length, include_images=True, enable_entity_li
         prompt = (
                         """
             Create a visually enhanced and focused summary of the main topic from the following text. The summary must be around  800 words in total not taking into account other areas of the text. The summary should be structured in a way that is easy to read and understand, without complicated words and without too long sentences,  while also being visually appealing. 
-
+            
             Additionally:
-            1. Perform a web search to retrieve not less than 10 relevant and recent original web resources based on article topic that provide sensational, dramatic, intriguing and compelling information related to the article's topic
+            1. Perform a web search to retrieve not less than 10 relevant and most recent original web resources based on article topic that provide sensational, dramatic, intriguing and compelling information related to the article's topic. Do not use search results older than few days from today. You need to match topic and date of the article with the search results. I keep seeing results that for example have false claims like : "While unveiling a new wave of global Tariffs, the former President took a moment to deliver heartfelt praise for a tragically lost international figure". Trump is not former president anymore. He is current president. So please be careful with the search results.
             2. Incorporate these interesting facts both within the summary and in a dedicated 'Interesting Facts' section
             3. Include the Google Search  URL and actual text of the search snippets found during the search process, alongside the source URL and the search query used. Give Google Search  URL appropriate intuitive and logical name.
             4. Add Google image search links and YouTube search links with relevant keywords or direct links to the most relevant videos covering the current topic

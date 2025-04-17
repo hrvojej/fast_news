@@ -240,3 +240,23 @@
             });
         });
     });
+
+
+    (function addFaviconDynamically() {
+        const basePath = '/static/favicon/'; // prilagodi ako ti je drugačije
+      
+        const favicons = [
+          { rel: 'icon', type: 'image/x-icon', href: basePath + 'favicon.ico' },
+          { rel: 'icon', type: 'image/png', sizes: '96x96', href: basePath + 'favicon-96x96.png' },
+          { rel: 'icon', type: 'image/svg+xml', href: basePath + 'favicon.svg' },
+          { rel: 'apple-touch-icon', sizes: '180x180', href: basePath + 'apple-touch-icon.png' },
+          { rel: 'manifest', href: basePath + 'site.webmanifest' }
+        ];
+      
+        favicons.forEach(data => {
+          const link = document.createElement('link');
+          Object.entries(data).forEach(([key, value]) => link.setAttribute(key, value));
+          document.head.appendChild(link);
+        });
+      })();
+      

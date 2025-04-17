@@ -121,6 +121,7 @@ def call_gemini_api(prompt, article_id, content_length, retries=2, timeout_secon
 
     # Define the list of models to try in order
     models = [
+        'gemini-2.5-pro-preview-03-25',
         'gemini-2.5-pro-exp-03-25',
         'gemini-2.0-pro-exp-02-05',
         'gemini-2.0-flash-001',

@@ -445,3 +445,63 @@ def update_article_status_processing(db_context, schema, url, processing_status=
     except Exception as e:
         logger.error(f"Error updating processing status for URL {url}: {e}", exc_info=True)
         return False
+
+
+def claim_article(db_context, schema):
+    """
+    Atomically select and claim a single article for processing.
+    This function selects one article meeting all the criteria (html_processing_status is false
+    and either article_html_file_location is NULL/empty or file does not exist on disk),
+    locks the row using FOR UPDATE SKIP LOCKED, updates its status to mark it as processing,
+    and then commits the transaction so that no other process can claim it.
+
+    Args:
+        db_context: Database context for session management.
+        schema (str): Database schema name.
+
+    Returns:
+        A row representing the claimed article, or None if no eligible article was found.
+    """
+    from summarizer_config import OUTPUT_HTML_DIR
+    import os
+    try:
+        with db_context.session() as session:
+            # Atomically select a single eligible article and lock the row.
+            query = f"""
+                SELECT a.article_id, a.title, a.keywords, a.url, a.content, a.article_html_file_location, a.pub_date
+                FROM {schema}.articles a
+                JOIN {schema}.article_status s ON a.url = s.url
+                WHERE s.html_processing_status = false
+                  AND (a.article_html_file_location IS NULL OR a.article_html_file_location = '')
+                ORDER BY a.pub_date DESC
+                LIMIT 1
+                FOR UPDATE SKIP LOCKED
+            """
+            result = session.execute(text(query))
+            article = result.fetchone()
+            if article is None:
+                logger.info("No eligible article found to claim.")
+                return None
+
+            # Optionally, perform an additional check on disk: if article_html_file_location is set,
+            # ensure that the file does not exist.
+            file_location = article._mapping.get('article_html_file_location')
+            if file_location:
+                full_path = os.path.join(OUTPUT_HTML_DIR, file_location)
+                if os.path.exists(full_path):
+                    logger.info(f"Skipping article {article._mapping.get('article_id')} because file exists at {full_path}")
+                    return None
+
+            # Update the flag to mark this article as being processed.
+            update_query = text(f"""
+                UPDATE {schema}.article_status
+                SET html_processing_status = true
+                WHERE url = :url
+            """)
+            session.execute(update_query, {"url": article._mapping.get("url")})
+            session.commit()
+            logger.info(f"Claimed article {article._mapping.get('article_id')} for processing.")
+            return article
+    except Exception as e:
+        logger.error(f"Error claiming article: {e}", exc_info=True)
+        return None

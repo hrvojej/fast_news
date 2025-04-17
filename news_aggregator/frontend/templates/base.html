@@ -4,8 +4,23 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{% block title %}Fast News{% endblock %}</title>
-    <!-- Use relative_static_path instead of static_url -->
+    {% block canonical %}
+    <link rel="canonical" href="https://fast-news.net/homepage.html">
+    {% endblock %}
+
+    
+    <!-- Favicons -->
+    <link rel="icon" href="{{ relative_static_path }}/favicon/favicon.ico" type="image/x-icon">
+    <link rel="icon" type="image/png" sizes="96x96" href="{{ relative_static_path }}/favicon/favicon-96x96.png">
+    <link rel="icon" type="image/svg+xml" href="{{ relative_static_path }}/favicon/favicon.svg">
+    <link rel="apple-touch-icon" sizes="180x180" href="{{ relative_static_path }}/favicon/apple-touch-icon.png">
+    <link rel="manifest" href="{{ relative_static_path }}/favicon/site.webmanifest">
+    
+    <!-- Styles -->
     <link rel="stylesheet" href="{{ relative_static_path }}/css/main.css">
+    
+
+
     <link rel="stylesheet" href="{{ relative_static_path }}/css/components/header.css">
     <link rel="stylesheet" href="{{ relative_static_path }}/css/components/sidebar.css">
     <link rel="stylesheet" href="{{ relative_static_path }}/css/components/footer.css">

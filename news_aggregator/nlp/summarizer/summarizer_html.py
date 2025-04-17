@@ -444,7 +444,7 @@ def create_filename_from_title(title, url, article_id):
     # Clean title and create filename
     filename = re.sub(r'[^\w\s-]', '', title)  # Remove non-alphanumeric chars
     filename = re.sub(r'\s+', '_', filename)    # Replace spaces with underscores
-    filename = filename[:50]                    # Limit length
+    filename = filename[:250]                    # Limit length
     return f"{filename}.html"
 
 def save_as_html(article_id, title, url, content, summary, response_text, schema, keywords=None, existing_gemini_title=None): # Note: keywords arg here is likely unused now
@@ -695,6 +695,8 @@ def save_as_html(article_id, title, url, content, summary, response_text, schema
             "related_articles_list": get_related_articles(DatabaseContext(), schema, article_id, extracted_keywords, limit=5) if extracted_keywords else [],
             "schema": schema,
             "article_html_file_location": os.path.join(subfolder, filename).replace(os.sep, '/') if subfolder else filename.replace(os.sep, '/'),
+            # Dodana stavka za canonical URL (pretpostavka: svi članci se nalaze u /articles/ folderu)
+            "canonical_url": "https://fast-news.net/articles/" + (os.path.join(subfolder, filename).replace(os.sep, '/') if subfolder else filename.replace(os.sep, '/')),
             # --- Inject Dynamic Header Categories ---
             "header_categories": header_categories
         }

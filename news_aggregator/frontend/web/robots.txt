@@ -1,0 +1,3 @@
+User-agent: *
+Allow: /
+Sitemap: https://fast-news.net/sitemap.xml
