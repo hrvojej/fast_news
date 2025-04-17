@@ -178,3 +178,5 @@ images/
 articles/
 categories/
 node_modules/
+sitemap.xml
+process_metrics.json
