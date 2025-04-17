@@ -2,7 +2,7 @@
   "current_run": {
     "run_id": "648c93fe-3111-488d-887a-bfacdf6307b2",
     "start_time": "2025-04-17T10:45:32.347424",
-    "end_time": null,
+    "end_time": "2025-04-17T10:47:04.875479",
     "total_articles": 6209,
     "processed_articles": 0,
     "successful_articles": 0,
@@ -11,26 +11,10 @@
     "api_calls": 0,
     "api_errors": 0,
     "total_api_time": 0,
-    "total_process_time": 0,
+    "total_process_time": 92.528055,
     "article_metrics": {}
   },
   "historical_runs": [
-    {
-      "run_id": "2986bee2-eaf6-47f8-8989-b737600f75f5",
-      "start_time": "2025-04-17T10:17:15.156238",
-      "end_time": "2025-04-17T10:18:38.887730",
-      "total_articles": 6208,
-      "processed_articles": 0,
-      "successful_articles": 0,
-      "failed_articles": 0,
-      "skipped_articles": 0,
-      "api_calls": 0,
-      "api_errors": 0,
-      "total_api_time": 0,
-      "total_process_time": 83.731492,
-      "success_rate": 0,
-      "average_processing_time": 0
-    },
     {
       "run_id": "78dff401-b96c-4a48-ac24-c5c9f2b33f98",
       "start_time": "2025-04-17T10:19:59.189540",
@@ -332,6 +316,22 @@
       "api_errors": 0,
       "total_api_time": 0,
       "total_process_time": 0.859562,
+      "success_rate": 0,
+      "average_processing_time": 0
+    },
+    {
+      "run_id": "648c93fe-3111-488d-887a-bfacdf6307b2",
+      "start_time": "2025-04-17T10:45:32.347424",
+      "end_time": "2025-04-17T10:47:04.875479",
+      "total_articles": 6209,
+      "processed_articles": 0,
+      "successful_articles": 0,
+      "failed_articles": 0,
+      "skipped_articles": 0,
+      "api_calls": 0,
+      "api_errors": 0,
+      "total_api_time": 0,
+      "total_process_time": 92.528055,
       "success_rate": 0,
       "average_processing_time": 0
     }
