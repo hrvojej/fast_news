@@ -14,9 +14,8 @@ cd C:\Users\Korisnik\Desktop\TLDR\fast_news\news_aggregator\frontend
 pwsh -ExecutionPolicy Bypass -File update-site.ps1
 
 # dagster 
-C:\Users\Korisnik\Desktop\TLDR\venv\Scripts\Activate.ps1
-cd C:\Users\Korisnik\Desktop\TLDR\fast_news\news_aggregator\dagster_orchestration
-dagster dev
+. 'C:\Users\Korisnik\Desktop\TLDR\venv\Scripts\Activate.ps1'; cd 'C:\Users\Korisnik\Desktop\TLDR\fast_news\news_aggregator\dagster_orchestration'; dagster dev
+
 http://127.0.0.1:3000/runs
 
 ### ############################### 

@@ -92,6 +92,53 @@
     display: block;
 }
 
+/* “More” dropdown: 4‑column grid */
+.dropdown.more .dropdown-menu.more-menu {
+    display: none;
+    position: absolute;
+    top: 100%;
+    left: 0;
+    background-color: #444;
+    padding: 10px;
+    list-style: none;
+    margin: 0;
+    border: 1px solid #222;
+    z-index: 999;
+    display: grid;
+    grid-template-columns: repeat(4, minmax(150px, 1fr));
+    gap: 15px;
+    max-height: 80vh;
+    overflow-y: auto;
+}
+.dropdown.more.open .dropdown-menu.more-menu {
+    display: grid;
+}
+
+
+/* Category heading in More menu */
+.more-category-title {
+    font-weight: bold;
+    text-decoration: underline;
+    margin-bottom: 5px;
+}
+
+/* Subcategory list styling */
+.more-submenu {
+    list-style: none;
+    margin: 0;
+    padding: 0 0 0 10px;
+}
+.more-submenu li a {
+    display: block;
+    padding: 2px 0;
+    color: #fff;
+    text-decoration: none;
+}
+.more-submenu li a:hover {
+    text-decoration: underline;
+}
+
+
 /* For deeper dropdowns (if any) */
 .dropdown-submenu {
     display: none;
@@ -129,11 +176,13 @@
     display: none;
     position: absolute;
     right: 20px;
-    top: 1.2rem;
+    top: 50%;
+    transform: translateY(-50%);
     font-size: 1.5em;
     color: #fff;
     cursor: pointer;
 }
+
 
 /* ------------------------------
    Mobile Overlay Menu Styles
@@ -153,14 +202,15 @@
     padding-top: 70px; /* Space for fixed header */
 }
 
+
 #mobile-menu-overlay a {
-    color: #333;
+    color: #333 !important;
     text-decoration: none;
 }
-
 #mobile-menu-overlay a:hover {
-    color: #0073e6;
+    text-decoration: underline;
 }
+
 
 .mobile-menu-container {
     width: 90%;
@@ -171,11 +221,14 @@
 }
 
 .mobile-menu-list {
-    display: block; /* Stack items vertically */
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+    gap: 10px;
     list-style: none;
     margin: 0;
     padding: 0;
 }
+
 
 .mobile-menu-category {
     margin-bottom: 20px;
@@ -186,8 +239,9 @@
     text-decoration: underline;
     margin-bottom: 10px;
     cursor: pointer;
-    color: #fff;
+    color: #333;
 }
+
 
 .mobile-submenu {
     display: none;

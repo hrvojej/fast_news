@@ -8,47 +8,45 @@
     <link rel="canonical" href="https://fast-news.net/homepage.html">
     {% endblock %}
 
-    
     <!-- Favicons -->
     <link rel="icon" href="{{ relative_static_path }}/favicon/favicon.ico" type="image/x-icon">
     <link rel="icon" type="image/png" sizes="96x96" href="{{ relative_static_path }}/favicon/favicon-96x96.png">
     <link rel="icon" type="image/svg+xml" href="{{ relative_static_path }}/favicon/favicon.svg">
     <link rel="apple-touch-icon" sizes="180x180" href="{{ relative_static_path }}/favicon/apple-touch-icon.png">
+
+    <!-- Manifest for Android/Web App -->
     <link rel="manifest" href="{{ relative_static_path }}/favicon/site.webmanifest">
-    
+
+    <!-- Theme colors for mobile -->
+    <meta name="theme-color" content="#ffffff">
+    <meta name="background-color" content="#ffffff">
+
     <!-- Styles -->
     <link rel="stylesheet" href="{{ relative_static_path }}/css/main.css">
-    
+    <link rel="stylesheet" href="{{ relative_static_path }}/css/components/header.css?v={{ static_version }}">
 
-
-    <link rel="stylesheet" href="{{ relative_static_path }}/css/components/header.css">
     <link rel="stylesheet" href="{{ relative_static_path }}/css/components/sidebar.css">
     <link rel="stylesheet" href="{{ relative_static_path }}/css/components/footer.css">
     {% block extra_css %}{% endblock %}
 </head>
 <body>
     {% block header %}
-    <div id="site-header"></div>
+    <div id="site-header">
+        {% include "components/header.html" %}
+    </div>
     {% endblock %}
 
-    
+
     <div class="container">
         {% block content %}{% endblock %}
     </div>
-    
-    {# 
-    {% block sidebar %}
-        {% include 'components/sidebar.html' %}
-    {% endblock %}
-    #}
-    
+
     {% block footer %}
         {% include 'components/footer.html' %}
     {% endblock %}
-    
+
     {% block scripts %}
         <script src="{{ relative_static_path }}/js/main.js"></script>
     {% endblock %}
 </body>
 </html>
-    

@@ -2,7 +2,7 @@
   <div class="header-content">
     <!-- Logo -->
     <div class="logo">
-      <a href="{{ relative_root_path }}homepage.html">Fast fact checked news</a>
+      <a href="/homepage.html">Fast fact checked news</a>
 
     </div>
 
@@ -14,7 +14,7 @@
       <!-- Left-aligned navigation: Home, direct categories, and More (if needed) -->
       <ul class="nav-left">
           <li>
-            <a href="{{ relative_root_path }}homepage.html">Home</a>
+            <a href="/homepage.html">Home</a>
 
           </li>
           {# Split header_categories: direct_categories as first 7, more_categories as the rest #}
@@ -41,25 +41,39 @@
       
           {# "More" dropdown shows only remaining top-level categories (without nested subcategories) #}
           {% if more_categories %}
-            <li class="dropdown more">
-                <a href="#">More</a>
-                <ul class="dropdown-menu">
-                  {% for category in more_categories %}
-                      <li>
-                        <a href="{{ relative_categories_path }}/category_{{ category.slug }}.html">
-                            {{ category.name }}
-                        </a>
-                      </li>
-                  {% endfor %}
-                </ul>
-            </li>
-          {% endif %}
+          <li class="dropdown more">
+            <a href="#">More</a>
+            <ul class="dropdown-menu more-menu">
+              {% for category in more_categories %}
+                <li class="more-category">
+                  <div class="more-category-title">
+                    <a href="{{ relative_categories_path }}/category_{{ category.slug }}.html">
+                      {{ category.name }}
+                    </a>
+                  </div>
+                  {% set subs = subcategories_by_category[category.slug] %}
+                  {% if subs %}
+                    <ul class="more-submenu">
+                      {% for subcat in subs %}
+                        <li>
+                          <a href="{{ subcat.link }}">{{ subcat.name }}</a>
+                        </li>
+                      {% endfor %}
+                    </ul>
+                  {% endif %}
+                </li>
+              {% endfor %}
+            </ul>
+          </li>
+        {% endif %}
+        
+
       </ul>
 
       <!-- Right-aligned navigation: About -->
       <ul class="nav-right">
         <li>
-          <a href="{{ relative_root_path }}about.html">About</a>
+          <a href="/about.html">About</a>
 
         </li>
       </ul>
@@ -89,7 +103,7 @@
           </li>
         {% endfor %}
         <li class="mobile-menu-about">
-          <a href="{{ relative_root_path }}/about.html">About</a>
+          <a href="/about.html">About</a>
         </li>
       </ul>
     </div>

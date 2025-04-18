@@ -14,6 +14,7 @@ import re
 import sys
 import logging
 import json
+import time
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 from summarizer_category_utilities import ensure_category_images_folder, crop_and_resize_image
 
@@ -125,6 +126,8 @@ jinja_env = Environment(
     loader=FileSystemLoader(TEMPLATE_DIR),
     autoescape=select_autoescape(['html', 'xml'])
 )
+jinja_env.globals['static_version'] = int(time.time())
+
 
 # --- Extract Category Info from Articles ---
 def extract_category_info(article_html_file_location):
@@ -407,8 +410,11 @@ for subcat, articles in global_subcategories.items():
         "relative_articles_path": "/articles/",
         "relative_category_images_path": "/categories/images",
         "relative_root_path": "/",
-        "relative_categories_path": "/categories"
+        "relative_categories_path": "/categories",
+        "header_categories": header_categories,
+        "subcategories_by_category": subcategories_by_category
     }
+
 
 
     output_filename = f"subcategory_{subcat}.html"
