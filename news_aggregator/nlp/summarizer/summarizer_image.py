@@ -165,8 +165,8 @@ def download_image(url, article_id, base_name=None, counter=None):
     logger.debug("Image will be saved to: %s", filepath)
 
     try:
-        user_agent = get_config_value(CONFIG, "USER_AGENT", "MySummarizer/1.0 (your.email@example.com)")
-        timeout_value = get_config_value(CONFIG, "REQUEST_TIMEOUT", 10)
+        user_agent = "FastNewsSummarizer/1.0 (https://fast-news.net; contact@fast-news.net)"
+        timeout_value = get_config_value(CONFIG, "api", "timeout", 10)
         logger.debug("Using User-Agent: %s and timeout: %s seconds", user_agent, timeout_value)
         headers = {'User-Agent': user_agent}
         
@@ -320,8 +320,8 @@ def search_and_download_images(query, article_id, base_name, num_images, title=N
         }
         logger.debug(f"Searching Wikimedia Commons with query: '{current_query}' and params: {params}")
         try:
-            user_agent = get_config_value(CONFIG, "USER_AGENT", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36 (your.email@example.com)")
-            timeout_value = get_config_value(CONFIG, "REQUEST_TIMEOUT", 10)
+            user_agent = "FastNewsSummarizer/1.0 (https://fast-news.net; contact@fast-news.net)"
+            timeout_value = get_config_value(CONFIG, "api", "timeout", 10)
             headers = {
                 'User-Agent': user_agent
             }
