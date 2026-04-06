@@ -66,38 +66,84 @@ def is_valid_html(text):
     
 def get_subfolder_from_url(url):
     """
-    Extracts subfolder(s) from the URL.
-    Returns a relative path like "us/politics" or "briefing" based on URL segments.
+    Extracts subfolder(s) from the article URL to create a category-based directory structure.
+    Returns a relative path using forward slashes: "sports", "business", "world/americas", etc.
+
+    Handles multiple portal URL patterns:
+      - NYT/CNN:       /YYYY/MM/DD/category/slug.html        -> category
+      - Reuters:       /category/[subcat]/slug-YYYY-MM-DD/    -> category[/subcat]
+      - Al Jazeera:    /category/YYYY/M/D/slug                -> category
+      - BBC/Fox/Guardian/ABC: /category/[subcat]/slug         -> category[/subcat]
+
+    Returns at most 2 levels of subfolder (category/subcategory).
+    Always uses forward slashes regardless of OS.
     """
     from urllib.parse import urlparse
+    import re
+
+    # Segments to ignore — these are not real categories
+    SKIP_SEGMENTS = {
+        'article', 'articles', 'story', 'stories', 'video', 'videos',
+        'live', 'interactive', 'index.html', 'sitemap',
+    }
+
     try:
         parsed = urlparse(url)
-        # Get non-empty path segments
         segments = [seg for seg in parsed.path.split('/') if seg]
+        if not segments:
+            return ""
+
+        # --- Pattern 1: Date-leading URLs (NYT, CNN) ---
+        # /YYYY/MM/DD/category/slug or /lang/YYYY/MM/DD/category/slug
         base_index = 0
-        # Look for the date segments.
-        # Standard pattern: [year, month, day, ...] or [lang, year, month, day, ...]
         if len(segments) >= 3 and segments[0].isdigit() and len(segments[0]) == 4 \
-           and segments[1].isdigit() and len(segments[1]) == 2 \
-           and segments[2].isdigit() and len(segments[2]) == 2:
+           and segments[1].isdigit() and segments[2].isdigit():
             base_index = 3
-        elif len(segments) >= 4 and segments[0].isalpha() \
+        elif len(segments) >= 4 and segments[0].isalpha() and len(segments[0]) <= 3 \
              and segments[1].isdigit() and len(segments[1]) == 4 \
-             and segments[2].isdigit() and len(segments[2]) == 2 \
-             and segments[3].isdigit() and len(segments[3]) == 2:
+             and segments[2].isdigit() and segments[3].isdigit():
             base_index = 4
-        else:
-            # If pattern doesn't match, return empty string
+
+        if base_index > 0:
+            folder_parts = segments[base_index:-1]
+            if len(folder_parts) >= 2:
+                return f"{folder_parts[0]}/{folder_parts[1]}"
+            elif len(folder_parts) == 1:
+                return folder_parts[0]
             return ""
-        # Folder parts are those between the date and the final article slug
-        folder_parts = segments[base_index:-1]
-        if len(folder_parts) >= 2:
-            # Only use the first two segments
-            return os.path.join(folder_parts[0], folder_parts[1])
-        elif len(folder_parts) == 1:
-            return folder_parts[0]
-        else:
-            return ""
+
+        # --- Pattern 2: Category-leading URLs (Reuters, BBC, Al Jazeera, Fox, Guardian, ABC) ---
+        # Extract non-date, non-slug category segments from the beginning of the path
+        category_parts = []
+        for seg in segments:
+            # Stop if we hit a 4-digit year
+            if re.match(r'^\d{4}$', seg):
+                break
+            # Stop if we hit a short digit-only segment (month/day)
+            if seg.isdigit():
+                break
+            # Stop at a segment with an embedded date suffix (slug-2026-04-06)
+            if re.search(r'-\d{4}-\d{2}-\d{2}', seg):
+                break
+            # Skip non-category segments
+            if seg.lower() in SKIP_SEGMENTS:
+                continue
+            # Stop at file-like segments (.html, .htm)
+            if '.' in seg:
+                break
+            category_parts.append(seg)
+
+        # If all collected segments equal all URL segments, the last one is the article slug
+        if category_parts and category_parts[-1] == segments[-1]:
+            category_parts = category_parts[:-1]
+
+        # Return at most 2 levels
+        if len(category_parts) >= 2:
+            return f"{category_parts[0]}/{category_parts[1]}"
+        elif len(category_parts) == 1:
+            return category_parts[0]
+        return ""
+
     except Exception as e:
         logger.error(f"Error extracting subfolder from URL: {e}")
         return ""
@@ -643,7 +689,7 @@ def save_as_html(article_id, title, url, content, summary, response_text, schema
         logger.debug(f"Preparing to save HTML to: {filepath}")
 
         # Compute relative path for static assets
-        depth = subfolder.count(os.sep) + 1 if subfolder else 0
+        depth = subfolder.count('/') + 1 if subfolder else 0
         relative_static_path = "../" * (1 + depth) + "static"
         # --- Compute relative path for category pages ---
         relative_categories_path = "../" * (1 + depth) + "categories"
