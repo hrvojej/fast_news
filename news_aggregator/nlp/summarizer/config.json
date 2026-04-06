@@ -1,9 +1,17 @@
 {
     "api": {
         "max_retries": 3,
-        "timeout": 60,
+        "timeout": 180,
+        "default_model": "openai/gpt-4o-mini",
         "default_temperature": 0.7,
-        "default_top_p": 0.9
+        "default_top_p": 0.9,
+        "default_max_tokens": 16384,
+        "fallback_models": [
+            "openai/gpt-4o-mini",
+            "openai/gpt-4o",
+            "meta/llama-4-scout-17b-16e-instruct",
+            "mistral/mistral-small-2503"
+        ]
     },
     "summarization": {
         "include_images": true,

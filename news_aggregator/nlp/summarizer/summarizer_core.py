@@ -20,7 +20,7 @@ configure_paths()
 from summarizer_db import claim_article  # ensure you import the new function
 from summarizer_logging import get_logger
 from summarizer_prompt import create_prompt
-from summarizer_api import call_gemini_api
+from summarizer_api import call_llm_api, set_model_config
 from summarizer_html import clean_and_normalize_html, save_as_html
 from summarizer_db import get_articles, update_article_summary
 from summarizer_config import OUTPUT_HTML_DIR, ensure_output_directory
@@ -115,7 +115,7 @@ class ArticleSummarizer:
                 summary_text = """<div><h1>Demo Summary</h1><p>This is a demo summary.</p></div>"""
                 raw_response_text = "DEBUG MODE: Demo response used instead of actual API call"
             else:
-                summary_text, raw_response_text = call_gemini_api(prompt, article_id, len(content))
+                summary_text, raw_response_text = call_llm_api(prompt, article_id, len(content))
                 if not summary_text:
                     logger.error(f"Failed to generate summary for article ID: {article_id}")
                     return False

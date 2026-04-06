@@ -19,6 +19,7 @@ from summarizer_core import ArticleSummarizer
 from summarizer_config import CONFIG, get_config_value, ensure_output_directory
 from summarizer_db import get_articles, get_summarization_stats
 from summarizer_monitoring import process_metrics, print_progress
+from summarizer_api import set_model_config
 
 # Import database models
 from db_scripts.models.models import create_portal_article_model, create_portal_category_model
@@ -73,6 +74,18 @@ def parse_arguments():
                         help="Enable verbose logging")
     parser.add_argument('--recent-timeout', type=int, default=6,
                         help="Do not process articles that have been processed within the last specified number of hours (default: 6)")
+
+    # Model configuration
+    parser.add_argument('--model', type=str, default=None,
+                        help="LLM model to use (e.g. 'openai/gpt-4o-mini', 'openai/gpt-4o', 'meta/llama-4-scout-17b-16e-instruct')")
+    parser.add_argument('--max-tokens', type=int, default=None,
+                        help="Maximum output tokens for the LLM (default: 16384)")
+    parser.add_argument('--temperature', type=float, default=None,
+                        help="Sampling temperature for the LLM (0.0-2.0, default: 0.7)")
+    parser.add_argument('--top-p', type=float, default=None,
+                        help="Top-p sampling parameter (0.0-1.0, default: 0.9)")
+    parser.add_argument('--system-prompt', type=str, default=None,
+                        help="Optional system prompt for the LLM")
 
     
     return parser.parse_args()
@@ -258,6 +271,15 @@ def main():
         
         # Set up models for the specified schema
         article_model = create_portal_article_model(args.schema)
+        
+        # Configure LLM model parameters
+        set_model_config(
+            model=args.model,
+            max_tokens=args.max_tokens,
+            temperature=args.temperature,
+            top_p=args.top_p,
+            system_prompt=args.system_prompt,
+        )
         
         # Create summarizer instance
         summarizer = ArticleSummarizer(
