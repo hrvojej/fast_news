@@ -30,20 +30,29 @@ package_root = os.path.abspath(os.path.join(current_dir, "../../"))
 if package_root not in sys.path:
     sys.path.insert(0, package_root)
     
-# Load articles from database
+# Load articles from database - query all portal schemas
 from db_scripts.db_context import DatabaseContext
 db_context = DatabaseContext()
-query = (
-    "SELECT summary_article_gemini_title, "
-    "article_html_file_location, "
-    "summary_featured_image, "
-    "popularity_score, "
-    "pub_date "
-    "FROM pt_nyt.articles "
-    "WHERE article_html_file_location <> ''"
-)
-articles_data = db_context.fetch_all(query)
-articles_data = [article for article in articles_data if article.get("article_html_file_location")]
+
+PORTAL_SCHEMAS = ["pt_nyt", "pt_bbc", "pt_fox", "pt_guardian", "pt_reuters", "pt_aljazeera", "pt_abc"]
+articles_data = []
+for _schema in PORTAL_SCHEMAS:
+    query = (
+        f"SELECT summary_article_gemini_title, "
+        f"article_html_file_location, "
+        f"summary_featured_image, "
+        f"popularity_score, "
+        f"pub_date "
+        f"FROM {_schema}.articles "
+        f"WHERE article_html_file_location <> ''"
+    )
+    try:
+        schema_articles = db_context.fetch_all(query)
+        schema_articles = [a for a in schema_articles if a.get("article_html_file_location")]
+        articles_data.extend(schema_articles)
+    except Exception as e:
+        logging.warning(f"Could not load articles from {_schema}: {e}")
+        continue
 
 # Initialize logger
 logging.basicConfig(level=logging.DEBUG)

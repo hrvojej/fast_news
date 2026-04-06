@@ -31,6 +31,140 @@ from db_scripts.db_context import DatabaseContext
 
 logger = get_logger(__name__)
 
+
+def build_debug_summary(title, content):
+    """Build a rich debug HTML summary from the article's actual title and content.
+    
+    Generates HTML with all CSS classes expected by extract_summary_fields(),
+    using real article data to produce realistic pages for pipeline testing.
+    """
+    import re as _re
+    
+    # Extract first few sentences for summary paragraphs
+    sentences = _re.split(r'(?<=[.!?])\s+', content.strip())
+    sentences = [s.strip() for s in sentences if len(s.strip()) > 20]
+    
+    intro = sentences[0] if len(sentences) > 0 else "This article covers a developing story."
+    supporting1 = sentences[1] if len(sentences) > 1 else "Additional details continue to emerge."
+    supporting2 = sentences[2] if len(sentences) > 2 else "Experts weigh in on the implications."
+    transition = sentences[3] if len(sentences) > 3 else "The situation remains fluid as new information comes to light."
+    secondary = sentences[4] if len(sentences) > 4 else "Further analysis is expected in the coming days."
+
+    # Extract keywords from content - find most common capitalized multi-word phrases or single words
+    words = _re.findall(r'\b[A-Z][a-z]+(?:\s+[A-Z][a-z]+)*\b', content)
+    word_freq = {}
+    for w in words:
+        if len(w) > 3 and w.lower() not in ('this', 'that', 'with', 'from', 'have', 'been', 'were', 'also', 'said', 'they', 'their', 'would', 'could', 'about', 'more', 'some', 'will', 'when', 'what', 'which'):
+            word_freq[w] = word_freq.get(w, 0) + 1
+    top_keywords = sorted(word_freq, key=word_freq.get, reverse=True)[:8]
+    if not top_keywords:
+        top_keywords = ["News", "Update", "Report", "Analysis", "World"]
+
+    keyword_pills = "\n".join(f'       <span class="keyword-pill">{kw}</span>' for kw in top_keywords)
+
+    # Extract potential entity names (capitalized sequences)
+    people = []
+    orgs = []
+    for w in sorted(word_freq, key=word_freq.get, reverse=True):
+        if ' ' in w and len(people) < 3:
+            people.append(w)
+        elif ' ' not in w and len(orgs) < 3:
+            orgs.append(w)
+        if len(people) >= 3 and len(orgs) >= 3:
+            break
+    if not people:
+        people = ["Key Figure"]
+    if not orgs:
+        orgs = ["Organization"]
+
+    people_links = ", ".join(
+        f'<strong class="named-individual"><a href="https://www.google.com/search?q={p.replace(" ", "+")}" target="_blank">{p}</a></strong>'
+        for p in people
+    )
+    orgs_links = ", ".join(
+        f'<strong class="orgs-products"><a href="https://www.google.com/search?q={o.replace(" ", "+")}" target="_blank">{o}</a></strong>'
+        for o in orgs
+    )
+
+    # Build interesting facts from later sentences
+    facts_html = ""
+    if len(sentences) > 5:
+        fact_items = []
+        for i, s in enumerate(sentences[5:10]):
+            cls = "fact-primary" if i < 2 else "fact-secondary"
+            fact_items.append(f'<li class="{cls}">{s}</li>')
+        if fact_items:
+            facts_html = f"""
+    <div class="facts-container">
+      <ul class="facts-list">
+        {"".join(fact_items)}
+      </ul>
+    </div>"""
+
+    # Sentiment analysis for top entity
+    sentiment_entity = people[0] if people else "Subject"
+    
+    summary_html = f"""<div>
+  <h1 class="article-title">{title}</h1>
+  <div>
+    <p class="source-attribution"><span class="label">Source:</span> <span>News Analysis (Debug Mode)</span></p>
+  </div>
+  <div class="keywords-container">
+    <p class="keywords-heading"><strong>Keywords:</strong></p>
+    <div class="keywords-tags">
+{keyword_pills}
+    </div>
+  </div>
+  <div class="separator"></div>
+  <h2 class="entity-overview-heading">Entity Overview</h2>
+  <div class="entity-grid">
+    <div class="entity-category">
+      <h3 class="entity-category-title">Named Individuals</h3>
+      <p class="entity-list">{people_links}</p>
+    </div>
+    <div class="entity-category">
+      <h3 class="entity-category-title">Organizations &amp; Products</h3>
+      <p class="entity-list">{orgs_links}</p>
+    </div>
+  </div>
+  <div class="separator"></div>
+  <p class="summary-intro">{intro}</p>
+  <p class="supporting-point">{supporting1}</p>
+  <p class="supporting-point">{supporting2}</p>
+  <p class="transition-text">{transition}</p>
+  <p class="secondary-detail">{secondary}</p>
+  <div class="separator"></div>
+  {facts_html}
+  <div class="separator"></div>
+  <div class="entity-sentiment">
+    <h4 class="entity-name">{sentiment_entity}</h4>
+    <p class="entity-sentiment-details">
+      <span class="sentiment-positive">Positive: 3</span>
+      <span class="sentiment-negative">Negative: 1</span>
+    </p>
+    <p class="entity-summary">Central figure in the article narrative.</p>
+    <p class="entity-keywords">Keywords: {", ".join(top_keywords[:4])}</p>
+  </div>
+  <div class="popularity-container">
+    <h3 class="popularity-title">Topic Popularity</h3>
+    <div class="popularity-score">
+      <span class="popularity-number">72</span>
+    </div>
+    <p class="popularity-description">Moderately trending topic based on current news cycle.</p>
+  </div>
+  <div class="more-on-topic-container">
+    <h3 class="more-on-topic-heading">More on Topic</h3>
+    <ul class="related-terminology-list">
+      <li class="terminology-item">
+        <a class="resource-link" href="https://www.google.com/search?q={top_keywords[0].replace(' ', '+')}" target="_blank">{top_keywords[0]} - Latest Developments</a>
+        <span class="resource-description">Search for the latest coverage and analysis on this topic.</span>
+      </li>
+    </ul>
+  </div>
+</div>"""
+    return summary_html
+
+
 def rate_limit_sleep():
     """Sleep for a random duration to respect API rate limits."""
     sleep_time = random.uniform(15.0, 17.0)
@@ -111,9 +245,9 @@ class ArticleSummarizer:
             
             # Get summary
             if self.debug_mode:
-                logger.info("DEBUG MODE: Using demo response instead of API call")
-                summary_text = """<div><h1>Demo Summary</h1><p>This is a demo summary.</p></div>"""
-                raw_response_text = "DEBUG MODE: Demo response used instead of actual API call"
+                logger.info("DEBUG MODE: Using rich demo response generated from article content")
+                summary_text = build_debug_summary(title, content)
+                raw_response_text = "DEBUG MODE: Rich demo response generated from article content"
             else:
                 summary_text, raw_response_text = call_llm_api(prompt, article_id, len(content))
                 if not summary_text:
