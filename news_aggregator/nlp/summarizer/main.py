@@ -19,7 +19,7 @@ from summarizer_core import ArticleSummarizer
 from summarizer_config import CONFIG, get_config_value, ensure_output_directory
 from summarizer_db import get_articles, get_summarization_stats
 from summarizer_monitoring import process_metrics, print_progress
-from summarizer_api import set_model_config
+from summarizer_api import set_model_config, set_backend
 
 # Import database models
 from db_scripts.models.models import create_portal_article_model, create_portal_category_model
@@ -77,7 +77,9 @@ def parse_arguments():
 
     # Model configuration
     parser.add_argument('--model', type=str, default=None,
-                        help="LLM model to use (e.g. 'openai/gpt-4o-mini', 'openai/gpt-4o', 'meta/llama-4-scout-17b-16e-instruct')")
+                        help="LLM model to use (e.g. 'gpt-5-mini', 'claude-sonnet-4.6' for copilot; 'openai/gpt-4o-mini' for gh_models)")
+    parser.add_argument('--backend', type=str, default='copilot', choices=['copilot', 'gh_models'],
+                        help="LLM backend: 'copilot' (Copilot CLI, default) or 'gh_models' (gh models run)")
     parser.add_argument('--max-tokens', type=int, default=None,
                         help="Maximum output tokens for the LLM (default: 16384)")
     parser.add_argument('--temperature', type=float, default=None,
@@ -271,6 +273,9 @@ def main():
         
         # Set up models for the specified schema
         article_model = create_portal_article_model(args.schema)
+        
+        # Configure LLM backend
+        set_backend(args.backend)
         
         # Configure LLM model parameters
         set_model_config(
