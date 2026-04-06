@@ -698,7 +698,8 @@ def save_as_html(article_id, title, url, content, summary, response_text, schema
             # Dodana stavka za canonical URL (pretpostavka: svi članci se nalaze u /articles/ folderu)
             "canonical_url": "https://fast-news.net/articles/" + (os.path.join(subfolder, filename).replace(os.sep, '/') if subfolder else filename.replace(os.sep, '/')),
             # --- Inject Dynamic Header Categories ---
-            "header_categories": header_categories
+            "header_categories": header_categories,
+            "subcategories_by_category": {cat["slug"]: [] for cat in header_categories}
         }
 
         # Load and render the template
