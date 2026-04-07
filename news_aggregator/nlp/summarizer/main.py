@@ -17,7 +17,7 @@ configure_paths()
 from summarizer_logging import get_logger
 from summarizer_core import ArticleSummarizer
 from summarizer_config import CONFIG, get_config_value, ensure_output_directory
-from summarizer_db import get_articles, get_summarization_stats
+from summarizer_db import get_articles, get_summarization_stats, get_articles_for_backfill, update_jsonb_fields_only
 from summarizer_monitoring import process_metrics, print_progress
 from summarizer_api import set_model_config, set_backend
 
@@ -88,6 +88,10 @@ def parse_arguments():
                         help="Top-p sampling parameter (0.0-1.0, default: 0.9)")
     parser.add_argument('--system-prompt', type=str, default=None,
                         help="Optional system prompt for the LLM")
+    parser.add_argument('--backfill-json', action='store_true',
+                        help="Backfill mode: re-run structured LLM pipeline on articles that already "
+                             "have HTML but are missing the JSONB summary fields. "
+                             "Only the 8 JSONB columns are written; HTML files are NOT touched.")
 
     
     return parser.parse_args()
@@ -244,6 +248,73 @@ def run_continuous_mode(args, summarizer):
         logger.error(f"Error in continuous mode: {e}", exc_info=True)
         return False
 
+
+def run_backfill(args):
+    """
+    Backfill existing summarized articles with JSONB structured fields.
+
+    For every article in the given schema that already has an HTML file but is
+    missing summary_plan_json, re-run the two-stage structured LLM pipeline and
+    write only the 8 JSONB columns.  HTML files and all legacy columns are left
+    untouched.
+
+    Args:
+        args (argparse.Namespace): Parsed CLI arguments (env, schema, limit, verbose).
+
+    Returns:
+        bool: True on completion (partial failures are logged but do not abort the run).
+    """
+    from summarizer_core import build_structured_summary
+    from summarizer_api import rate_limit_sleep
+
+    db_context = DatabaseContext.get_instance(args.env)
+    articles = get_articles_for_backfill(db_context, args.schema, limit=args.limit)
+
+    if not articles:
+        print(f"No articles need JSONB backfill in {args.schema}.")
+        return True
+
+    print(f"Starting JSONB backfill for {len(articles)} articles in {args.schema} …")
+    success_count = 0
+    fail_count = 0
+
+    for idx, article in enumerate(articles, 1):
+        article_id = str(article.get("article_id", ""))
+        title = article.get("title", "") or ""
+        content = article.get("content", "") or ""
+
+        if not content.strip():
+            logger.warning(f"[backfill] Article {article_id} has no content — skipping")
+            fail_count += 1
+            continue
+
+        logger.info(f"[backfill] Processing {idx}/{len(articles)}: {article_id}")
+        try:
+            structured_summary, _html, _raw = build_structured_summary(
+                article_id, title, content, include_featured_image=False
+            )
+            updated = update_jsonb_fields_only(db_context, args.schema, article_id, structured_summary)
+            if updated:
+                success_count += 1
+                logger.info(f"[backfill] ✓ {article_id}")
+            else:
+                fail_count += 1
+                logger.error(f"[backfill] ✗ DB update failed for {article_id}")
+        except Exception as exc:
+            fail_count += 1
+            logger.error(f"[backfill] ✗ LLM error for {article_id}: {exc}", exc_info=True)
+
+        # Respect API rate limits between articles
+        if idx < len(articles):
+            try:
+                rate_limit_sleep()
+            except Exception:
+                pass
+
+    print(f"Backfill complete. Success: {success_count}, Failed: {fail_count}")
+    return True
+
+
 def main():
     """Main entry point for the article summarization system."""
     try:
@@ -299,7 +370,10 @@ def main():
         logger.info(f"Skipping articles processed in the last {args.recent_timeout} hours")
         
         # Process based on mode
-        if args.article_id:
+        if args.backfill_json:
+            # Backfill JSONB structured fields for articles that already have HTML
+            run_backfill(args)
+        elif args.article_id:
             # Process a single article
             process_single_article(args, summarizer)
         elif args.continuous:

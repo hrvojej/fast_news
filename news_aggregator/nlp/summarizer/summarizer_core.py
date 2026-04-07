@@ -19,17 +19,62 @@ configure_paths()
 # Import our modules
 from summarizer_db import claim_article  # ensure you import the new function
 from summarizer_logging import get_logger
-from summarizer_prompt import create_prompt
+from summarizer_prompt import create_plan_prompt, create_section_prompt
 from summarizer_api import call_llm_api, set_model_config
 from summarizer_html import clean_and_normalize_html, save_as_html
 from summarizer_db import get_articles, update_article_summary
 from summarizer_config import OUTPUT_HTML_DIR, ensure_output_directory
 from summarizer_image import ensure_images_directory
+from summarizer_structured import extract_json_payload, merge_plan_and_sections, render_summary_html_fragment
 
 # Import database models and context
 from db_scripts.db_context import DatabaseContext
 
 logger = get_logger(__name__)
+
+
+def build_structured_summary(article_id, title, content, include_featured_image):
+    """Generate a structured summary in two stages: plan first, then section content."""
+    plan_prompt = create_plan_prompt(content, len(content))
+    if not plan_prompt:
+        raise ValueError(f"Failed to build planning prompt for article ID {article_id}")
+
+    logger.debug(f"PLAN PROMPT PREVIEW for {article_id}:\n{plan_prompt[:1000]}...")
+    plan_text, plan_raw_response = call_llm_api(
+        plan_prompt,
+        article_id,
+        len(content),
+        response_format="json",
+    )
+    if not plan_text:
+        raise ValueError(f"Planning stage returned no content for article ID {article_id}")
+
+    plan_data = extract_json_payload(plan_text)
+
+    section_prompt = create_section_prompt(content, len(content), plan_data)
+    if not section_prompt:
+        raise ValueError(f"Failed to build section prompt for article ID {article_id}")
+
+    logger.debug(f"SECTION PROMPT PREVIEW for {article_id}:\n{section_prompt[:1000]}...")
+    section_text, section_raw_response = call_llm_api(
+        section_prompt,
+        article_id,
+        len(content),
+        response_format="json",
+    )
+    if not section_text:
+        raise ValueError(f"Section stage returned no content for article ID {article_id}")
+
+    section_data = extract_json_payload(section_text)
+    structured_summary = merge_plan_and_sections(plan_data, section_data, title)
+    summary_html = render_summary_html_fragment(structured_summary)
+    raw_response_text = (
+        f"structured_plan: {plan_raw_response}\n"
+        f"structured_sections: {section_raw_response}\n"
+        f"include_featured_image={include_featured_image}"
+    )
+
+    return structured_summary, summary_html, raw_response_text
 
 
 def build_debug_summary(title, content):
@@ -229,30 +274,25 @@ class ArticleSummarizer:
             logger.info(f"ARTICLE CONTENT LENGTH: {len(content)} characters")
             logger.debug(f"ARTICLE CONTENT PREVIEW:\n{content[:500]}...")
             
-            # Create prompt
-            try:
-                from summarizer_config import CONFIG, get_config_value
-                include_featured_image = get_config_value(CONFIG, 'summarization', 'enable_featured_image_search', True)
-                prompt = create_prompt(content, len(content), include_images=include_featured_image, enable_entity_links=True)
+            structured_summary = None
+            summary_text = None
+            raw_response_text = None
 
-                if prompt is None:
-                    logger.error(f"Failed to create prompt for article ID {article_id}: prompt is None")
-                    return False
-                logger.debug(f"PROMPT PREVIEW:\n{prompt[:1000]}...")
-            except Exception as e:
-                logger.error(f"Error creating prompt for article ID {article_id}: {e}")
-                return False
-            
-            # Get summary
             if self.debug_mode:
                 logger.info("DEBUG MODE: Using rich demo response generated from article content")
                 summary_text = build_debug_summary(title, content)
                 raw_response_text = "DEBUG MODE: Rich demo response generated from article content"
             else:
-                summary_text, raw_response_text = call_llm_api(prompt, article_id, len(content))
-                if not summary_text:
-                    logger.error(f"Failed to generate summary for article ID: {article_id}")
-                    return False
+                from summarizer_config import CONFIG, get_config_value
+                include_featured_image = get_config_value(CONFIG, 'summarization', 'enable_featured_image_search', True)
+
+                structured_summary, summary_text, raw_response_text = build_structured_summary(
+                    article_id,
+                    title,
+                    content,
+                    include_featured_image,
+                )
+                logger.info(f"Structured summary generated successfully for article ID {article_id}")
             
             # Process and update database
             cleaned_summary = clean_and_normalize_html(summary_text)
@@ -272,7 +312,8 @@ class ArticleSummarizer:
             html_saved = save_as_html(
                 article_id, title, url, content, summary_text, raw_response_text, self.schema,
                 keywords=article_info.get('keywords'),
-                existing_gemini_title=article_info.get('summary_article_gemini_title')
+                existing_gemini_title=article_info.get('summary_article_gemini_title'),
+                structured_summary=structured_summary,
             )
 
             if not html_saved:

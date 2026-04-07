@@ -61,6 +61,16 @@
               {% endif %}
               <h3>{{ article.summary_article_gemini_title }}</h3>
             </a>
+            {% if article.summary_first_paragraph %}
+              <p class="article-excerpt">{{ article.summary_first_paragraph | truncate(160) }}</p>
+            {% endif %}
+            {% if article.keywords %}
+              <div class="article-keywords">
+                {% for kw in article.keywords[:4] %}
+                  <span class="kw-tag">{{ kw }}</span>
+                {% endfor %}
+              </div>
+            {% endif %}
           </div>
         {% endfor %}
       </div>
@@ -70,6 +80,11 @@
             <a href="{{ relative_articles_path }}{{ article.article_html_file_location }}">
               {{ article.summary_article_gemini_title }}
             </a>
+            {% if article.keywords %}
+              <span class="additional-kw">
+                {% for kw in article.keywords[:3] %}{{ kw }}{% if not loop.last %}, {% endif %}{% endfor %}
+              </span>
+            {% endif %}
           </li>
         {% endfor %}
       </ul>
@@ -91,6 +106,9 @@
                   {% endif %}
                   <h4>{{ article.summary_article_gemini_title }}</h4>
                 </a>
+                {% if article.summary_first_paragraph %}
+                  <p class="article-excerpt">{{ article.summary_first_paragraph | truncate(120) }}</p>
+                {% endif %}
               </div>
             {% endfor %}
           </div>

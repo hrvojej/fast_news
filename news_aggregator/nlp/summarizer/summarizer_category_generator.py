@@ -42,7 +42,9 @@ for _schema in PORTAL_SCHEMAS:
         f"article_html_file_location, "
         f"summary_featured_image, "
         f"popularity_score, "
-        f"pub_date "
+        f"pub_date, "
+        f"summary_keywords_json, "
+        f"summary_first_paragraph "
         f"FROM {_schema}.articles "
         f"WHERE article_html_file_location <> ''"
     )
@@ -92,6 +94,20 @@ for article in articles_data:
                 article["summary_featured_image"] = {"url": sfi_strip, "alt": "", "caption": ""}
         else:
             article["summary_featured_image"] = {"url": sfi_strip, "alt": "", "caption": ""}
+
+# Normalise summary_keywords_json: JSONB may arrive as list, string-encoded JSON, or None.
+for article in articles_data:
+    raw_kw = article.get("summary_keywords_json")
+    if isinstance(raw_kw, list):
+        article["keywords"] = [str(k).strip() for k in raw_kw if str(k).strip()]
+    elif isinstance(raw_kw, str):
+        try:
+            parsed = json.loads(raw_kw)
+            article["keywords"] = [str(k).strip() for k in parsed if str(k).strip()] if isinstance(parsed, list) else []
+        except Exception:
+            article["keywords"] = []
+    else:
+        article["keywords"] = []
 
 # Define directories for static files, templates, and output pages
 STATIC_IMAGE_DIR = os.path.join(BASE_DIR, "web", "static", "images")

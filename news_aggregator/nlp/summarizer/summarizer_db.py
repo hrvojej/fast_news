@@ -4,6 +4,7 @@ Module for database operations for the article summarization system.
 """
 
 import os
+import re
 import sys
 import uuid
 from datetime import datetime, timezone, timedelta
@@ -264,38 +265,71 @@ def update_article_summary_details(db_context, schema, article_id, context):
                     logger.error(f"Invalid article_id format: {article_id} - {e}")
                     return False
 
-            processed_date = context.get("processed_date")
+            import json
+
+            processed_date = context.get("summary_generated_at") or datetime.now(timezone.utc)
             gemini_title = context.get("title")
             featured_image_data = context.get("featured_image")
             if featured_image_data is not None:
-                import json
                 featured_image_data = json.dumps(featured_image_data)
             summary_paragraphs = context.get("summary_paragraphs", [])
-            summary_first_paragraph = summary_paragraphs[0]['content'] if summary_paragraphs else None
+            summary_first_paragraph = None
+            if summary_paragraphs:
+                first_paragraph = summary_paragraphs[0]
+                if isinstance(first_paragraph, dict):
+                    summary_first_paragraph = first_paragraph.get('text') or first_paragraph.get('content')
+                if summary_first_paragraph:
+                    summary_first_paragraph = re.sub(r'<[^>]+>', '', summary_first_paragraph).strip()
             popularity_score = context.get("popularity_score", 0)
+
+            columns_query = text("""
+                SELECT column_name
+                FROM information_schema.columns
+                WHERE table_schema = :schema AND table_name = 'articles'
+            """)
+            existing_columns = {
+                row.column_name for row in session.execute(columns_query, {"schema": schema}).fetchall()
+            }
+
+            column_values = {
+                "summary_generated_at": ("scalar", processed_date),
+                "summary_article_gemini_title": ("scalar", gemini_title),
+                "summary_featured_image": ("scalar", featured_image_data),
+                "summary_first_paragraph": ("scalar", summary_first_paragraph),
+                "nlp_updated_at": ("scalar", datetime.now(timezone.utc)),
+                "popularity_score": ("scalar", popularity_score),
+                "article_html_file_location": ("scalar", context.get("article_html_file_location")),
+                "summary_plan_json": ("jsonb", context.get("summary_plan_json")),
+                "summary_keywords_json": ("jsonb", context.get("summary_keywords_json")),
+                "summary_entities_json": ("jsonb", context.get("summary_entities_json")),
+                "summary_sections_json": ("jsonb", context.get("summary_sections_json")),
+                "summary_facts_json": ("jsonb", context.get("summary_facts_json")),
+                "summary_resources_json": ("jsonb", context.get("summary_resources_json")),
+                "summary_sentiment_json": ("jsonb", context.get("summary_sentiment_json")),
+                "summary_popularity_json": ("jsonb", context.get("summary_popularity_json")),
+            }
+
+            set_clauses = []
+            params = {"article_id": article_id}
+            for column_name, (value_type, value) in column_values.items():
+                if column_name not in existing_columns:
+                    continue
+                if value_type == "jsonb":
+                    set_clauses.append(f"{column_name} = CAST(:{column_name} AS jsonb)")
+                    params[column_name] = json.dumps(value) if value is not None else None
+                else:
+                    set_clauses.append(f"{column_name} = :{column_name}")
+                    params[column_name] = value
+
+            if not set_clauses:
+                logger.error(f"No summary detail columns available for schema {schema}")
+                return False
 
             query = text(f"""
                 UPDATE {schema}.articles
-                SET summary_generated_at = :processed_date,
-                    summary_article_gemini_title = :gemini_title,
-                    summary_featured_image = :featured_image,
-                    summary_first_paragraph = :first_paragraph,
-                    nlp_updated_at = :updated_at,
-                    popularity_score = :popularity_score,
-                    article_html_file_location = :article_html_file_location
+                SET {', '.join(set_clauses)}
                 WHERE article_id = :article_id
             """)
-
-            params = {
-                "processed_date": processed_date,
-                "gemini_title": gemini_title,
-                "featured_image": featured_image_data,
-                "first_paragraph": summary_first_paragraph,
-                "updated_at": datetime.now(timezone.utc),
-                "popularity_score": popularity_score,
-                "article_html_file_location": context.get("article_html_file_location"),
-                "article_id": article_id
-            }
 
             result = session.execute(query, params)
             session.commit()
@@ -505,3 +539,127 @@ def claim_article(db_context, schema):
     except Exception as e:
         logger.error(f"Error claiming article: {e}", exc_info=True)
         return None
+
+
+def get_articles_for_backfill(db_context, schema, limit=None):
+    """
+    Return articles that already have a summary/HTML but are missing the JSONB structured fields.
+    These are candidates for the backfill-json pipeline: run LLM on their content and store
+    only the 8 JSONB columns without touching HTML files or legacy columns.
+
+    Args:
+        db_context: Database context for session management.
+        schema (str): Database schema name.
+        limit (int, optional): Maximum number of articles to return.
+
+    Returns:
+        list[dict]: List of article dicts with keys article_id, title, url, content,
+                    summary_article_gemini_title.
+    """
+    try:
+        with db_context.session() as session:
+            limit_clause = f"LIMIT {limit}" if (limit and isinstance(limit, int) and limit > 0) else ""
+            query = f"""
+                SELECT article_id, title, url, content, summary_article_gemini_title
+                FROM {schema}.articles
+                WHERE summary_plan_json IS NULL
+                  AND content IS NOT NULL AND content != ''
+                  AND article_html_file_location IS NOT NULL AND article_html_file_location != ''
+                ORDER BY pub_date DESC
+                {limit_clause}
+            """
+            result = session.execute(text(query))
+            rows = result.fetchall()
+            logger.info(f"[backfill] Found {len(rows)} articles needing JSONB backfill in {schema}")
+            return [dict(row._mapping) for row in rows]
+    except Exception as e:
+        logger.error(f"[backfill] Error fetching backfill articles for {schema}: {e}", exc_info=True)
+        return []
+
+
+def update_jsonb_fields_only(db_context, schema, article_id, structured_summary):
+    """
+    Update only the 8 JSONB structured-summary columns for an existing article.
+    Does NOT touch: article_html_file_location, summary_article_gemini_title,
+    summary_featured_image, summary_first_paragraph, popularity_score, or html_date.
+
+    Args:
+        db_context: Database context for session management.
+        schema (str): Database schema name.
+        article_id (str | uuid.UUID): The article's primary key.
+        structured_summary (dict): The canonical structured-summary dict produced by
+                                   merge_plan_and_sections().
+
+    Returns:
+        bool: True if the row was updated, False otherwise.
+    """
+    from summarizer_structured import build_structured_db_fields
+    import json
+
+    fields = build_structured_db_fields(structured_summary)
+    if not fields:
+        logger.warning(f"[backfill] build_structured_db_fields returned empty for {article_id}")
+        return False
+
+    try:
+        with db_context.session() as session:
+            if isinstance(article_id, str):
+                article_id = uuid.UUID(article_id)
+
+            columns_query = text("""
+                SELECT column_name
+                FROM information_schema.columns
+                WHERE table_schema = :schema AND table_name = 'articles'
+            """)
+            existing_columns = {
+                row.column_name
+                for row in session.execute(columns_query, {"schema": schema}).fetchall()
+            }
+
+            jsonb_cols = [
+                "summary_plan_json",
+                "summary_keywords_json",
+                "summary_entities_json",
+                "summary_sections_json",
+                "summary_facts_json",
+                "summary_resources_json",
+                "summary_sentiment_json",
+                "summary_popularity_json",
+            ]
+
+            set_clauses = []
+            params = {"article_id": article_id}
+            for col in jsonb_cols:
+                if col not in existing_columns:
+                    continue
+                set_clauses.append(f"{col} = CAST(:{col} AS jsonb)")
+                value = fields.get(col)
+                params[col] = json.dumps(value) if value is not None else None
+
+            if not set_clauses:
+                logger.warning(f"[backfill] No JSONB columns present in {schema}.articles — skipping")
+                return False
+
+            # Also bump nlp_updated_at so we know when the backfill ran
+            if "nlp_updated_at" in existing_columns:
+                set_clauses.append("nlp_updated_at = NOW()")
+
+            query = text(f"""
+                UPDATE {schema}.articles
+                SET {', '.join(set_clauses)}
+                WHERE article_id = :article_id
+            """)
+            result = session.execute(query, params)
+            session.commit()
+
+            if result.rowcount > 0:
+                logger.info(f"[backfill] JSONB fields updated for article {article_id} in {schema}")
+                return True
+            else:
+                logger.error(f"[backfill] Article {article_id} not found in {schema}")
+                return False
+    except Exception as e:
+        logger.error(f"[backfill] Error updating JSONB fields for {article_id}: {e}", exc_info=True)
+        if "session" in locals():
+            session.rollback()
+        return False
