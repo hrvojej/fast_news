@@ -4,9 +4,137 @@ This handles creation of prompts with appropriate formatting instructions.
 Note: All inline styling has been extracted into CSS classes.
 """
 
+import json
+
 from summarizer_logging import get_logger
 
 logger = get_logger(__name__)
+
+
+def _build_structured_base_rules(article_length):
+    return (
+        "You are a newsroom analysis assistant. Return ONLY valid JSON with double-quoted keys. "
+        "Do not return HTML. Do not return Markdown. Do not wrap the JSON in code fences. "
+        "Keep the focus on the core news event only. Ignore unrelated tangents, boilerplate, and navigation text. "
+        f"The source article length is {article_length} characters. "
+        "Prefer concrete names, numbers, dates, institutions, and causal relationships. "
+        "If a value is unknown, use an empty string or an empty array rather than inventing details."
+    )
+
+
+def create_plan_prompt(content, article_length):
+    """Create a planning prompt that returns a structured summary plan as JSON."""
+    if not content or not isinstance(content, str):
+        logger.error("Invalid content provided to create_plan_prompt: empty or not a string")
+        return None
+
+    if not isinstance(article_length, int) or article_length <= 0:
+        logger.error(f"Invalid article_length provided to create_plan_prompt: {article_length}")
+        return None
+
+    schema = {
+        "title": "Compelling but factual headline",
+        "angle": "Central narrative or tension",
+        "summary_goal": "What the finished summary should help the reader understand",
+        "audience": "Who this summary is optimized for",
+        "keywords": ["keyword 1", "keyword 2"],
+        "section_plan": [
+            {"section": "summary_intro", "purpose": "Lead paragraph"},
+            {"section": "supporting_points", "purpose": "Main developments"},
+            {"section": "secondary_details", "purpose": "Context and implications"},
+            {"section": "interesting_facts", "purpose": "High-signal facts"},
+            {"section": "related_resources", "purpose": "Search resources"}
+        ],
+        "search_queries": ["search phrase 1", "search phrase 2"]
+    }
+
+    prompt = (
+        _build_structured_base_rules(article_length)
+        + "\n\n"
+        + "Task: create a compact editorial plan for a later multi-part summary generation step. "
+          "Do not write the final summary yet. Focus on planning the structure, angle, and search direction.\n\n"
+        + "JSON schema:\n"
+        + json.dumps(schema, ensure_ascii=False, indent=2)
+        + "\n\nRules:\n"
+          "1. Keep section_plan concise and ordered.\n"
+          "2. Keywords must be directly relevant to the main topic.\n"
+          "3. Search queries must be concrete enough to find recent corroborating material.\n"
+          "4. Title must be usable as the main article headline if the later stage agrees with it.\n"
+          "5. No commentary outside JSON.\n\n"
+        + "ARTICLE TEXT:\n"
+        + content
+    )
+    return prompt
+
+
+def create_section_prompt(content, article_length, plan_data):
+    """Create a prompt that writes the article in structured JSON sections."""
+    if not content or not isinstance(content, str):
+        logger.error("Invalid content provided to create_section_prompt: empty or not a string")
+        return None
+
+    if not isinstance(article_length, int) or article_length <= 0:
+        logger.error(f"Invalid article_length provided to create_section_prompt: {article_length}")
+        return None
+
+    plan_json = json.dumps(plan_data or {}, ensure_ascii=False, indent=2)
+    schema = {
+        "title": "Final headline",
+        "keywords": ["keyword 1", "keyword 2"],
+        "entity_overview": [
+            {"category": "Organizations", "items": ["Item 1", "Item 2"]}
+        ],
+        "summary_intro": "Single strong lead paragraph",
+        "supporting_points": ["Main point 1", "Main point 2", "Main point 3"],
+        "transition_text": "Short bridge between developments and implications",
+        "secondary_details": ["Context 1", "Implication 2"],
+        "interesting_facts": ["Fact 1", "Fact 2", "Fact 3"],
+        "related_resources": [
+            {
+                "title": "Resource label",
+                "url": "https://www.google.com/search?q=...",
+                "description": "Search snippet or why it matters"
+            }
+        ],
+        "sentiment_analysis": [
+            {
+                "entity": "Entity name",
+                "positive": "count or short label",
+                "negative": "count or short label",
+                "summary": "What the sentiment suggests",
+                "keywords": ["theme 1", "theme 2"]
+            }
+        ],
+        "topic_popularity": {
+            "number": 0,
+            "description": "One sentence popularity explanation"
+        }
+    }
+
+    prompt = (
+        _build_structured_base_rules(article_length)
+        + "\n\n"
+        + "Task: using the editorial plan below, write the final summary content in modular JSON sections. "
+          "Each field should contain plain text data for later rendering by application code and templates.\n\n"
+        + "EDITORIAL PLAN:\n"
+        + plan_json
+        + "\n\nJSON schema:\n"
+        + json.dumps(schema, ensure_ascii=False, indent=2)
+        + "\n\nRules:\n"
+          "1. Do not output HTML, CSS classes, Markdown, or presentation hints.\n"
+          "2. summary_intro should be one dense opening paragraph.\n"
+          "3. supporting_points should contain 3 to 6 high-signal paragraphs or paragraph-sized bullets.\n"
+          "4. secondary_details should contain 2 to 5 context paragraphs.\n"
+          "5. interesting_facts should contain 3 to 6 concise facts.\n"
+          "6. related_resources must use Google search URLs only, never raw source URLs.\n"
+          "7. entity_overview should group items by meaningful categories.\n"
+          "8. topic_popularity.number must be an integer from 0 to 100.\n"
+          "9. Keep the overall summary around 700-900 words across the text fields combined.\n"
+          "10. No commentary outside JSON.\n\n"
+        + "ARTICLE TEXT:\n"
+        + content
+    )
+    return prompt
 
 def create_prompt(content, article_length, include_images=True, enable_entity_links=True):
     """

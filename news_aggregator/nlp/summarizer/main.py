@@ -92,6 +92,11 @@ def parse_arguments():
                         help="Backfill mode: re-run structured LLM pipeline on articles that already "
                              "have HTML but are missing the JSONB summary fields. "
                              "Only the 8 JSONB columns are written; HTML files are NOT touched.")
+    parser.add_argument('--skip-opinions', action='store_true',
+                        help="Skip the public opinion collection step (no YouTube/Reddit API calls). "
+                             "Useful for faster runs or when API keys are unavailable.")
+    parser.add_argument('--skip-youtube', action='store_true',
+                        help="Skip YouTube comment collection; use Reddit only for opinion data.")
 
     
     return parser.parse_args()
@@ -364,6 +369,10 @@ def main():
             env=args.env,
             debug_mode=args.debug
         )
+        
+        # Apply opinion pipeline flags
+        summarizer.skip_opinions = getattr(args, 'skip_opinions', False)
+        summarizer.skip_youtube = getattr(args, 'skip_youtube', False)
         
         # Set the recent timeout (in hours) so that articles processed within this time window are skipped.
         summarizer.recent_timeout = args.recent_timeout

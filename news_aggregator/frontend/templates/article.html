@@ -40,9 +40,7 @@
 
     <!-- Source Attribution -->
     {% if source_attribution %}
-    <div class="source-attribution">
         {{ source_attribution|safe }}
-    </div>
     {% endif %}
 
     <!-- Keywords Section -->
@@ -77,7 +75,11 @@
           {% for entity in entity_overview %}
             <div class="entity-category">
                <h3 class="entity-category-title">{{ entity.category }}</h3>
-               <div class="entity-list">{{ entity.content|safe }}</div>
+                               {% if entity['items'] %}
+                               <p class="entity-list">{{ entity['items']|join(', ') }}</p>
+                             {% else %}
+                             <div class="entity-list">{{ entity.content|safe }}</div>
+                             {% endif %}
             </div>
           {% endfor %}
         </div>
@@ -107,7 +109,11 @@
     <div class="summary">
         {% set supporting_point_count = namespace(value=0) %}
         {% for paragraph in summary_paragraphs %}
+            {% if paragraph.text %}
+            <p class="{{ paragraph.class }}">{{ paragraph.text }}</p>
+            {% else %}
             <div class="{{ paragraph.class }}">{{ paragraph.content|safe }}</div>
+            {% endif %}
             
             {% if paragraph.class == 'supporting-point' %}
                 {% set supporting_point_count.value = supporting_point_count.value + 1 %}
@@ -168,7 +174,7 @@
         <div class="facts-container">
           <ul class="facts-list">
             {% for fact in interesting_facts %}
-              <li class="{{ fact.class|join(' ') }}">{{ fact.content|safe|replace('<span class="fact-bullet">•</span>', '') }}</li>
+                            <li class="{{ fact.class_name or fact.class|join(' ') }}">{{ fact.text or fact.content|safe|replace('<span class="fact-bullet">•</span>', '') }}</li>
             {% endfor %}
           </ul>
         </div>
@@ -191,6 +197,205 @@
         </div>
     </div>
     {% endif %}
+
+    <!-- Public Opinion & Global Reactions Section -->
+    {% if public_opinion and (public_opinion.top_comments or public_opinion.global_narrative) %}
+    <section class="opinion-section">
+        <h2 class="opinion-section-title">Public Opinion &amp; Global Reactions</h2>
+
+        <!-- Tab navigation -->
+        <div class="oc-tabs" role="tablist">
+            <button class="oc-tab-btn active" role="tab" onclick="ocShowTab(this,'oc-global')" aria-selected="true">Global</button>
+            {% if public_opinion.by_locality %}<button class="oc-tab-btn" role="tab" onclick="ocShowTab(this,'oc-locality')">By Country</button>{% endif %}
+            {% if public_opinion.by_person %}<button class="oc-tab-btn" role="tab" onclick="ocShowTab(this,'oc-person')">Key Figures</button>{% endif %}
+            {% if public_opinion.by_institution %}<button class="oc-tab-btn" role="tab" onclick="ocShowTab(this,'oc-institution')">Institutions</button>{% endif %}
+            {% if public_opinion.portal_bias %}<button class="oc-tab-btn" role="tab" onclick="ocShowTab(this,'oc-portals')">Portal Analysis</button>{% endif %}
+        </div>
+
+        <!-- Tab: Global -->
+        <div id="oc-global" class="oc-tab-panel" role="tabpanel">
+            {% if public_opinion.global_narrative %}
+            <p class="oc-global-narrative">{{ public_opinion.global_narrative }}</p>
+            {% endif %}
+            {% if public_opinion.top_comments %}
+            <div class="oc-comment-grid">
+                {% for comment in public_opinion.top_comments %}
+                <div class="oc-comment-card oc-{{ comment.platform }}">
+                    <div class="oc-comment-header">
+                        <span class="oc-platform-badge oc-badge-{{ comment.platform }}">{{ comment.platform | title }}</span>
+                        <span class="oc-votes">&#128077; {{ comment.likes or 0 }}</span>
+                        {% if comment.video_title %}<span class="oc-source" title="{{ comment.video_title }}">{{ comment.video_title[:55] }}{% if comment.video_title|length > 55 %}…{% endif %}</span>
+                        {% elif comment.subreddit %}<span class="oc-source">r/{{ comment.subreddit }}</span>{% endif %}
+                    </div>
+                    <p class="oc-comment-text">{{ comment.text[:350] }}{% if comment.text|length > 350 %}…{% endif %}</p>
+                    {% if comment.author_country_inferred %}<span class="oc-country-tag">{{ comment.author_country_inferred }}</span>{% endif %}
+                </div>
+                {% endfor %}
+            </div>
+            {% endif %}
+        </div>
+
+        <!-- Tab: By Country -->
+        {% if public_opinion.by_locality %}
+        <div id="oc-locality" class="oc-tab-panel" style="display:none" role="tabpanel">
+            {% for country, data in public_opinion.by_locality.items() %}
+            <div class="oc-country-block">
+                <h3 class="oc-block-title">{{ country }}
+                    {% if data.sentiment_label %}<span class="oc-sentiment-chip oc-chip-{{ data.sentiment_label }}">{{ data.sentiment_label }}</span>{% endif %}
+                </h3>
+                {% if data.summary %}<p class="oc-block-summary">{{ data.summary }}</p>{% endif %}
+                {% if data.key_themes %}
+                <ul class="oc-theme-list">{% for t in data.key_themes %}<li>{{ t }}</li>{% endfor %}</ul>
+                {% endif %}
+            </div>
+            {% endfor %}
+        </div>
+        {% endif %}
+
+        <!-- Tab: Key Figures -->
+        {% if public_opinion.by_person %}
+        <div id="oc-person" class="oc-tab-panel" style="display:none" role="tabpanel">
+            {% for name, data in public_opinion.by_person.items() %}
+            <div class="oc-person-block">
+                <h3 class="oc-block-title">{{ name }}
+                    {% if data.sentiment_label %}<span class="oc-sentiment-chip oc-chip-{{ data.sentiment_label }}">{{ data.sentiment_label }}</span>{% endif %}
+                </h3>
+                {% if data.summary %}<p class="oc-block-summary">{{ data.summary }}</p>{% endif %}
+                {% if data.by_country %}
+                <div class="oc-by-country-grid">
+                    {% for country, country_summary in data.by_country.items() %}
+                    <div class="oc-country-mini"><strong>{{ country }}:</strong> {{ country_summary }}</div>
+                    {% endfor %}
+                </div>
+                {% endif %}
+                {% if data.notable_quotes %}
+                <div class="oc-quotes">
+                    {% for q in data.notable_quotes %}<blockquote class="oc-quote">"{{ q }}"</blockquote>{% endfor %}
+                </div>
+                {% endif %}
+            </div>
+            {% endfor %}
+        </div>
+        {% endif %}
+
+        <!-- Tab: Institutions -->
+        {% if public_opinion.by_institution %}
+        <div id="oc-institution" class="oc-tab-panel" style="display:none" role="tabpanel">
+            {% for name, data in public_opinion.by_institution.items() %}
+            <div class="oc-institution-block">
+                <h3 class="oc-block-title">{{ name }}
+                    {% if data.sentiment_label %}<span class="oc-sentiment-chip oc-chip-{{ data.sentiment_label }}">{{ data.sentiment_label }}</span>{% endif %}
+                </h3>
+                {% if data.summary %}<p class="oc-block-summary">{{ data.summary }}</p>{% endif %}
+                {% if data.key_themes %}
+                <ul class="oc-theme-list">{% for t in data.key_themes %}<li>{{ t }}</li>{% endfor %}</ul>
+                {% endif %}
+            </div>
+            {% endfor %}
+        </div>
+        {% endif %}
+
+        <!-- Tab: Portal Analysis -->
+        {% if public_opinion.portal_bias %}
+        <div id="oc-portals" class="oc-tab-panel" style="display:none" role="tabpanel">
+            <table class="oc-portal-table">
+                <thead>
+                    <tr>
+                        <th>Portal</th>
+                        <th>Framing</th>
+                        <th>Coverage Angle</th>
+                        <th>Entity Sentiment</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for portal in public_opinion.portal_bias %}
+                    <tr>
+                        <td class="oc-portal-name">{{ portal.site }}</td>
+                        <td><span class="oc-framing-badge">{{ portal.framing or '—' }}</span></td>
+                        <td>{{ portal.coverage_angle or '—' }}</td>
+                        <td>
+                            {% if portal.entity_sentiment %}
+                            {% for entity, score in portal.entity_sentiment.items() %}
+                            <div class="oc-entity-row">
+                                <span>{{ entity }}</span>
+                                <span class="oc-sentiment-cell {% if score > 0.1 %}oc-positive{% elif score < -0.1 %}oc-negative{% else %}oc-neutral{% endif %}">
+                                    {{ '%.2f' | format(score) }}
+                                </span>
+                            </div>
+                            {% endfor %}
+                            {% else %}—{% endif %}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% endif %}
+
+        {% if public_opinion.collected_at %}
+        <p class="oc-collected-at">Data collected: {{ public_opinion.collected_at[:10] }}</p>
+        {% endif %}
+    </section>
+
+    <style>
+    .opinion-section { margin: 2rem 0; padding: 1.5rem; background: #f8f9fa; border-radius: 8px; border: 1px solid #dee2e6; }
+    .opinion-section-title { font-size: 1.4rem; margin-bottom: 1rem; color: #1a1a2e; }
+    .oc-tabs { display: flex; flex-wrap: wrap; gap: 0.4rem; margin-bottom: 1rem; }
+    .oc-tab-btn { padding: 0.4rem 1rem; border: 1px solid #adb5bd; border-radius: 4px; background: #fff; cursor: pointer; font-size: 0.85rem; transition: background 0.2s; }
+    .oc-tab-btn.active, .oc-tab-btn:hover { background: #1a1a2e; color: #fff; border-color: #1a1a2e; }
+    .oc-tab-panel { animation: ocFadeIn 0.2s ease; }
+    @keyframes ocFadeIn { from { opacity: 0; } to { opacity: 1; } }
+    .oc-global-narrative { font-style: italic; color: #495057; margin-bottom: 1rem; line-height: 1.6; }
+    .oc-comment-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 1rem; }
+    .oc-comment-card { background: #fff; border-radius: 6px; padding: 0.8rem; border: 1px solid #dee2e6; }
+    .oc-comment-card.oc-youtube { border-left: 3px solid #ff0000; }
+    .oc-comment-card.oc-reddit { border-left: 3px solid #ff4500; }
+    .oc-comment-header { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.4rem; flex-wrap: wrap; }
+    .oc-platform-badge { font-size: 0.7rem; padding: 0.1rem 0.4rem; border-radius: 3px; font-weight: bold; }
+    .oc-badge-youtube { background: #ff0000; color: #fff; }
+    .oc-badge-reddit { background: #ff4500; color: #fff; }
+    .oc-votes { font-size: 0.78rem; color: #6c757d; }
+    .oc-source { font-size: 0.75rem; color: #6c757d; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 160px; }
+    .oc-comment-text { font-size: 0.88rem; line-height: 1.5; color: #343a40; margin: 0.3rem 0 0; }
+    .oc-country-tag { font-size: 0.7rem; background: #e9ecef; padding: 0.1rem 0.4rem; border-radius: 3px; color: #495057; }
+    .oc-block-title { font-size: 1.05rem; margin: 1rem 0 0.4rem; display: flex; align-items: center; gap: 0.5rem; }
+    .oc-block-summary { font-size: 0.9rem; color: #343a40; line-height: 1.6; }
+    .oc-theme-list { margin: 0.3rem 0 0 1.2rem; font-size: 0.85rem; color: #495057; }
+    .oc-sentiment-chip { font-size: 0.7rem; padding: 0.1rem 0.5rem; border-radius: 10px; font-weight: normal; }
+    .oc-chip-positive { background: #d4edda; color: #155724; }
+    .oc-chip-negative { background: #f8d7da; color: #721c24; }
+    .oc-chip-mixed { background: #fff3cd; color: #856404; }
+    .oc-chip-neutral { background: #e9ecef; color: #495057; }
+    .oc-by-country-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 0.5rem; margin-top: 0.5rem; }
+    .oc-country-mini { font-size: 0.82rem; background: #e9ecef; padding: 0.4rem 0.6rem; border-radius: 4px; }
+    .oc-quotes { margin-top: 0.5rem; }
+    .oc-quote { font-size: 0.85rem; border-left: 3px solid #adb5bd; padding-left: 0.6rem; color: #6c757d; margin: 0.3rem 0; }
+    .oc-country-block, .oc-person-block, .oc-institution-block { margin-bottom: 1.2rem; padding-bottom: 1rem; border-bottom: 1px solid #dee2e6; }
+    .oc-portal-table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
+    .oc-portal-table th { background: #1a1a2e; color: #fff; padding: 0.5rem; text-align: left; }
+    .oc-portal-table td { padding: 0.5rem; border-bottom: 1px solid #dee2e6; vertical-align: top; }
+    .oc-portal-name { font-weight: bold; white-space: nowrap; }
+    .oc-framing-badge { background: #e9ecef; padding: 0.15rem 0.5rem; border-radius: 4px; font-size: 0.78rem; }
+    .oc-entity-row { display: flex; justify-content: space-between; gap: 0.5rem; font-size: 0.8rem; margin-bottom: 0.15rem; }
+    .oc-positive { color: #155724; font-weight: bold; }
+    .oc-negative { color: #721c24; font-weight: bold; }
+    .oc-neutral { color: #495057; }
+    .oc-collected-at { font-size: 0.75rem; color: #adb5bd; margin-top: 1rem; text-align: right; }
+    </style>
+
+    <script>
+    function ocShowTab(btn, panelId) {
+        var section = btn.closest('.opinion-section');
+        section.querySelectorAll('.oc-tab-btn').forEach(function(b){ b.classList.remove('active'); b.removeAttribute('aria-selected'); });
+        section.querySelectorAll('.oc-tab-panel').forEach(function(p){ p.style.display = 'none'; });
+        btn.classList.add('active');
+        btn.setAttribute('aria-selected', 'true');
+        var panel = document.getElementById(panelId);
+        if (panel) panel.style.display = '';
+    }
+    </script>
+    {% endif %}
+    <!-- /Public Opinion Section -->
 
     <!-- Related Articles Section (skipped) -->
     {#

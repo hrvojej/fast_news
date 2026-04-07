@@ -216,6 +216,44 @@ def rate_limit_sleep():
     logger.info(f"Sleeping for {sleep_time:.2f} seconds to respect rate limits.")
     time.sleep(sleep_time)
 
+
+def _extract_entities_from_structured(structured_summary) -> dict:
+    """
+    Extract persons, localities, and institutions from a structured summary dict.
+
+    Reads the 'entity_overview' section produced by merge_plan_and_sections().
+    Returns: {persons: [...], localities: [...], institutions: [...]}
+    """
+    persons = []
+    localities = []
+    institutions = []
+
+    if not structured_summary:
+        return {"persons": persons, "localities": localities, "institutions": institutions}
+
+    entity_overview = structured_summary.get("entity_overview") or []
+    if isinstance(entity_overview, list):
+        for entry in entity_overview:
+            if not isinstance(entry, dict):
+                continue
+            name = entry.get("name") or entry.get("entity") or ""
+            entity_type = (entry.get("type") or entry.get("entity_type") or "").lower()
+            if not name:
+                continue
+            if entity_type in ("person", "people", "persons"):
+                persons.append(name)
+            elif entity_type in ("location", "locality", "country", "region", "place", "geo"):
+                localities.append(name)
+            elif entity_type in ("organization", "organisation", "institution", "org"):
+                institutions.append(name)
+    elif isinstance(entity_overview, dict):
+        persons = [str(p) for p in entity_overview.get("persons", []) if p]
+        localities = [str(loc) for loc in entity_overview.get("localities", []) if loc]
+        institutions = [str(inst) for inst in entity_overview.get("institutions", []) if inst]
+
+    return {"persons": persons[:10], "localities": localities[:10], "institutions": institutions[:10]}
+
+
 class ArticleSummarizer:
     """Main class for article summarization workflow."""
     
@@ -232,6 +270,8 @@ class ArticleSummarizer:
         self.schema = schema
         self.env = env
         self.debug_mode = debug_mode
+        self.skip_opinions = False
+        self.skip_youtube = False
         self.article_model = article_model
         self.db_context = DatabaseContext.get_instance(env)
         self.processed_count = 0
@@ -307,6 +347,27 @@ class ArticleSummarizer:
                     logger.error(f"Failed to update database for article ID: {article_id}")
                     return False
             
+            # --- Collect public opinion data (before HTML save so it's included in one render) ---
+            opinion_data = None
+            if not self.debug_mode and not self.skip_opinions:
+                try:
+                    from opinion_analyzer import build_opinion_analysis
+                    from summarizer_config import CONFIG, get_config_value
+                    youtube_key = get_config_value(CONFIG, 'api_keys', 'youtube', '') or ''
+                    collect_cfg = get_config_value(CONFIG, 'opinion_collection', None) or {}
+                    if self.skip_youtube:
+                        collect_cfg = dict(collect_cfg)
+                        collect_cfg['skip_youtube'] = True
+                    if collect_cfg.get('enabled', True):
+                        entities_dict = _extract_entities_from_structured(structured_summary)
+                        opinion_data = build_opinion_analysis(
+                            article_id, title, entities_dict,
+                            youtube_api_key=youtube_key,
+                            collect_config=collect_cfg,
+                        )
+                except Exception as oe:
+                    logger.warning(f"[opinion] Collection failed for {article_id}: {oe}", exc_info=True)
+
             # Save as HTML, now passing keywords from the database to enable image search
             # Save as HTML, now passing the schema along with keywords
             html_saved = save_as_html(
@@ -314,11 +375,20 @@ class ArticleSummarizer:
                 keywords=article_info.get('keywords'),
                 existing_gemini_title=article_info.get('summary_article_gemini_title'),
                 structured_summary=structured_summary,
+                opinion_data=opinion_data,
             )
 
             if not html_saved:
                 logger.error(f"Failed to save HTML output for article ID: {article_id}")
                 return False
+
+            # Persist opinion data to DB after HTML is saved
+            if opinion_data and not self.debug_mode:
+                try:
+                    from summarizer_db import update_opinion_analysis
+                    update_opinion_analysis(self.db_context, self.schema, article_id, opinion_data)
+                except Exception as oe:
+                    logger.warning(f"[opinion] DB save failed for {article_id}: {oe}")
             
             logger.info(f"ARTICLE SUMMARY for ID {article_id} (first 500 chars):\n{summary_text[:500]}...")
             logger.info(f"=== END ARTICLE ID: {article_id} ===")

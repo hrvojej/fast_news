@@ -663,3 +663,51 @@ def update_jsonb_fields_only(db_context, schema, article_id, structured_summary)
         if "session" in locals():
             session.rollback()
         return False
+
+
+def update_opinion_analysis(db_context, schema, article_id, opinion_data):
+    """
+    Persist the opinion_analysis_json JSONB payload for a single article.
+
+    Args:
+        db_context: Database context for session management.
+        schema (str): Database schema name (e.g. 'pt_reuters').
+        article_id (str | uuid.UUID): The article's primary key.
+        opinion_data (dict): The payload produced by build_opinion_analysis().
+
+    Returns:
+        bool: True if the row was updated, False otherwise.
+    """
+    import json
+
+    if not opinion_data:
+        return False
+
+    try:
+        with db_context.session() as session:
+            if isinstance(article_id, str):
+                article_id = uuid.UUID(article_id)
+
+            query = text(f"""
+                UPDATE {schema}.articles
+                SET opinion_analysis_json = CAST(:data AS jsonb),
+                    nlp_updated_at = NOW()
+                WHERE article_id = :article_id
+            """)
+            result = session.execute(query, {
+                "data": json.dumps(opinion_data),
+                "article_id": article_id,
+            })
+            session.commit()
+
+            if result.rowcount > 0:
+                logger.info(f"[opinion] Saved opinion_analysis_json for {article_id} in {schema}")
+                return True
+            else:
+                logger.warning(f"[opinion] Article {article_id} not found in {schema} — opinion not saved")
+                return False
+    except Exception as exc:
+        logger.error(f"[opinion] Error saving opinion_analysis_json for {article_id}: {exc}", exc_info=True)
+        if "session" in locals():
+            session.rollback()
+        return False

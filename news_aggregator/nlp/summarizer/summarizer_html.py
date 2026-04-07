@@ -8,12 +8,13 @@ import html
 from urllib.parse import urlparse
 import requests
 from bs4 import BeautifulSoup, Tag, NavigableString
-from datetime import datetime
+from datetime import datetime, timezone
 
 from summarizer_logging import get_logger
 from summarizer_config import OUTPUT_HTML_DIR, ensure_output_directory
 from summarizer_image import IMAGES_DIR, process_images_in_html, search_and_download_images
 from summarizer_db import update_article_summary_details, get_related_articles, get_article_metadata, update_article_status_html_date
+from summarizer_structured import build_source_attribution_html, build_structured_db_fields, build_template_fields, render_summary_html_fragment
 
 
 from db_scripts.db_context import DatabaseContext
@@ -493,7 +494,31 @@ def create_filename_from_title(title, url, article_id):
     filename = filename[:250]                    # Limit length
     return f"{filename}.html"
 
-def save_as_html(article_id, title, url, content, summary, response_text, schema, keywords=None, existing_gemini_title=None): # Note: keywords arg here is likely unused now
+def _build_public_opinion_context(opinion_data):
+    """Normalise opinion_analysis_json payload for Jinja template consumption."""
+    if not opinion_data:
+        return None
+    top_comments = (opinion_data.get("top_comments") or [])[:12]
+    by_locality = opinion_data.get("by_locality") or {}
+    by_person = opinion_data.get("by_person") or {}
+    by_institution = opinion_data.get("by_institution") or {}
+    portal_bias_raw = opinion_data.get("portal_bias") or {}
+    portal_bias_list = sorted(
+        [{"site": k, **v} for k, v in portal_bias_raw.items()],
+        key=lambda x: x.get("site", ""),
+    )
+    return {
+        "top_comments": top_comments,
+        "global_narrative": opinion_data.get("global_narrative", ""),
+        "by_locality": by_locality,
+        "by_person": by_person,
+        "by_institution": by_institution,
+        "portal_bias": portal_bias_list,
+        "collected_at": opinion_data.get("collected_at", ""),
+    }
+
+
+def save_as_html(article_id, title, url, content, summary, response_text, schema, keywords=None, existing_gemini_title=None, structured_summary=None, opinion_data=None): # Note: keywords arg here is likely unused now
     """
     Save the article and its summary as an HTML file, with images from Wikimedia based on keywords.
 
@@ -507,6 +532,7 @@ def save_as_html(article_id, title, url, content, summary, response_text, schema
         schema (str): The database schema
         keywords (list, optional): [DEPRECATED/UNUSED in this context - keywords are extracted from summary]
         existing_gemini_title (str, optional): Title from DB if already summarized.
+        structured_summary (dict, optional): Structured summary payload produced by the modular pipeline.
 
     Returns:
         bool: True if successful, False otherwise
@@ -528,59 +554,65 @@ def save_as_html(article_id, title, url, content, summary, response_text, schema
 
 
 
-        # --- Start Processing Summary and Extracting Fields FIRST ---
-        processed_summary = summary
+        summary_generated_at = datetime.now(timezone.utc)
+        summary_fields = {}
         clean_summary = ""
-        if processed_summary and isinstance(processed_summary, str):
-            if "```html" in processed_summary:
-                try:
-                    processed_summary = processed_summary.split("```html")[1].split("```")[0].strip()
-                    processed_summary = html.unescape(processed_summary)
-                    logger.debug("Extracted and unescaped HTML from code block")
-                except Exception as e:
-                    logger.warning(f"Error extracting HTML from code block: {e}")
 
-            processed_summary = re.sub(r'<li style="[^>]*">', '<li>', processed_summary)
-            clean_summary = clean_and_normalize_html(processed_summary)
+        if structured_summary:
+            summary_fields = build_template_fields(structured_summary)
+            clean_summary = render_summary_html_fragment(structured_summary)
+            generated_title = structured_summary.get("title") or title
+            logger.info(f"Using structured summary rendering path for article {article_id}")
         else:
-            logger.warning(f"Invalid summary content: {type(processed_summary)}")
-            clean_summary = "<div>No valid summary content available</div>"
+            processed_summary = summary
+            if processed_summary and isinstance(processed_summary, str):
+                if "```html" in processed_summary:
+                    try:
+                        processed_summary = processed_summary.split("```html")[1].split("```")[0].strip()
+                        processed_summary = html.unescape(processed_summary)
+                        logger.debug("Extracted and unescaped HTML from code block")
+                    except Exception as e:
+                        logger.warning(f"Error extracting HTML from code block: {e}")
 
-        # If clean_summary is empty or just a placeholder, try with the API response
-        if not clean_summary or clean_summary in ("<div>No content available</div>", "<div>No valid summary content available</div>"):
-            logger.warning("Processed summary is empty, attempting to extract from raw API response")
-            try:
-                # ... (logic to extract HTML from response_text - keep as is) ...
-                if response_text and "```html" in response_text:
-                    html_content = response_text.split("```html")[1].split("```")[0].strip()
-                    html_content = html.unescape(html_content)
-                    if html_content:
-                        clean_summary = clean_and_normalize_html(html_content)
-                        logger.info("Successfully extracted HTML content from API response")
-                elif response_text and ("<html" in response_text or "<div" in response_text):
-                    html_match = re.search(r'(<div.*?>.*?</div>|<html.*?>.*?</html>)', response_text, re.DOTALL)
-                    if html_match:
-                        html_content = html_match.group(0)
-                        clean_summary = clean_and_normalize_html(html_content)
-                        logger.info("Successfully extracted HTML content from API response using regex")
-            except Exception as e:
-                logger.error(f"Error extracting HTML from API response: {e}")
+                processed_summary = re.sub(r'<li style="[^>]*">', '<li>', processed_summary)
+                clean_summary = clean_and_normalize_html(processed_summary)
+            else:
+                logger.warning(f"Invalid summary content: {type(processed_summary)}")
+                clean_summary = "<div>No valid summary content available</div>"
 
-        # Extract Gemini-generated title (use existing if available)
-        soup_summary = BeautifulSoup(clean_summary, 'html.parser')
-        gemini_title_tag = soup_summary.find('h1', class_='article-title')
-        generated_title = gemini_title_tag.get_text(separator=' ', strip=True) if gemini_title_tag else title
+            if not clean_summary or clean_summary in ("<div>No content available</div>", "<div>No valid summary content available</div>"):
+                logger.warning("Processed summary is empty, attempting to extract from raw API response")
+                try:
+                    if response_text and "```html" in response_text:
+                        html_content = response_text.split("```html")[1].split("```")[0].strip()
+                        html_content = html.unescape(html_content)
+                        if html_content:
+                            clean_summary = clean_and_normalize_html(html_content)
+                            logger.info("Successfully extracted HTML content from API response")
+                    elif response_text and ("<html" in response_text or "<div" in response_text):
+                        html_match = re.search(r'(<div.*?>.*?</div>|<html.*?>.*?</html>)', response_text, re.DOTALL)
+                        if html_match:
+                            html_content = html_match.group(0)
+                            clean_summary = clean_and_normalize_html(html_content)
+                            logger.info("Successfully extracted HTML content from API response using regex")
+                except Exception as e:
+                    logger.error(f"Error extracting HTML from API response: {e}")
+
+            soup_summary = BeautifulSoup(clean_summary, 'html.parser')
+            gemini_title_tag = soup_summary.find('h1', class_='article-title')
+            generated_title = gemini_title_tag.get_text(separator=' ', strip=True) if gemini_title_tag else title
+            summary_fields = extract_summary_fields(clean_summary)
+
         gemini_title = existing_gemini_title if existing_gemini_title is not None else generated_title
 
         if existing_gemini_title is not None:
              logger.info(f"Existing Gemini title found in DB for article {article_id}: '{existing_gemini_title}'. Title unchanged.")
         else:
-             logger.info(f"New Gemini title generated for article {article_id}: '{generated_title}'.")
+             logger.info(f"New summary title generated for article {article_id}: '{generated_title}'.")
 
-        # **MODIFICATION 1: Extract summary fields (including keywords) HERE**
-        summary_fields = extract_summary_fields(clean_summary)
-        # Get the keywords extracted from the summary content
-        extracted_keywords = summary_fields.get("keywords", []) # Use a different variable name to avoid confusion with the function argument
+        extracted_keywords = summary_fields.get("keywords", [])
+        if not extracted_keywords and keywords:
+            extracted_keywords = keywords if isinstance(keywords, list) else [keywords]
 
         # --- Now Perform Image Search Using Extracted Keywords ---
         images = [] # Initialize images list
@@ -718,6 +750,7 @@ def save_as_html(article_id, title, url, content, summary, response_text, schema
             "article_id": article_id,
             "url": url,
             "processed_date": formatted_pub_date,
+            "summary_generated_at": summary_generated_at,
             "featured_image": featured_image_data,
             "summary": clean_summary if clean_summary else "<div>No summary available</div>",
             "fetched_images": fetched_images_data,
@@ -729,7 +762,7 @@ def save_as_html(article_id, title, url, content, summary, response_text, schema
             "relative_root_path": relative_root_path,
             "current_year": datetime.now().year,
             # Additional fields from summary extraction
-            "source_attribution": summary_fields.get("source_attribution", ""),
+            "source_attribution": summary_fields.get("source_attribution") or build_source_attribution_html(metadata, schema),
             "keywords": extracted_keywords,
             "entity_overview": summary_fields.get("entity_overview", []),
             "summary_paragraphs": summary_fields.get("summary_paragraphs", []),
@@ -745,8 +778,11 @@ def save_as_html(article_id, title, url, content, summary, response_text, schema
             "canonical_url": "https://fast-news.net/articles/" + (os.path.join(subfolder, filename).replace(os.sep, '/') if subfolder else filename.replace(os.sep, '/')),
             # --- Inject Dynamic Header Categories ---
             "header_categories": header_categories,
-            "subcategories_by_category": {cat["slug"]: [] for cat in header_categories}
+            "subcategories_by_category": {cat["slug"]: [] for cat in header_categories},
+            "public_opinion": _build_public_opinion_context(opinion_data),
         }
+
+        context.update(build_structured_db_fields(structured_summary))
 
         # Load and render the template
         template = jinja_env.get_template('article.html')
@@ -769,7 +805,6 @@ def save_as_html(article_id, title, url, content, summary, response_text, schema
                 logger.error("Failed to update database summary details.")
             
             # --- New Code: Update html_date in the article_status table ---
-            from datetime import timezone
             html_date = datetime.now(timezone.utc)
             status_update_success = update_article_status_html_date(DatabaseContext(), schema, url, html_date)
             if status_update_success:

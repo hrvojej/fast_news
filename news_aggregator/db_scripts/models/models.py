@@ -115,6 +115,14 @@ def create_portal_article_model(schema: str):
             'summary_article_gemini_title': sa.Column(sa.Text),
             'summary_featured_image': sa.Column(sa.Text),
             'summary_first_paragraph': sa.Column(sa.Text),
+            'summary_plan_json': sa.Column(JSONB),
+            'summary_keywords_json': sa.Column(JSONB),
+            'summary_entities_json': sa.Column(JSONB),
+            'summary_sections_json': sa.Column(JSONB),
+            'summary_facts_json': sa.Column(JSONB),
+            'summary_resources_json': sa.Column(JSONB),
+            'summary_sentiment_json': sa.Column(JSONB),
+            'summary_popularity_json': sa.Column(JSONB),
             'article_html_file_location': sa.Column(sa.Text(collation='pg_catalog."default"')),
 
         }

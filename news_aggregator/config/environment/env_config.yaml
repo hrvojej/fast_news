@@ -17,6 +17,19 @@ development:
     nyt: your_nyt_api_key
     guardian: your_guardian_api_key
     reuters: your_reuters_api_key
+    youtube: ""
+  opinion_collection:
+    enabled: true
+    skip_youtube: false
+    max_youtube_videos: 5
+    max_youtube_comments_per_video: 20
+    max_reddit_posts: 5
+    max_reddit_comments_per_post: 15
+    min_comment_likes: 5
+    min_comment_score: 10
+    min_comment_words: 15
+    authenticity_threshold: 0.6
+    max_display_comments: 12
 
 production:
   database:
@@ -37,3 +50,16 @@ production:
     nyt: prod_nyt_api_key
     guardian: prod_guardian_api_key 
     reuters: prod_reuters_api_key
+    youtube: ""
+  opinion_collection:
+    enabled: true
+    skip_youtube: false
+    max_youtube_videos: 5
+    max_youtube_comments_per_video: 20
+    max_reddit_posts: 5
+    max_reddit_comments_per_post: 15
+    min_comment_likes: 5
+    min_comment_score: 10
+    min_comment_words: 15
+    authenticity_threshold: 0.6
+    max_display_comments: 12

@@ -184,7 +184,7 @@ def initialize_api():
         return False
 
 
-def _run_copilot_cli(model, prompt, timeout_seconds=300):
+def _run_copilot_cli(model, prompt, timeout_seconds=300, response_format="html"):
     """
     Execute 'copilot -p' with a file-based prompt and return the response.
 
@@ -222,10 +222,20 @@ def _run_copilot_cli(model, prompt, timeout_seconds=300):
         tmp_file.close()
         tmp_path = tmp_file.name
 
+        if response_format == "json":
+            format_instruction = (
+                "You MUST output ONLY valid JSON that the instructions ask for — nothing else. "
+                "No commentary, no markdown fences, no explanation before or after the JSON. "
+            )
+        else:
+            format_instruction = (
+                "You MUST output ONLY the raw HTML that the instructions ask for — nothing else. "
+                "No commentary, no markdown fences, no explanation before or after the HTML. "
+            )
+
         meta_prompt = (
             f"Read the file '{tmp_path}' and follow the instructions in it EXACTLY. "
-            "You MUST output ONLY the raw HTML that the instructions ask for — nothing else. "
-            "No commentary, no markdown fences, no explanation before or after the HTML. "
+            f"{format_instruction}"
             "Do NOT edit any files. Do NOT run any shell commands. Do NOT create any files."
         )
 
@@ -356,7 +366,7 @@ def _run_gh_models(model, prompt, max_tokens, temperature, top_p, system_prompt=
     return result.stdout.strip()
 
 
-def call_llm_api(prompt, article_id, content_length, retries=2, timeout_seconds=180):
+def call_llm_api(prompt, article_id, content_length, retries=2, timeout_seconds=180, response_format="html"):
     """
     Call the LLM to generate a summary using the configured backend.
 
@@ -375,7 +385,7 @@ def call_llm_api(prompt, article_id, content_length, retries=2, timeout_seconds=
         return None, None
 
     # Check cache
-    cache_key = f"{article_id}_{hash(prompt)}"
+    cache_key = f"{article_id}_{response_format}_{hash(prompt)}"
     if cache_key in response_cache:
         logger.info(f"Using cached response for article ID {article_id}")
         return response_cache[cache_key]
@@ -406,6 +416,7 @@ def call_llm_api(prompt, article_id, content_length, retries=2, timeout_seconds=
                     summary_text = _run_copilot_cli(
                         model, prompt,
                         timeout_seconds=timeout_seconds,
+                        response_format=response_format,
                     )
                 else:
                     summary_text = _run_gh_models(
