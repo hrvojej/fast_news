@@ -44,7 +44,7 @@ def filter_authentic_comments(
         batch = raw_comments[batch_start: batch_start + _BATCH_SIZE]
         prompt = create_comment_filter_prompt(batch)
         try:
-            resp_text = call_llm_api(prompt, article_id, len(prompt), response_format="json")
+            resp_text, _ = call_llm_api(prompt, article_id, len(prompt), response_format="json")
             results = _parse_json_response(resp_text, expected_type=list)
         except Exception as exc:
             logger.warning(f"LLM comment filter failed for batch at {batch_start}: {exc}")
@@ -145,7 +145,7 @@ def synthesize_opinions(
     if filtered_comments:
         try:
             gn_prompt = create_global_narrative_prompt(filtered_comments, article_title)
-            gn_resp = call_llm_api(gn_prompt, article_id, len(gn_prompt), response_format="json")
+            gn_resp, _ = call_llm_api(gn_prompt, article_id, len(gn_prompt), response_format="json")
             gn_data = _parse_json_response(gn_resp, expected_type=dict)
             global_narrative = gn_data.get("global_narrative", "")
         except Exception as exc:
@@ -162,7 +162,7 @@ def synthesize_opinions(
             continue
         try:
             prompt = create_opinion_synthesis_prompt(country_comments, country, "locality", locality=country)
-            resp = call_llm_api(prompt, article_id, len(prompt), response_format="json")
+            resp, _ = call_llm_api(prompt, article_id, len(prompt), response_format="json")
             data = _parse_json_response(resp, expected_type=dict)
             data["top_comments"] = country_comments[:5]
             by_locality[country] = data
@@ -178,7 +178,7 @@ def synthesize_opinions(
             relevant = filtered_comments[:15]  # fall back to global pool
         try:
             prompt = create_opinion_synthesis_prompt(relevant, person, "person")
-            resp = call_llm_api(prompt, article_id, len(prompt), response_format="json")
+            resp, _ = call_llm_api(prompt, article_id, len(prompt), response_format="json")
             data = _parse_json_response(resp, expected_type=dict)
             # Per-country breakdown for this person
             by_country = {}
@@ -191,7 +191,7 @@ def synthesize_opinions(
                     continue
                 try:
                     c_prompt = create_opinion_synthesis_prompt(c_comments, person, "person", locality=country)
-                    c_resp = call_llm_api(c_prompt, article_id, len(c_prompt), response_format="json")
+                    c_resp, _ = call_llm_api(c_prompt, article_id, len(c_prompt), response_format="json")
                     c_data = _parse_json_response(c_resp, expected_type=dict)
                     by_country[country] = c_data.get("summary", "")
                 except Exception as exc:
@@ -209,7 +209,7 @@ def synthesize_opinions(
             relevant = filtered_comments[:10]
         try:
             prompt = create_opinion_synthesis_prompt(relevant, inst, "institution")
-            resp = call_llm_api(prompt, article_id, len(prompt), response_format="json")
+            resp, _ = call_llm_api(prompt, article_id, len(prompt), response_format="json")
             data = _parse_json_response(resp, expected_type=dict)
             data["by_country"] = {}
             by_institution[inst] = data
@@ -251,7 +251,7 @@ def analyze_portal_bias(
 
     try:
         prompt = create_portal_bias_prompt(portal_articles, entity_list)
-        resp = call_llm_api(prompt, article_id, len(prompt), response_format="json")
+        resp, _ = call_llm_api(prompt, article_id, len(prompt), response_format="json")
         return _parse_json_response(resp, expected_type=dict)
     except Exception as exc:
         logger.warning(f"Portal bias analysis failed: {exc}")

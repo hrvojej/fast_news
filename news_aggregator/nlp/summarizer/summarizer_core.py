@@ -222,6 +222,8 @@ def _extract_entities_from_structured(structured_summary) -> dict:
     Extract persons, localities, and institutions from a structured summary dict.
 
     Reads the 'entity_overview' section produced by merge_plan_and_sections().
+    The entity_overview format is a list of grouped entries:
+        [{"category": "People", "items": ["Name1", "Name2"]}, ...]
     Returns: {persons: [...], localities: [...], institutions: [...]}
     """
     persons = []
@@ -231,20 +233,39 @@ def _extract_entities_from_structured(structured_summary) -> dict:
     if not structured_summary:
         return {"persons": persons, "localities": localities, "institutions": institutions}
 
+    _PERSON_CATS = {"people", "persons", "person", "key figures", "politicians", "leaders", "officials"}
+    _LOCALITY_CATS = {"countries", "country", "locations", "location", "regions", "region",
+                      "places", "place", "geographies", "geography", "localities", "locality", "nations"}
+    _INSTITUTION_CATS = {"organizations", "organization", "organisations", "organisation",
+                         "institutions", "institution", "companies", "agencies", "bodies", "groups"}
+
     entity_overview = structured_summary.get("entity_overview") or []
     if isinstance(entity_overview, list):
         for entry in entity_overview:
             if not isinstance(entry, dict):
                 continue
+            # Handle grouped format: {category, items}
+            category = (entry.get("category") or entry.get("title") or "").strip().lower()
+            items = entry.get("items") or entry.get("entities") or entry.get("values") or []
+            if category and isinstance(items, list) and items:
+                clean_items = [str(i).strip() for i in items if i and str(i).strip()]
+                if category in _PERSON_CATS:
+                    persons.extend(clean_items)
+                elif category in _LOCALITY_CATS:
+                    localities.extend(clean_items)
+                elif category in _INSTITUTION_CATS:
+                    institutions.extend(clean_items)
+                continue
+            # Fallback: flat format {name, type}
             name = entry.get("name") or entry.get("entity") or ""
             entity_type = (entry.get("type") or entry.get("entity_type") or "").lower()
             if not name:
                 continue
-            if entity_type in ("person", "people", "persons"):
+            if entity_type in _PERSON_CATS:
                 persons.append(name)
-            elif entity_type in ("location", "locality", "country", "region", "place", "geo"):
+            elif entity_type in _LOCALITY_CATS:
                 localities.append(name)
-            elif entity_type in ("organization", "organisation", "institution", "org"):
+            elif entity_type in _INSTITUTION_CATS:
                 institutions.append(name)
     elif isinstance(entity_overview, dict):
         persons = [str(p) for p in entity_overview.get("persons", []) if p]

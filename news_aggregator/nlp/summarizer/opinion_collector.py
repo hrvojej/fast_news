@@ -3,10 +3,12 @@
 Data collection layer for public opinion analysis.
 
 Collects top-voted comments from YouTube (via YouTube Data API v3) and Reddit
-(via the public JSON API, no auth required), fetches portal article text for
-bias analysis, and orchestrates all sources into a raw opinions dict.
+(via Chrome remote-debugging + Google search / old.reddit.com), fetches portal
+article text for bias analysis, and orchestrates all sources into a raw
+opinions dict.
 """
 
+import json
 import re
 import time
 import logging
@@ -14,6 +16,13 @@ import urllib.parse
 from typing import Optional
 
 import requests
+
+try:
+    import pychrome
+    _HAS_PYCHROME = True
+except ImportError:
+    pychrome = None  # type: ignore[assignment]
+    _HAS_PYCHROME = False
 
 logger = logging.getLogger(__name__)
 
@@ -148,24 +157,219 @@ def search_youtube_comments(
 # ---------------------------------------------------------------------------
 # Reddit
 # ---------------------------------------------------------------------------
+# Chrome remote-debugging helpers (same pattern as Reuters content updater)
+# ---------------------------------------------------------------------------
 
-def _reddit_get(url: str) -> Optional[dict]:
-    """GET a Reddit JSON endpoint with retry logic."""
-    for attempt in range(3):
-        try:
-            resp = requests.get(url, headers=_REDDIT_HEADERS, timeout=15)
-            if resp.status_code == 429:
-                wait = 2 ** attempt
-                logger.debug(f"Reddit rate-limited; sleeping {wait}s")
-                time.sleep(wait)
-                continue
-            resp.raise_for_status()
-            return resp.json()
-        except requests.RequestException as exc:
-            logger.debug(f"Reddit request failed ({attempt + 1}/3): {exc}")
-            time.sleep(1)
-    return None
+_CHROME_DEBUG_URL = "http://127.0.0.1:9222"
 
+
+def _chrome_eval(url: str, js_expression: str, wait_secs: int = 3):
+    """Navigate a new Chrome tab to *url*, evaluate *js_expression*, return value."""
+    if not _HAS_PYCHROME:
+        return None
+    browser = tab = None
+    try:
+        browser = pychrome.Browser(url=_CHROME_DEBUG_URL)
+        tab = browser.new_tab()
+        tab.start()
+        tab.Page.enable()
+        tab.Runtime.enable()
+        tab.Page.navigate(url=url)
+        time.sleep(wait_secs)
+        res = tab.Runtime.evaluate(expression=js_expression)
+        val = res.get("result", {}).get("value")
+        return val
+    except Exception as exc:
+        logger.warning("Chrome eval at %s failed: %s", url, exc)
+        return None
+    finally:
+        if tab is not None:
+            try:
+                tab.stop()
+            except Exception:
+                pass
+            if browser is not None:
+                try:
+                    browser.close_tab(tab)
+                except Exception:
+                    pass
+
+
+# ---- JavaScript snippets executed inside Chrome ----------------------------
+
+_JS_GOOGLE_EXTRACT_REDDIT_LINKS = """
+(function() {
+    var results = [];
+    var seen = {};
+    document.querySelectorAll('a').forEach(function(a) {
+        var href = a.href || '';
+        if (href.indexOf('reddit.com/r/') === -1 || href.indexOf('/comments/') === -1) return;
+        var parts = href.split('/r/');
+        if (parts.length < 2) return;
+        var seg = parts[1].split('/');
+        var sub = seg[0];
+        if (seg[1] !== 'comments' || !seg[2]) return;
+        var pid = seg[2];
+        if (seen[pid]) return;
+        seen[pid] = true;
+        results.push({
+            url: 'https://www.reddit.com/r/' + sub + '/comments/' + pid + '/',
+            subreddit: sub,
+            post_id: pid,
+            title: a.innerText.trim().substring(0, 200)
+        });
+    });
+    return JSON.stringify(results);
+})()
+"""
+
+_JS_SUBREDDIT_SEARCH_LINKS = """
+(function() {
+    var results = [];
+    var seen = {};
+    document.querySelectorAll('a').forEach(function(a) {
+        var href = a.href || '';
+        if (href.indexOf('/comments/') === -1 || href.indexOf('reddit.com/r/') === -1) return;
+        var parts = href.split('/r/');
+        if (parts.length < 2) return;
+        var seg = parts[1].split('/');
+        var sub = seg[0];
+        if (seg[1] !== 'comments' || !seg[2]) return;
+        var pid = seg[2];
+        if (seen[pid]) return;
+        seen[pid] = true;
+        results.push({
+            url: 'https://www.reddit.com/r/' + sub + '/comments/' + pid + '/',
+            subreddit: sub,
+            post_id: pid,
+            title: a.textContent.trim().substring(0, 200)
+        });
+    });
+    return JSON.stringify(results);
+})()
+"""
+
+_JS_EXTRACT_COMMENTS = """
+(function() {
+    var h1 = document.querySelector('h1');
+    var postTitle = h1 ? h1.textContent.trim() : '';
+    var urlMatch = window.location.pathname.match(/\\/r\\/([^\\/]+)/);
+    var subreddit = urlMatch ? urlMatch[1] : '';
+    var comments = [];
+    document.querySelectorAll('shreddit-comment').forEach(function(el) {
+        var author = el.getAttribute('author') || '';
+        var scoreStr = el.getAttribute('score') || '0';
+        var score = parseInt(scoreStr) || 0;
+        var pEls = el.querySelectorAll('div[slot="comment"] p, p');
+        var textParts = [];
+        pEls.forEach(function(p) {
+            var t = p.textContent.trim();
+            if (t) textParts.push(t);
+        });
+        var text = textParts.join(' ');
+        if (text && author !== '[deleted]' && text !== '[deleted]' && text !== '[removed]') {
+            comments.push({author: author, score: score, text: text});
+        }
+    });
+    return JSON.stringify({post_title: postTitle, subreddit: subreddit, comments: comments});
+})()
+"""
+
+
+# ---- Chrome-based Reddit discovery & extraction ---------------------------
+
+def _discover_threads_via_google(query: str, max_threads: int = 5) -> list[dict]:
+    """
+    Google ``reddit <query>`` and extract Reddit thread URLs from the results.
+
+    Returns list of ``{url, subreddit, post_id, title}``.
+    """
+    trimmed = query.strip()[:80]
+    if len(query.strip()) > 80 and " " in trimmed:
+        trimmed = trimmed[:trimmed.rfind(" ")]
+    search_q = urllib.parse.quote(f"reddit {trimmed}")
+    google_url = f"https://www.google.com/search?q={search_q}&num=10"
+
+    raw = _chrome_eval(google_url, _JS_GOOGLE_EXTRACT_REDDIT_LINKS, wait_secs=3)
+    if not raw:
+        return []
+    try:
+        threads = json.loads(raw)
+        return threads[:max_threads]
+    except (json.JSONDecodeError, TypeError):
+        return []
+
+
+def _discover_threads_in_subreddit(
+    query: str, subreddit: str, max_threads: int = 3
+) -> list[dict]:
+    """
+    Search within a single subreddit on www.reddit.com and return thread URLs.
+
+    Returns list of ``{url, subreddit, post_id, title}``.
+    """
+    sub_clean = subreddit.lstrip("r/")
+    trimmed = query.strip()[:60]
+    if len(query.strip()) > 60 and " " in trimmed:
+        trimmed = trimmed[:trimmed.rfind(" ")]
+    encoded_q = urllib.parse.quote(trimmed)
+    url = (
+        f"https://www.reddit.com/r/{sub_clean}/search/"
+        f"?q={encoded_q}&restrict_sr=1&sort=relevance&t=year"
+    )
+
+    raw = _chrome_eval(url, _JS_SUBREDDIT_SEARCH_LINKS, wait_secs=4)
+    if not raw:
+        return []
+    try:
+        threads = json.loads(raw)
+        return threads[:max_threads]
+    except (json.JSONDecodeError, TypeError):
+        return []
+
+
+def _chrome_extract_comments(
+    thread_url: str,
+    max_comments: int = 15,
+    min_score: int = 10,
+    min_words: int = 15,
+) -> tuple[str, str, list[dict]]:
+    """
+    Visit a Reddit thread in Chrome (www.reddit.com), extract comments
+    from ``<shreddit-comment>`` web components.
+
+    Returns ``(post_title, subreddit, filtered_comments)``.
+    Each comment dict: ``{author, score, text}``.
+    """
+    # Ensure www.reddit.com (not old.reddit.com)
+    visit_url = thread_url.replace("old.reddit.com", "www.reddit.com")
+    # Append sort=top via query string
+    sep = "&" if "?" in visit_url else "?"
+    visit_url += f"{sep}sort=top"
+
+    raw = _chrome_eval(visit_url, _JS_EXTRACT_COMMENTS, wait_secs=5)
+    if not raw:
+        return "", "", []
+    try:
+        data = json.loads(raw)
+    except (json.JSONDecodeError, TypeError):
+        return "", "", []
+
+    post_title = data.get("post_title", "")
+    subreddit = data.get("subreddit", "")
+    filtered = []
+    for c in data.get("comments", []):
+        score = c.get("score", 0)
+        text = c.get("text", "")
+        if score < min_score:
+            continue
+        if len(text.split()) < min_words:
+            continue
+        filtered.append(c)
+    return post_title, subreddit, filtered[:max_comments]
+
+
+# ---- Public Reddit functions -----------------------------------------------
 
 def search_reddit_comments(
     query: str,
@@ -176,63 +380,172 @@ def search_reddit_comments(
     min_words: int = 15,
 ) -> list[dict]:
     """
-    Search Reddit for posts matching `query` and collect top comments.
+    Search Reddit for posts matching *query* and collect top comments.
 
-    If `subreddits` is provided, restrict the search to those subreddits.
-    Returns a list of comment dicts:
-        {text, score, platform, subreddit, post_title, post_url, author,
-         created_utc, author_country_inferred, authenticity_score}
+    **Primary path** — Chrome remote-debugging:
+      * No subreddits → Google search discovers threads across all of Reddit.
+      * With subreddits → old.reddit.com/r/{sub}/search per subreddit.
+      * Each thread visited on old.reddit.com to extract comments.
+
+    **Fallback** — Reddit public JSON API (if Chrome is unavailable).
+
+    Returns list of comment dicts (same schema regardless of path).
     """
-    results = []
+    if _HAS_PYCHROME:
+        try:
+            return _search_reddit_chrome(
+                query, subreddits, max_posts,
+                max_comments_per_post, min_score, min_words,
+            )
+        except Exception as exc:
+            logger.warning("Chrome Reddit search failed, falling back to API: %s", exc)
+
+    return _search_reddit_api(
+        query, subreddits, max_posts,
+        max_comments_per_post, min_score, min_words,
+    )
+
+
+def _search_reddit_chrome(
+    query: str,
+    subreddits: Optional[list[str]],
+    max_posts: int,
+    max_comments_per_post: int,
+    min_score: int,
+    min_words: int,
+) -> list[dict]:
+    """Chrome-based Reddit search (primary path)."""
+    results: list[dict] = []
+
+    # Discover threads
+    threads: list[dict] = []
+    if subreddits:
+        for sub in subreddits:
+            found = _discover_threads_in_subreddit(query, sub, max_threads=max(1, max_posts // max(len(subreddits), 1)))
+            threads.extend(found)
+            time.sleep(0.5)
+    else:
+        threads = _discover_threads_via_google(query, max_threads=max_posts)
+
+    if not threads:
+        logger.info("Chrome Reddit: no threads discovered for '%s'", query[:60])
+        return results
+
+    # Visit each thread and extract comments
+    seen_urls: set[str] = set()
+    for thread in threads[:max_posts]:
+        url = thread.get("url", "")
+        if not url or url in seen_urls:
+            continue
+        seen_urls.add(url)
+
+        post_title, subreddit, comments = _chrome_extract_comments(
+            url, max_comments_per_post, min_score, min_words,
+        )
+        if not post_title:
+            post_title = thread.get("title", "")
+        if not subreddit:
+            subreddit = thread.get("subreddit", "")
+
+        for c in comments:
+            results.append({
+                "platform": "reddit",
+                "text": c["text"],
+                "likes": c["score"],
+                "score": c["score"],
+                "subreddit": subreddit,
+                "post_title": post_title,
+                "post_url": url,
+                "author": c.get("author", ""),
+                "created_utc": 0,
+                "video_title": None,
+                "video_id": None,
+                "region_code": None,
+                "author_country_inferred": None,
+                "authenticity_score": None,
+            })
+        time.sleep(0.5)
+
+    logger.info("Chrome Reddit: collected %d comments for '%s'", len(results), query[:60])
+    return results
+
+
+# ---- API fallback (used when Chrome is not available) ---------------------
+
+def _reddit_api_get(url: str) -> Optional[dict]:
+    """GET a Reddit JSON endpoint with retry logic (fallback)."""
+    for attempt in range(3):
+        try:
+            resp = requests.get(url, headers=_REDDIT_HEADERS, timeout=15)
+            if resp.status_code == 429:
+                wait = 2 ** attempt
+                logger.debug("Reddit rate-limited; sleeping %ds", wait)
+                time.sleep(wait)
+                continue
+            resp.raise_for_status()
+            return resp.json()
+        except requests.RequestException as exc:
+            logger.debug("Reddit API request failed (%d/3): %s", attempt + 1, exc)
+            time.sleep(1)
+    return None
+
+
+def _search_reddit_api(
+    query: str,
+    subreddits: Optional[list[str]],
+    max_posts: int,
+    max_comments_per_post: int,
+    min_score: int,
+    min_words: int,
+) -> list[dict]:
+    """Reddit JSON-API search (fallback when Chrome is unavailable)."""
+    results: list[dict] = []
+    trimmed = query.strip()[:50].strip()
+    if len(query.strip()) > 50 and " " in trimmed:
+        trimmed = trimmed[:trimmed.rfind(" ")]
+    encoded_q = urllib.parse.quote(trimmed)
 
     if subreddits:
-        # Search within specific subreddits
         for sub in subreddits:
             sub_clean = sub.lstrip("r/")
             url = (
                 f"https://www.reddit.com/r/{sub_clean}/search.json"
-                f"?q={urllib.parse.quote(query)}&sort=relevance&limit={max_posts}&restrict_sr=1"
+                f"?q={encoded_q}&sort=relevance&t=year&limit={max_posts}&restrict_sr=1"
             )
-            data = _reddit_get(url)
+            data = _reddit_api_get(url)
             if not data:
                 continue
             posts = data.get("data", {}).get("children", [])
             for post in posts[:max_posts]:
                 pd = post.get("data", {})
-                post_id = pd.get("id")
-                post_title = pd.get("title", "")
-                post_url = f"https://www.reddit.com{pd.get('permalink', '')}"
-                _collect_post_comments(
-                    post_id, sub_clean, post_title, post_url,
-                    max_comments_per_post, min_score, min_words, results
+                _api_collect_post_comments(
+                    pd.get("id"), sub_clean, pd.get("title", ""),
+                    f"https://www.reddit.com{pd.get('permalink', '')}",
+                    max_comments_per_post, min_score, min_words, results,
                 )
                 time.sleep(0.5)
     else:
-        # Global search
         url = (
             f"https://www.reddit.com/search.json"
-            f"?q={urllib.parse.quote(query)}&sort=relevance&type=link&limit={max_posts}"
+            f"?q={encoded_q}&sort=relevance&type=link&t=year&limit={max_posts}"
         )
-        data = _reddit_get(url)
+        data = _reddit_api_get(url)
         if data:
             posts = data.get("data", {}).get("children", [])
             for post in posts[:max_posts]:
                 pd = post.get("data", {})
-                post_id = pd.get("id")
-                sub_name = pd.get("subreddit", "")
-                post_title = pd.get("title", "")
-                post_url = f"https://www.reddit.com{pd.get('permalink', '')}"
-                _collect_post_comments(
-                    post_id, sub_name, post_title, post_url,
-                    max_comments_per_post, min_score, min_words, results
+                _api_collect_post_comments(
+                    pd.get("id"), pd.get("subreddit", ""), pd.get("title", ""),
+                    f"https://www.reddit.com{pd.get('permalink', '')}",
+                    max_comments_per_post, min_score, min_words, results,
                 )
                 time.sleep(0.5)
 
-    logger.info(f"Reddit: collected {len(results)} comments for query '{query[:60]}'")
+    logger.info("Reddit API fallback: collected %d comments for '%s'", len(results), query[:60])
     return results
 
 
-def _collect_post_comments(
+def _api_collect_post_comments(
     post_id: str,
     subreddit: str,
     post_title: str,
@@ -242,11 +555,11 @@ def _collect_post_comments(
     min_words: int,
     results: list,
 ):
-    """Fetch top comments for a single Reddit post and append to results."""
+    """Fetch top comments for a single Reddit post via JSON API (fallback)."""
     if not post_id:
         return
     url = f"https://www.reddit.com/r/{subreddit}/comments/{post_id}.json?sort=top&limit={max_comments}"
-    data = _reddit_get(url)
+    data = _reddit_api_get(url)
     if not data or not isinstance(data, list) or len(data) < 2:
         return
 
@@ -470,11 +783,10 @@ def collect_all_opinions(
         except Exception as exc:
             logger.warning(f"YouTube collection error: {exc}")
 
-    # --- Reddit (global, top subreddits) ---
+    # --- Reddit (global — Google discovers best threads across all of Reddit) ---
     try:
         reddit_global = search_reddit_comments(
             query,
-            subreddits=["r/worldnews", "r/news", "r/geopolitics", "r/politics"],
             max_posts=max_reddit_posts,
             max_comments_per_post=max_reddit_comments,
             min_score=min_score,
